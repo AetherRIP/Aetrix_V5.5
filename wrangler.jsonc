@@ -1,0 +1,20 @@
+/**
+ * MathChecker V5.5 — public marketing surface.
+ *
+ * No D1, R2, Queue or Workflow binding is declared here. Those are provisioned
+ * when the authenticated application is built, and only after the owner
+ * decisions in docs/remediation/OWNER_APPROVAL_DECISIONS.md are answered.
+ *
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mathchecker-web",
+  "compatibility_date": "2026-11-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "@tanstack/react-start/server-entry",
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true
+}

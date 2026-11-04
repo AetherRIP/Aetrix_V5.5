@@ -31,3 +31,8 @@ desktop.ini
 *.log
 *.tmp
 .tmp/
+
+# Verification artifacts
+artifacts/
+test-results/
+playwright-report/

@@ -3,16 +3,18 @@
 **This repository is part of MathChecker V5.5 — the hosted, multi-tenant rebuild of MathChecker — and it is a
 work in progress.**
 
-It currently contains the **planning, audit and remediation documentation** for the rebuild. There is no
-application code here yet, and no Cloudflare resource, database or deployment has been created. That is
-deliberate: the rebuild is being specified to the point where implementation cannot invent its own answers.
+It contains the **planning, audit and remediation documentation** for the rebuild, and now the **public
+marketing website** built from it: the TanStack Start frontend in `src/`, with its record in
+[`docs/implementation/MARKETING_LANDING_IMPLEMENTATION.md`](docs/implementation/MARKETING_LANDING_IMPLEMENTATION.md).
+The authenticated workspace is not built, and no Cloudflare resource, database or deployment has been created.
+That is deliberate: the rebuild is being specified to the point where implementation cannot invent its own answers.
 
 | | |
 |---|---|
 | **Product** | MathChecker — AI-assisted marking for Edexcel IGCSE 4MA1 |
 | **This package** | `UI_V5.5` — the blueprint for the hosted rebuild |
 | **Status** | Planning complete · independently audited · remediation complete · **awaiting six owner decisions** before phase 2 |
-| **Code** | None. Documentation only, by design |
+| **Code** | Public marketing site only (TanStack Start 1.0 on Workers). No authenticated app, no data layer |
 | **Predecessor** | MathChecker V5 (`C:\Projects\MATH_CHECKER_V5`) — a local FastAPI + React + SQLite application, untouched by this repository |
 
 ## Where the build stands
@@ -33,6 +35,7 @@ can start immediately.
 ```
 docs/
 ├── README.md              the blueprint's own front door and reading order
+├── implementation/         what was actually built from the blueprint, with rendered evidence
 ├── product/                vision, feature inventory, roles, journeys, roadmap
 ├── design/                 design directions, system, IA, screens, responsive, accessibility
 ├── architecture/           system, multi-tenancy, database, API, Cloudflare, jobs, realtime

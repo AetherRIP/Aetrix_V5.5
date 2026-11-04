@@ -1,0 +1,126 @@
+/*
+ * MathChecker V5.5 — public marketing surface tokens.
+ *
+ * Three layers, as specified in docs/design/DESIGN_SYSTEM.md §1:
+ *   primitive  → raw monochrome values, no meaning
+ *   semantic   → purpose in the product
+ *   component  → a component's own decisions (declared beside the component)
+ *
+ * Components consume semantic tokens only. There is no hue anywhere on this
+ * surface: status is carried by word + shape + weight, which is the encoding
+ * docs/design/ACCESSIBILITY.md §4 already requires of the application.
+ */
+
+@font-face {
+  font-family: 'Schibsted Grotesk';
+  src: url('/fonts/schibsted-grotesk.woff2') format('woff2');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* ── primitive: type ───────────────────────────────────────────────── */
+  --font-display: 'Schibsted Grotesk', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, sans-serif;
+  --font-body: var(--font-display);
+  /* Data voice comes from the same family: tabular figures and open tracking
+     carry the ledger role, so the page ships one webfont instead of two. */
+  --font-mono: 'Schibsted Grotesk', ui-monospace, monospace;
+
+  /* ── primitive: monochrome ramp ────────────────────────────────────── */
+  --grey-000: #ffffff;
+  --grey-050: #f7f7f5;
+  --grey-100: #f1f1ef;
+  --grey-150: #e6e7e4;
+  --grey-200: #d9dad7;
+  --grey-400: #8f9498;
+  --grey-500: #6b7176;
+  --grey-600: #4b5155;
+  --grey-700: #2c3134;
+  --grey-800: #191c1e;
+  --grey-850: #131618;
+  --grey-900: #0d1011;
+  --grey-950: #08090a;
+
+  /* ── primitive: space (4px base) ───────────────────────────────────── */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+  --s-10: 128px;
+
+  /* ── primitive: radii ──────────────────────────────────────────────── */
+  --r-xs: 2px;
+  --r-sm: 3px;
+  --r-md: 6px;
+
+  /* ── primitive: motion ─────────────────────────────────────────────── */
+  --dur-fast: 140ms;
+  --dur: 220ms;
+  --dur-slow: 420ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── semantic: type scale ──────────────────────────────────────────── */
+  --fs-micro: 0.6875rem;
+  --fs-small: 0.8125rem;
+  --fs-body: 1rem;
+  --fs-lead: clamp(1.0625rem, 0.35vw + 0.98rem, 1.25rem);
+  --fs-h3: clamp(1.0625rem, 0.3vw + 1rem, 1.1875rem);
+  --fs-h2: clamp(1.75rem, 2.7vw, 2.875rem);
+  --fs-h1: clamp(2.25rem, 6.6vw, 5.75rem);
+  --fs-display: clamp(2rem, 4.4vw, 3.5rem);
+
+  /* ── semantic: dark theme (default) ────────────────────────────────── */
+  --bg: var(--grey-950);
+  --bg-soft: var(--grey-900);
+  --surface: var(--grey-900);
+  --surface-2: var(--grey-850);
+  --surface-3: var(--grey-800);
+  --line: rgba(255, 255, 255, 0.1);
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(255, 255, 255, 0.22);
+  --text: #f2f4f5;
+  --text-2: #a6adb2;
+  --text-3: #8a9197;
+  --accent: #e9edef;
+  --accent-ink: #08090a;
+  --focus: #ffffff;
+  --sheen: rgba(255, 255, 255, 0.14);
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-2: 0 40px 90px -50px rgba(0, 0, 0, 0.95);
+  --glow: rgba(255, 255, 255, 0.1);
+  --grid-line: rgba(255, 255, 255, 0.045);
+
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --bg: var(--grey-100);
+  --bg-soft: var(--grey-050);
+  --surface: var(--grey-000);
+  --surface-2: #fafaf8;
+  --surface-3: var(--grey-100);
+  --line: rgba(16, 18, 20, 0.13);
+  --line-soft: rgba(16, 18, 20, 0.07);
+  --line-strong: rgba(16, 18, 20, 0.34);
+  --text: #141618;
+  --text-2: #51575b;
+  --text-3: #646a6f;
+  --accent: #16181a;
+  --accent-ink: #f7f7f5;
+  --focus: #141618;
+  --sheen: rgba(16, 18, 20, 0.08);
+  --shadow-1: 0 1px 0 rgba(16, 18, 20, 0.04);
+  --shadow-2: 0 40px 90px -60px rgba(16, 18, 20, 0.35);
+  --glow: rgba(16, 18, 20, 0.07);
+  --grid-line: rgba(16, 18, 20, 0.06);
+
+  color-scheme: light;
+}
