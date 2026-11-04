@@ -1,0 +1,33 @@
+# Tooling / local state
+.freebuff/
+.agents/.cache/
+node_modules/
+.wrangler/
+.vercel/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+
+# Build output
+dist/
+build/
+.next/
+.output/
+coverage/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# Logs and temp
+*.log
+*.tmp
+.tmp/
