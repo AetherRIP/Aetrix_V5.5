@@ -1,0 +1,20 @@
+{
+  "prompts": [
+    {
+      "id": "blueprint_extraction",
+      "version": 1,
+      "path": "blueprint_extraction/v1.md",
+      "model_role": "primary",
+      "description": "Extract a canonical draft blueprint from a mark scheme.",
+      "content_hash": "3bc149e7717cf2a28264a70f329f248154469a91699cae39d893a9145159d682"
+    },
+    {
+      "id": "page_question_mapping",
+      "version": 1,
+      "path": "page_question_mapping/v1.md",
+      "model_role": "primary",
+      "description": "Map a rendered answer-script page to approved blueprint questions.",
+      "content_hash": "c2d0acf6c6167ae99edb9dec58748dbe08312fffe24532933f96180b713aec72"
+    }
+  ]
+}

@@ -36,3 +36,23 @@ desktop.ini
 artifacts/
 test-results/
 playwright-report/
+
+# Python engine and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.tools/
+backend/.venv/
+backend/*.egg-info/
+backend/build/
+backend/dist/
+backend/.mypy_cache/
+backend/htmlcov/
+backend/.coverage
+backend/data/
+.tmp_final/
+benchmark/*.log
+
+# Keep the checked-in template while ignoring real local configuration
+!backend/.env.example
