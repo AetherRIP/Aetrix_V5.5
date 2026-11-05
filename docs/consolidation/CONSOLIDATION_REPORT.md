@@ -55,6 +55,15 @@ reachability was verified with `git ls-remote`.
 
 ## 6. Verification and commits
 
+The consolidation was committed in reviewable stages:
+
+| Commit | Change |
+|---|---|
+| `e5badcf` | Import the correction engine, migrations, prompts, tests and frozen benchmark |
+| `48f10f4` | Move the marketing frontend under `frontend/` and apply Aetrix identity |
+| `967f80c` | Add unified architecture, consolidation, history and migration documentation |
+| final verification commit | Add [`../audits/FINAL_VERIFICATION_REPORT.md`](../audits/FINAL_VERIFICATION_REPORT.md) and record the exact check results |
+
 The final results, commands, commits and any blocked checks are recorded in
 [`../audits/FINAL_VERIFICATION_REPORT.md`](../audits/FINAL_VERIFICATION_REPORT.md). This report is
 not a substitute for that evidence.
