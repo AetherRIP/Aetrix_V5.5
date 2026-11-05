@@ -28,7 +28,7 @@ This report records only checks actually executed in the available Windows envir
 | GitHub rename | **PASS** | Repository API returns `full_name: AetherRIP/Aetrix_V5.5`, `admin: true`, default branch `main`; `git ls-remote` against the new URL succeeds |
 | Relative documentation links | **PASS after this report** | All relative links in `README.md` and `docs/**/*.md` resolve; 3 pre-report links pointed at this report |
 | Tracked secret/key files | **PASS (targeted scan)** | No tracked `.env`, private key, `node_modules`, cache, result or PDF artifact; no secret-like tokens found outside dependency internals |
-| Large tracked files | **PASS** | No tracked file over 2 MiB |
+| Large tracked files | **PASS** | Largest tracked file is 2.04 MiB (a redacted benchmark page); no tracked file over 5 MiB and no accidental archives, caches or virtual environments |
 | Duplicate correction engine | **PASS** | One engine under `backend/`; `benchmark/code/verifier.py` is benchmark-only, not a second production engine |
 
 ## 2. Repository safety and consolidation
