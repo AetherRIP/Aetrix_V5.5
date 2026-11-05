@@ -60,7 +60,7 @@ export function Features() {
         <SectionHead
           id="features-title"
           title="Built for the judgement, not just the throughput."
-          note="Eight capabilities define the product. None of them is claimed as live on this page: MathChecker V5.5 is a pre-release build, and the marking pipeline is specified and in active development."
+          note="Eight capabilities define the product. None of them is claimed as live on this page: Aetrix V5.5 is a pre-release build, and the marking pipeline is specified and in active development."
         />
 
         <div className="feature-matrix">

@@ -77,7 +77,7 @@ test.describe('routes', () => {
 
   test('sign-in page is a real, honest destination', async ({ context }) => {
     const page = await open(context, '/sign-in')
-    await expect(page.locator('h1')).toContainText('Sign in to MathChecker')
+    await expect(page.locator('h1')).toContainText('Sign in to Aetrix')
     await expect(page.getByText('Not configured')).toBeVisible()
     await expect(page.locator('input[type="password"]')).toHaveCount(0)
   })
@@ -136,7 +136,7 @@ test.describe('theme', () => {
       first.getByRole('button', { name: 'Light', exact: true }),
     ).toHaveAttribute('aria-pressed', 'true')
     expect(
-      await first.evaluate(() => localStorage.getItem('mathchecker:theme')),
+      await first.evaluate(() => localStorage.getItem('aetrix:theme')),
     ).toBe('light')
 
     const second = await open(context)

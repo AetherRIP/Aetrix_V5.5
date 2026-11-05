@@ -4,7 +4,7 @@ import { THEME_INIT_SCRIPT } from '../lib/theme'
 import { SiteHeader } from '../components/site/SiteHeader'
 import { SiteFooter } from '../components/site/SiteFooter'
 
-const TITLE = 'MathChecker V5.5 — Mark smarter. Trust every mark.'
+const TITLE = 'Aetrix V5.5 — Mark smarter. Trust every mark.'
 const DESCRIPTION =
   'AI-assisted mathematics marking for Edexcel IGCSE 4MA1, built around examiner-level consistency, transparent corrections and human oversight.'
 

@@ -29,7 +29,7 @@ async function capture(shot) {
       })
       const page = await context.newPage()
       await page.addInitScript((theme) => {
-        window.localStorage.setItem('mathchecker:theme', theme)
+        window.localStorage.setItem('aetrix:theme', theme)
       }, shot.theme)
       await page.goto(`${BASE}${shot.path}`, { waitUntil: 'load', timeout: 20000 })
       await page.waitForTimeout(700)

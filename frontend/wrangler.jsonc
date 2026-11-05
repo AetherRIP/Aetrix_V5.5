@@ -1,5 +1,5 @@
 /**
- * MathChecker V5.5 — public marketing surface.
+ * Aetrix V5.5 — public marketing surface.
  *
  * No D1, R2, Queue or Workflow binding is declared here. Those are provisioned
  * when the authenticated application is built, and only after the owner
@@ -9,7 +9,7 @@
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mathchecker-web",
+  "name": "aetrix-web",
   "compatibility_date": "2026-11-04",
   "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",

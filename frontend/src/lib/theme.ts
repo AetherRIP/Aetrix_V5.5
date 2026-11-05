@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 
 export type Theme = 'dark' | 'light'
 
-export const THEME_STORAGE_KEY = 'mathchecker:theme'
+export const THEME_STORAGE_KEY = 'aetrix:theme'
 export const DEFAULT_THEME: Theme = 'dark'
 
 /**

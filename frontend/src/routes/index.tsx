@@ -14,9 +14,9 @@ const DESCRIPTION =
 export const Route = createFileRoute('/')({
   head: () => ({
     meta: [
-      { title: 'MathChecker V5.5 — Mark smarter. Trust every mark.' },
+      { title: 'Aetrix V5.5 — Mark smarter. Trust every mark.' },
       { name: 'description', content: DESCRIPTION },
-      { property: 'og:title', content: 'MathChecker V5.5 — Mark smarter. Trust every mark.' },
+      { property: 'og:title', content: 'Aetrix V5.5 — Mark smarter. Trust every mark.' },
       { property: 'og:description', content: DESCRIPTION },
       { property: 'og:type', content: 'website' },
       { name: 'twitter:card', content: 'summary_large_image' },

@@ -30,7 +30,7 @@ export function Brand({ size = 28 }: { size?: number }) {
         />
       </svg>
       <span className="brand__name">
-        Math<span className="brand__name-strong">Checker</span>
+        <span className="brand__name-strong">Aetrix</span>
       </span>
       <span className="brand__version mono">V5.5</span>
     </span>

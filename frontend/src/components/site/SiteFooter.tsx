@@ -37,7 +37,7 @@ export function SiteFooter() {
         </div>
 
         <div className="site-footer__bottom">
-          <p className="mono">© 2026 MathChecker · V5.5 pre-release</p>
+          <p className="mono">© 2026 Aetrix · V5.5 pre-release</p>
           <p className="mono site-footer__note">
             Demonstration data only. No account, pricing or compliance claim is made
             on this site.

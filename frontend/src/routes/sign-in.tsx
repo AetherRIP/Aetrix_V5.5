@@ -5,11 +5,11 @@ import { Icon } from '../components/ui/Icons'
 export const Route = createFileRoute('/sign-in')({
   head: () => ({
     meta: [
-      { title: 'Sign in — MathChecker V5.5' },
+      { title: 'Sign in — Aetrix V5.5' },
       {
         name: 'description',
         content:
-          'Sign-in for MathChecker V5.5 is not enabled in this pre-release build. Pilot access is by invitation.',
+          'Sign-in for Aetrix V5.5 is not enabled in this pre-release build. Pilot access is by invitation.',
       },
     ],
   }),
@@ -31,7 +31,7 @@ function SignIn() {
       <div className="shell auth__grid">
         <div className="auth__copy" data-reveal>
           <p className="auth__kicker mono">Pilot access</p>
-          <h1 className="auth__title">Sign in to MathChecker</h1>
+          <h1 className="auth__title">Sign in to Aetrix</h1>
           <p className="auth__lede">
             Authentication is not enabled in this build. The public site you are
             reading is the first shipped surface; the workspace shell follows once
