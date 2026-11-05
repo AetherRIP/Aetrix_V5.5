@@ -1,99 +1,126 @@
-# MathChecker V5.5
+# Aetrix V5.5
 
-**This repository is part of MathChecker V5.5 — the hosted, multi-tenant rebuild of MathChecker — and it is a
-work in progress.**
+**Repository:** [AetherRIP/Aetrix_V5.5](https://github.com/AetherRIP/Aetrix_V5.5)
 
-It contains the **planning, audit and remediation documentation** for the rebuild, and now the **public
-marketing website** built from it: the TanStack Start frontend in `src/`, with its record in
-[`docs/implementation/MARKETING_LANDING_IMPLEMENTATION.md`](docs/implementation/MARKETING_LANDING_IMPLEMENTATION.md).
-The authenticated workspace is not built, and no Cloudflare resource, database or deployment has been created.
-That is deliberate: the rebuild is being specified to the point where implementation cannot invent its own answers.
+**Aetrix V5.5 is the unified correction engine and platform repository for AI-assisted
+mathematics marking.** It combines the engine implementation, the public frontend, the
+frozen correction benchmark, and the product/architecture record in one repository.
 
-| | |
-|---|---|
-| **Product** | MathChecker — AI-assisted marking for Edexcel IGCSE 4MA1 |
-| **This package** | `UI_V5.5` — the blueprint for the hosted rebuild |
-| **Status** | Planning complete · independently audited · remediation complete · **awaiting six owner decisions** before phase 2 |
-| **Code** | Public marketing site only (TanStack Start 1.0 on Workers). No authenticated app, no data layer |
-| **Predecessor** | MathChecker V5 (`C:\Projects\MATH_CHECKER_V5`) — a local FastAPI + React + SQLite application, untouched by this repository |
+> **Status: pre-release integration checkpoint.** The correction engine implements the
+> tenant, blueprint, job, provider, ingestion, mapping, extraction and override substrate.
+> Marking, verification, results, cohort intelligence and the authenticated workspace are
+> not implemented. The public marketing surface is the only frontend in this repository.
+> No production-readiness, marking-accuracy or live-structured-output claim is made.
 
-## Where the build stands
+## Components
 
-The plan was audited by an independent red-team pass (93 findings: 1 critical, 26 high) and then remediated.
-The critical finding — a job can be lost silently between the database write and the queue message — is closed
-by a transactional outbox and a lease reaper. All 27 critical and high findings have written resolutions.
+| Path | What it is | Status |
+|---|---|---|
+| [`backend/`](backend/) | FastAPI correction engine, SQLAlchemy/Alembic schema, provider boundary, worker, tests | CP1–CP2 implemented |
+| [`frontend/`](frontend/) | TanStack Start/React public marketing and sign-in-status surface on Cloudflare Workers | Marketing surface only; authenticated app not built |
+| [`benchmark/`](benchmark/) | Frozen A/B/C correction-strategy benchmark and teacher-certified holdout intake | 207 tests; holdout at zero certified papers |
+| [`docs/`](docs/) | Original product/architecture blueprint, audit and remediation set | Historical planning record |
+| [`docs/engine/`](docs/engine/) | Implemented-engine architecture, deployment, security and acceptance evidence | CP2 evidence; live Gemini UNVERIFIED |
+| [`docs/architecture/AETRIX_V5.5_SYSTEM.md`](docs/architecture/AETRIX_V5.5_SYSTEM.md) | Unified architecture and source-of-truth note | Current |
+| [`docs/consolidation/CONSOLIDATION_REPORT.md`](docs/consolidation/CONSOLIDATION_REPORT.md) | Repository inventory, consolidation decisions and migration notes | Current |
+| [`docs/audits/FINAL_VERIFICATION_REPORT.md`](docs/audits/FINAL_VERIFICATION_REPORT.md) | Final verification results and limitations | Current |
 
-Six product decisions remain with the owner (identity schema, session lifetime, MFA friction, upload path,
-schema bundle, report rendering host). Phase 1 — the marking-parity spike — does not depend on any of them and
-can start immediately.
+## Architecture
 
-- Full status and verdicts: [`docs/remediation/REMEDIATION_READINESS_REPORT.md`](docs/remediation/REMEDIATION_READINESS_REPORT.md)
-- The decisions awaiting sign-off: [`docs/remediation/OWNER_APPROVAL_DECISIONS.md`](docs/remediation/OWNER_APPROVAL_DECISIONS.md)
+The **implemented authority** is `backend/` plus the engine ADRs and acceptance evidence in
+`docs/engine/`. The engine uses PostgreSQL 15+ (Supabase in development), SQLAlchemy 2.0,
+Alembic, a narrow `LLMProvider` boundary and versioned prompt assets. The API and worker are
+separate processes; the worker leases jobs with `FOR UPDATE SKIP LOCKED`.
 
-## What is in here
+The original destination blueprint describes Cloudflare D1, Better Auth, R2, Queues and
+Workflows. That set is preserved as history, not as the implemented data layer. ADR-001 records
+the conflict; the engine uses PostgreSQL/Supabase and the frontend has no D1/R2/Queue bindings.
+The authenticated app's hosting and identity decision remains a future integration point.
 
+The public frontend is a marketing surface only. It does not call the engine, store student data
+or claim that sign-in is enabled. The correction engine does not import frontend code or the
+benchmark.
+
+## Local setup
+
+### Prerequisites
+
+- Python 3.12–3.13.
+- PostgreSQL 15+ (Supabase or another PostgreSQL service). SQLite is refused.
+- Node.js 20+ and npm for the frontend.
+- Optional: a Gemini API key for the bounded live probe. Never commit it.
+
+### Backend
+
+```bash
+cd backend
+python -m venv .venv
+# Windows:
+.venv/Scripts/python.exe -m pip install -e ".[dev,benchmark]"
+# macOS/Linux:
+# .venv/bin/python -m pip install -e ".[dev,benchmark]"
+cp .env.example .env
+# Fill AETRIX_DATABASE__URL, auth and encryption values in .env.
+.venv/Scripts/python.exe -m alembic upgrade head
+.venv/Scripts/python.exe -m pytest -q
 ```
-docs/
-├── README.md              the blueprint's own front door and reading order
-├── implementation/         what was actually built from the blueprint, with rendered evidence
-├── product/                vision, feature inventory, roles, journeys, roadmap
-├── design/                 design directions, system, IA, screens, responsive, accessibility
-├── architecture/           system, multi-tenancy, database, API, Cloudflare, jobs, realtime
-├── security/               threat model, security requirements, data privacy
-├── operations/             deployment, monitoring, backup, cost
-├── testing/                strategy, tenant-isolation suite, acceptance criteria
-├── decisions/              ADRs, open questions, assumptions and risks
-├── audit/                  independent red-team review (12 documents, 93 findings)
-└── remediation/            the response to that review (12 documents)
+
+Run the API with `python -m uvicorn app.main:app --port 8000` from `backend/`, or the
+installed `aetrix-api` entry point. Run the worker separately with `aetrix-worker`.
+The worker currently parks correction jobs with `PIPELINE_UNAVAILABLE`; that is deliberate.
+
+### Frontend
+
+```bash
+cd frontend
+npm ci
+npm run typecheck
+npm run build
+npm run dev
 ```
 
-**Three document sets, read in this order:**
+`npm run test:e2e` requires Playwright browsers. The marketing site has no backend calls and no
+secrets. Cloudflare deployment is not part of this checkpoint; `wrangler.jsonc` declares only
+the marketing Worker.
 
-1. **`docs/` — the blueprint (32 documents).** Decision-oriented: every major choice states its alternatives and
-   what would force a revisit. Start at [`docs/README.md`](docs/README.md).
-2. **`docs/audit/` — the independent review (12 documents).** Written by a reviewer who did not write the plan.
-   Start at [`docs/audit/AUDIT_SUMMARY.md`](docs/audit/AUDIT_SUMMARY.md).
-3. **`docs/remediation/` — the response (12 documents).** Revised specifications that supersede the blueprint
-   where they differ, plus the register of every finding and its disposition. Start at
-   [`docs/remediation/REMEDIATION_MASTER_REGISTER.md`](docs/remediation/REMEDIATION_MASTER_REGISTER.md).
+### Benchmark
 
-**Where the documents disagree, the remediation wins**, and the blueprint stays as the historical record of what
-was decided first and why. The audit is never edited to look prescient.
+From the repository root:
 
-## The shape of the rebuild, in ten lines
+```bash
+python -m pytest benchmark/tests benchmark/holdout/tests -q
+python -m benchmark.holdout.manifest --check-code
+```
 
-- **Frontend:** TanStack Start 1.0 (SSR React) on Cloudflare Workers.
-- **Database:** one D1 database, shared schema, `workspace_id` on every tenant table, enforced by a typed
-  repository *and* by database triggers — not by convention.
-- **Auth:** Better Auth on D1, whose schema is canonical; five workspace roles declared once and generated into
-  both the policy code and the permission matrix.
-- **Files:** R2, workspace-prefixed keys derived server-side, proxied downloads, presigned uploads only above
-  20 MB.
-- **Jobs:** Queues + Workflows, ids-only messages, a transactional outbox, a lease reaper and a real dead-letter
-  queue.
-- **Progress:** polling, not a Durable Object — deferred with numeric promotion thresholds rather than built on
-  a hunch.
-- **Backups:** a copy pipeline built on R2's actual primitives (server-side copy, bucket locks, checksums),
-  because R2 has no versioning and no replication.
-- **Marking integrity:** a mark can never exceed its question's maximum, and a missing question is `needs_review`
-  — both enforced in the database, not only in a handler.
-- **Billing:** out of the MVP; usage is metered from the first job so pricing can be added without a migration.
-- **Non-claims:** no SOC 2, ISO 27001 or "GDPR compliant" claim appears anywhere until one is actually obtained.
+The benchmark needs `sympy` for its verifier; the `backend[benchmark]` extra installs it. It
+also needs Pillow and NumPy, which are backend dependencies. Live benchmark runs require an
+authorised provider key outside this repository; offline tests do not.
 
-## Ground rules for this repository
+## Security and data handling
 
-1. **V5 is the source of truth until marking parity is proven.** The engine, prompts and lesson identity
-   (`CH1L1`) carry over; the surface is rebuilt.
-2. **Planning documents are contracts.** Changing a decision means a new numbered record that names the one it
-   replaces — not editing an accepted decision in place.
-3. **Nothing in the docs is a claim about a running system.** Cost figures are estimates with stated
-   assumptions; platform limits are cited and dated; anything unverified is labelled as such.
-4. **No student data in this repository.** Fixtures and examples are synthetic; real scripts, names and marks
-   stay in the product's private storage.
+- **No secrets in Git.** `backend/.env`, `.dev.vars`, keys and certificates are ignored.
+  `backend/.env.example` contains placeholders only. Use a secret store in production.
+- **No raw student data.** The public consolidation keeps redacted benchmark page images but
+  excludes the original student/scheme PDFs and temporary local renders. See
+  [`benchmark/PUBLIC_DATA_NOTICE.md`](benchmark/PUBLIC_DATA_NOTICE.md).
+- **Live provider spend is bounded.** The manual probe makes one request per invocation; the
+  recorded post-change Gemini attempts were rejected at authentication and are reported as
+  `UNVERIFIED`, not simulated.
+- **Tenant isolation and append-only audit/usage** are implemented in repositories and database
+  triggers, with PostgreSQL integration tests.
 
-## Next steps
+## Current limitations
 
-1. Owner answers the six blocking decisions (`C1`–`C5`, `C7`).
-2. Phase 1: port the marking engine and prove parity on ≥ 20 fixtures, including the failure paths.
-3. Generate and review the identity DDL, then the constraint and trigger migrations.
-4. Build the tenant-isolation suite alongside the schema — it is a shipping gate, not a chore.
+- No marking, SymPy verification, results, selective review or cohort-intelligence pipeline.
+- No authenticated workspace, workspace provisioning or D1/R2/Queue deployment.
+- The live Gemini structured-output path is `UNVERIFIED` after provider 403 responses.
+- The holdout has zero certified papers; no general marking-parity claim is possible.
+- The frontend build and browser tests depend on a local Node runtime; see the final report for
+  the checks that were actually executable.
+
+## Repository history
+
+This repository was formerly `WebPage_UI_V5.5`. The engine was developed in
+[`Engine_V5.5`](https://github.com/AetherRIP/Engine_V5.5), which remains a recoverable source
+repository. The final project version is **V5.5**. See the consolidation report for the exact
+commits and preserved history.

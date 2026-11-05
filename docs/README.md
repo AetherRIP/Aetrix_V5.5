@@ -1,8 +1,14 @@
-# MathChecker UI_V5.5 — Product & Architecture Blueprint
+# Aetrix V5.5 — Product & Architecture Blueprint (historical UI_V5.5 set)
 
 **Status:** planning only. No application code, no Cloudflare resources, no dependencies installed.
 **Workspace:** `TEMP` (future `UI_V5.5`) · **Prepared:** 2026-11-03
 **Product:** MathChecker — AI-assisted marking for Edexcel IGCSE 4MA1, becoming a multi-tenant SaaS.
+
+> **Consolidation note (2026-11-05):** This is the original planning, audit and
+> remediation set, retained for history. It predates the unified repository. The
+> implemented correction engine uses PostgreSQL/Supabase and lives in `backend/`;
+> its current documentation is under [`engine/`](engine/README.md). Where this set
+> and the engine conflict, the engine ADRs and implementation docs govern.
 
 ---
 
