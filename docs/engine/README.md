@@ -17,9 +17,11 @@ CP1–CP2 checkpoints.
    handling and untrusted model output.
 5. [`architecture/DEPLOYMENT.md`](architecture/DEPLOYMENT.md) — PostgreSQL/Supabase setup,
    configuration, migrations, API/worker operation and CI commands.
-6. [`audits/CP2_ACCEPTANCE.md`](audits/CP2_ACCEPTANCE.md) — deterministic evidence and the
+6. [`architecture/RLS_SECURITY_AUDIT.md`](architecture/RLS_SECURITY_AUDIT.md) — the Data API
+   exposure audit, policy matrix and RLS lockdown plan.
+7. [`audits/CP2_ACCEPTANCE.md`](audits/CP2_ACCEPTANCE.md) — deterministic evidence and the
    live-provider failure record.
-7. [`audits/INITIAL_REPOSITORY_AUDIT.md`](audits/INITIAL_REPOSITORY_AUDIT.md) — the Phase 0
+8. [`audits/INITIAL_REPOSITORY_AUDIT.md`](audits/INITIAL_REPOSITORY_AUDIT.md) — the Phase 0
    inventory and corrected premise.
 
 ## Authority and scope

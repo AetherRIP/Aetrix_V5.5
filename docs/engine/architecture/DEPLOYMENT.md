@@ -90,9 +90,11 @@ From `backend/`:
 .venv/Scripts/python.exe -m alembic current
 ```
 
-The migrations are transactional. The head is `0002_blueprint_guard_fix`; it
-adds the CP2 document/mapping/override/quota tables and repairs the approved-
-blueprint immutability trigger. `alembic check` should report no new operations.
+The migrations are transactional. The head is `0005_rls_lockdown`; the chain adds
+the CP2 document/mapping/override/quota tables, repairs the approved-blueprint
+immutability trigger, adds the Phase 2 `tenants.is_demo` and
+`audit_events.actor_label` columns, and locks the `public` schema down for the
+Supabase Data API. `alembic check` should report no new operations.
 
 To inspect history:
 

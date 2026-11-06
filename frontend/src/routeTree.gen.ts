@@ -9,68 +9,347 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as SignInRouteImport } from './routes/sign-in'
+import { Route as AppRouteImport } from './routes/_app'
+import { Route as MarketingRouteImport } from './routes/_marketing'
+import { Route as AppAssignmentsRouteImport } from './routes/_app.assignments'
+import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppInboxRouteImport } from './routes/_app.inbox'
+import { Route as AppQueueRouteImport } from './routes/_app.queue'
+import { Route as AppReportsRouteImport } from './routes/_app.reports'
+import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
+import { Route as MarketingIndexRouteImport } from './routes/_marketing.index'
+import { Route as MarketingSignInRouteImport } from './routes/_marketing.sign-in'
+import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
+import { Route as AppAssignmentsAssignmentIdRouteImport } from './routes/_app.assignments.$assignmentId'
+import { Route as AppSubmissionsSubmissionIdRouteImport } from './routes/_app.submissions.$submissionId'
 
-const IndexRoute = IndexRouteImport.update({
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MarketingRoute = MarketingRouteImport.update({
+  id: '/_marketing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppAssignmentsRoute = AppAssignmentsRouteImport.update({
+  id: '/assignments',
+  path: '/assignments',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDashboardRoute = AppDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppInboxRoute = AppInboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppQueueRoute = AppQueueRouteImport.update({
+  id: '/queue',
+  path: '/queue',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReportsRoute = AppReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWorkspaceRoute = AppWorkspaceRouteImport.update({
+  id: '/workspace',
+  path: '/workspace',
+  getParentRoute: () => AppRoute,
+} as any)
+const MarketingIndexRoute = MarketingIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => MarketingRoute,
 } as any)
-const SignInRoute = SignInRouteImport.update({
+const MarketingSignInRoute = MarketingSignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
+  getParentRoute: () => MarketingRoute,
+} as any)
+const AuthCallbackRoute = AuthCallbackRouteImport.update({
+  id: '/auth/callback',
+  path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAssignmentsAssignmentIdRoute =
+  AppAssignmentsAssignmentIdRouteImport.update({
+    id: '/$assignmentId',
+    path: '/$assignmentId',
+    getParentRoute: () => AppAssignmentsRoute,
+  } as any)
+const AppSubmissionsSubmissionIdRoute =
+  AppSubmissionsSubmissionIdRouteImport.update({
+    id: '/submissions/$submissionId',
+    path: '/submissions/$submissionId',
+    getParentRoute: () => AppRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/sign-in': typeof SignInRoute
+  '/': typeof MarketingIndexRoute
+  '/assignments': typeof AppAssignmentsRouteWithChildren
+  '/dashboard': typeof AppDashboardRoute
+  '/inbox': typeof AppInboxRoute
+  '/queue': typeof AppQueueRoute
+  '/reports': typeof AppReportsRoute
+  '/settings': typeof AppSettingsRoute
+  '/workspace': typeof AppWorkspaceRoute
+  '/sign-in': typeof MarketingSignInRoute
+  '/auth/callback': typeof AuthCallbackRoute
+  '/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
+  '/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/sign-in': typeof SignInRoute
+  '/': typeof MarketingIndexRoute
+  '/assignments': typeof AppAssignmentsRouteWithChildren
+  '/dashboard': typeof AppDashboardRoute
+  '/inbox': typeof AppInboxRoute
+  '/queue': typeof AppQueueRoute
+  '/reports': typeof AppReportsRoute
+  '/settings': typeof AppSettingsRoute
+  '/workspace': typeof AppWorkspaceRoute
+  '/sign-in': typeof MarketingSignInRoute
+  '/auth/callback': typeof AuthCallbackRoute
+  '/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
+  '/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/sign-in': typeof SignInRoute
+  '/_app': typeof AppRouteWithChildren
+  '/_marketing': typeof MarketingRouteWithChildren
+  '/_app/assignments': typeof AppAssignmentsRouteWithChildren
+  '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/inbox': typeof AppInboxRoute
+  '/_app/queue': typeof AppQueueRoute
+  '/_app/reports': typeof AppReportsRoute
+  '/_app/settings': typeof AppSettingsRoute
+  '/_app/workspace': typeof AppWorkspaceRoute
+  '/_marketing/sign-in': typeof MarketingSignInRoute
+  '/auth/callback': typeof AuthCallbackRoute
+  '/_marketing/': typeof MarketingIndexRoute
+  '/_app/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
+  '/_app/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/sign-in'
+  fullPaths:
+    | '/'
+    | '/assignments'
+    | '/dashboard'
+    | '/inbox'
+    | '/queue'
+    | '/reports'
+    | '/settings'
+    | '/workspace'
+    | '/sign-in'
+    | '/auth/callback'
+    | '/assignments/$assignmentId'
+    | '/submissions/$submissionId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/sign-in'
-  id: '__root__' | '/' | '/sign-in'
+  to:
+    | '/'
+    | '/assignments'
+    | '/dashboard'
+    | '/inbox'
+    | '/queue'
+    | '/reports'
+    | '/settings'
+    | '/workspace'
+    | '/sign-in'
+    | '/auth/callback'
+    | '/assignments/$assignmentId'
+    | '/submissions/$submissionId'
+  id:
+    | '__root__'
+    | '/_app'
+    | '/_marketing'
+    | '/_app/assignments'
+    | '/_app/dashboard'
+    | '/_app/inbox'
+    | '/_app/queue'
+    | '/_app/reports'
+    | '/_app/settings'
+    | '/_app/workspace'
+    | '/_marketing/sign-in'
+    | '/auth/callback'
+    | '/_marketing/'
+    | '/_app/assignments/$assignmentId'
+    | '/_app/submissions/$submissionId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  SignInRoute: typeof SignInRoute
+  AppRoute: typeof AppRouteWithChildren
+  MarketingRoute: typeof MarketingRouteWithChildren
+  AuthCallbackRoute: typeof AuthCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
+    '/_app': {
+      id: '/_app'
+      path: ''
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sign-in': {
-      id: '/sign-in'
+    '/_marketing': {
+      id: '/_marketing'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof MarketingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/assignments': {
+      id: '/_app/assignments'
+      path: '/assignments'
+      fullPath: '/assignments'
+      preLoaderRoute: typeof AppAssignmentsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/dashboard': {
+      id: '/_app/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/inbox': {
+      id: '/_app/inbox'
+      path: '/inbox'
+      fullPath: '/inbox'
+      preLoaderRoute: typeof AppInboxRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/queue': {
+      id: '/_app/queue'
+      path: '/queue'
+      fullPath: '/queue'
+      preLoaderRoute: typeof AppQueueRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/reports': {
+      id: '/_app/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof AppReportsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/workspace': {
+      id: '/_app/workspace'
+      path: '/workspace'
+      fullPath: '/workspace'
+      preLoaderRoute: typeof AppWorkspaceRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_marketing/': {
+      id: '/_marketing/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof MarketingIndexRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/_marketing/sign-in': {
+      id: '/_marketing/sign-in'
       path: '/sign-in'
       fullPath: '/sign-in'
-      preLoaderRoute: typeof SignInRouteImport
+      preLoaderRoute: typeof MarketingSignInRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/auth/callback': {
+      id: '/auth/callback'
+      path: '/auth/callback'
+      fullPath: '/auth/callback'
+      preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/assignments/$assignmentId': {
+      id: '/_app/assignments/$assignmentId'
+      path: '/$assignmentId'
+      fullPath: '/assignments/$assignmentId'
+      preLoaderRoute: typeof AppAssignmentsAssignmentIdRouteImport
+      parentRoute: typeof AppAssignmentsRoute
+    }
+    '/_app/submissions/$submissionId': {
+      id: '/_app/submissions/$submissionId'
+      path: '/submissions/$submissionId'
+      fullPath: '/submissions/$submissionId'
+      preLoaderRoute: typeof AppSubmissionsSubmissionIdRouteImport
+      parentRoute: typeof AppRoute
     }
   }
 }
 
+interface AppAssignmentsRouteChildren {
+  AppAssignmentsAssignmentIdRoute: typeof AppAssignmentsAssignmentIdRoute
+}
+
+const AppAssignmentsRouteChildren: AppAssignmentsRouteChildren = {
+  AppAssignmentsAssignmentIdRoute: AppAssignmentsAssignmentIdRoute,
+}
+
+const AppAssignmentsRouteWithChildren = AppAssignmentsRoute._addFileChildren(
+  AppAssignmentsRouteChildren,
+)
+
+interface AppRouteChildren {
+  AppAssignmentsRoute: typeof AppAssignmentsRouteWithChildren
+  AppDashboardRoute: typeof AppDashboardRoute
+  AppInboxRoute: typeof AppInboxRoute
+  AppQueueRoute: typeof AppQueueRoute
+  AppReportsRoute: typeof AppReportsRoute
+  AppSettingsRoute: typeof AppSettingsRoute
+  AppWorkspaceRoute: typeof AppWorkspaceRoute
+  AppSubmissionsSubmissionIdRoute: typeof AppSubmissionsSubmissionIdRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppAssignmentsRoute: AppAssignmentsRouteWithChildren,
+  AppDashboardRoute: AppDashboardRoute,
+  AppInboxRoute: AppInboxRoute,
+  AppQueueRoute: AppQueueRoute,
+  AppReportsRoute: AppReportsRoute,
+  AppSettingsRoute: AppSettingsRoute,
+  AppWorkspaceRoute: AppWorkspaceRoute,
+  AppSubmissionsSubmissionIdRoute: AppSubmissionsSubmissionIdRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
+interface MarketingRouteChildren {
+  MarketingSignInRoute: typeof MarketingSignInRoute
+  MarketingIndexRoute: typeof MarketingIndexRoute
+}
+
+const MarketingRouteChildren: MarketingRouteChildren = {
+  MarketingSignInRoute: MarketingSignInRoute,
+  MarketingIndexRoute: MarketingIndexRoute,
+}
+
+const MarketingRouteWithChildren = MarketingRoute._addFileChildren(
+  MarketingRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  SignInRoute: SignInRoute,
+  AppRoute: AppRouteWithChildren,
+  MarketingRoute: MarketingRouteWithChildren,
+  AuthCallbackRoute: AuthCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -11,7 +11,7 @@ import { SectionHead } from '../components/site/SectionHead'
 const DESCRIPTION =
   'AI-assisted mathematics marking for Edexcel IGCSE 4MA1, built around examiner-level consistency, transparent corrections and human oversight.'
 
-export const Route = createFileRoute('/')({
+export const Route = createFileRoute('/_marketing/')({
   head: () => ({
     meta: [
       { title: 'Aetrix V5.5 — Mark smarter. Trust every mark.' },
