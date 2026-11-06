@@ -100,7 +100,7 @@ is still tied to the worker, not to an HTTP request.
 | `backend/app/api/v1/documents.py` | Ingestion, mapping, scheme, extraction, override routes |
 | `backend/app/api/v1/exams.py` | Exam and canonical blueprint draft/approval routes |
 | `backend/app/jobs/` | CP1 job state machine, runner and unavailable pipeline |
-| `backend/migrations/` | Alembic history through `0002_blueprint_guard_fix` |
+| `backend/migrations/` | Alembic history through `0005_rls_lockdown` |
 | `backend/tests/` | Unit, PostgreSQL integration and API tests (84 passing) |
 | `backend/scripts/live_extraction.py` | One-request manual extraction probe; writes a draft only on success |
 
@@ -219,8 +219,10 @@ There is still no result endpoint: there are no correction results to return.
   rejected at load; the database refuses a changed hash for an existing version.
 - **Upload safety:** signature and integrity checks run before storage; the
   declared MIME type is not trusted.
-- **Migrations:** one head, `0002_blueprint_guard_fix`; `upgrade head` is a
-  no-op and `alembic check` reports no drift.
+- **Migrations:** one head, `0005_rls_lockdown` (`0003`/`0004` add the Phase 2
+  demo-tenant and audit-actor columns, `0005` locks `public` down for the Data API);
+  `upgrade head` on an up-to-date database is a no-op and `alembic check` reports
+  no drift.
 - **Benchmark:** untouched; production does not import `benchmark/`. The frozen
   suite currently passes 207 tests and validates its seven digests.
 

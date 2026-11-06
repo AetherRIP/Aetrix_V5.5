@@ -1,8 +1,7 @@
 import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles/app.css?url'
 import { THEME_INIT_SCRIPT } from '../lib/theme'
-import { SiteHeader } from '../components/site/SiteHeader'
-import { SiteFooter } from '../components/site/SiteFooter'
+import { AuthProvider } from '../lib/auth/AuthProvider'
 
 const TITLE = 'Aetrix V5.5 — Mark smarter. Trust every mark.'
 const DESCRIPTION =
@@ -31,6 +30,10 @@ export const Route = createRootRoute({
   shellComponent: RootDocument,
 })
 
+/**
+ * The document shell only. Chrome lives in the layout routes so the marketing
+ * surface and the authenticated application can differ without a path check.
+ */
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
@@ -39,14 +42,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
-        <a className="skip-link" href="#main">
-          Skip to main content
-        </a>
-        <SiteHeader />
-        <main id="main" tabIndex={-1}>
-          {children}
-        </main>
-        <SiteFooter />
+        <AuthProvider>{children}</AuthProvider>
         <Scripts />
       </body>
     </html>

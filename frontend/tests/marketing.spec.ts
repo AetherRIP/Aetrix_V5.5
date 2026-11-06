@@ -78,14 +78,53 @@ test.describe('routes', () => {
   test('sign-in page is a real, honest destination', async ({ context }) => {
     const page = await open(context, '/sign-in')
     await expect(page.locator('h1')).toContainText('Sign in to Aetrix')
-    await expect(page.getByText('Not configured')).toBeVisible()
-    await expect(page.locator('input[type="password"]')).toHaveCount(0)
+    // Authentication is configured now: the page offers the real provider and
+    // states the invitation-only policy rather than a "not configured" notice.
+    await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled()
+    await expect(page.locator('#access')).toContainText('Google OAuth · enabled')
+    await expect(page.getByText(/no self-serve sign-up/i)).toBeVisible()
   })
 
   test('in-page navigation reaches every section', async ({ context }) => {
     const page = await open(context)
     for (const hash of ['features', 'workflow', 'security', 'platform']) {
       await expect(page.locator(`#${hash}`)).toHaveCount(1)
+    }
+  })
+
+  /*
+   * The footer's "Pilot access" entry is `/sign-in#access`. It previously had no
+   * matching element, so the link silently landed at the top of the page. Assert
+   * the target exists, not merely that the route responds.
+   */
+  test('the pilot-access anchor has a real target on the sign-in page', async ({
+    context,
+  }) => {
+    const page = await open(context, '/sign-in')
+    await expect(page.locator('#access')).toHaveCount(1)
+    await expect(page.locator('#access')).toBeVisible()
+  })
+
+  test('every internal link and same-page anchor resolves', async ({ context }) => {
+    for (const path of ['/', '/sign-in']) {
+      const page = await open(context, path)
+      const hrefs: string[] = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('a[href]'))
+          .map((anchor) => anchor.getAttribute('href') ?? '')
+          .filter((href) => href.startsWith('/') || href.startsWith('#')),
+      )
+
+      for (const href of [...new Set(hrefs)]) {
+        if (href.startsWith('#')) {
+          await expect(
+            page.locator(`#${href.slice(1)}`),
+            `${path} anchor ${href}`,
+          ).toHaveCount(1)
+          continue
+        }
+        const response = await context.request.get(href)
+        expect(response.status(), `${path} link ${href}`).toBe(200)
+      }
     }
   })
 })

@@ -47,6 +47,9 @@ class Tenant(UUIDPrimaryKey, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    #: A demo workspace is a real tenant whose principals are refused every
+    #: mutation, so the public demo can never reach production data.
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class User(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
@@ -602,6 +605,9 @@ class AuditEvent(UUIDPrimaryKey, Base):
     )
     actor_type: Mapped[str] = mapped_column(String(20), nullable=False)
     actor_id: Mapped[str | None] = mapped_column(String(200))
+    #: The actor's name as it was when the event was written. Auditors must still
+    #: be able to read a decision after the person who made it has been removed.
+    actor_label: Mapped[str | None] = mapped_column(String(320))
     action: Mapped[str] = mapped_column(String(120), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(80), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
