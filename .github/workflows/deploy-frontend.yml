@@ -1,0 +1,91 @@
+name: Deploy frontend to Cloudflare Pages
+
+# The Pages project `aetrix` was created as a Direct Upload project, and
+# Cloudflare refuses to attach a Git source to one after creation (API error
+# 8000069). Rather than delete and recreate a live project, this workflow
+# reproduces the deployment that already produced the current site: build the
+# `frontend` workspace and upload `dist/client` to the existing `aetrix` project.
+#
+# It is inert until the repository has the credentials below. Without them the
+# job skips instead of failing every push, and it never publishes a build that
+# is missing its Supabase configuration (which would silently ship a sign-in
+# page that says authentication is unavailable).
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN   - token with the "Cloudflare Pages: Edit" permission
+#   CLOUDFLARE_ACCOUNT_ID  - 02c57cead9762baa7ac2d44a10c93fdc
+# Required repository variables (public browser configuration, not secrets):
+#   VITE_SUPABASE_URL
+#   VITE_SUPABASE_ANON_KEY
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and upload the marketing surface
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check deployment configuration
+        id: config
+        env:
+          API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=""
+          if [ -z "$API_TOKEN" ]; then missing="$missing CLOUDFLARE_API_TOKEN"; fi
+          if [ -z "$ACCOUNT_ID" ]; then missing="$missing CLOUDFLARE_ACCOUNT_ID"; fi
+          if [ -z "$SUPABASE_URL" ]; then missing="$missing VITE_SUPABASE_URL"; fi
+          if [ -z "$SUPABASE_ANON_KEY" ]; then missing="$missing VITE_SUPABASE_ANON_KEY"; fi
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping Pages deployment; missing configuration:$missing"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.config.outputs.ready == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        if: steps.config.outputs.ready == 'true'
+        run: npm ci
+
+      - name: Build
+        if: steps.config.outputs.ready == 'true'
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+        run: npm run build
+
+      - name: Deploy to the existing `aetrix` Pages project
+        if: steps.config.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: frontend
+          command: pages deploy dist/client --project-name=aetrix --branch=main
