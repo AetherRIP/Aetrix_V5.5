@@ -69,8 +69,7 @@ def test_data_api_roles_exist(engine) -> None:
     missing = [role for role in DATA_API_ROLES if role not in present]
     assert not missing, (
         "the Data API roles do not exist, so this check cannot prove anything; "
-        "create them before migrating (see .github/workflows/ci.yml): "
-        + ", ".join(missing)
+        "create them before migrating (see .github/workflows/ci.yml): " + ", ".join(missing)
     )
 
 
@@ -126,8 +125,8 @@ def test_data_api_roles_hold_no_sequence_privileges(engine) -> None:
             privileges=list(SEQUENCE_PRIVILEGES),
         )
     ]
-    assert not offenders, (
-        "the Data API roles can still consume public sequences:\n" + _listing(offenders)
+    assert not offenders, "the Data API roles can still consume public sequences:\n" + _listing(
+        offenders
     )
 
 
@@ -155,6 +154,5 @@ def test_default_privileges_do_not_expose_future_tables(engine) -> None:
     ]
     assert not offenders, (
         "default privileges in schema public still grant the Data API roles, so "
-        "every table a later migration creates is exposed on creation:\n"
-        + _listing(offenders)
+        "every table a later migration creates is exposed on creation:\n" + _listing(offenders)
     )

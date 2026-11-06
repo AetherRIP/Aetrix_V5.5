@@ -19,9 +19,9 @@ from __future__ import annotations
 import re
 
 __all__ = [
-    "InvalidEmailAddress",
     "RESERVED_DOMAINS",
     "RESERVED_SUFFIXES",
+    "InvalidEmailAddress",
     "normalize_email",
     "validate_email",
 ]
@@ -89,12 +89,17 @@ def validate_email(value: str) -> str:
     if not local or not domain:
         raise InvalidEmailAddress("An email address needs text before and after the '@'.")
     if len(address) > MAX_ADDRESS_LENGTH:
-        raise InvalidEmailAddress(f"An email address cannot exceed {MAX_ADDRESS_LENGTH} characters.")
+        raise InvalidEmailAddress(
+            f"An email address cannot exceed {MAX_ADDRESS_LENGTH} characters."
+        )
     if len(local) > MAX_LOCAL_LENGTH:
-        raise InvalidEmailAddress(f"The part before '@' cannot exceed {MAX_LOCAL_LENGTH} characters.")
+        raise InvalidEmailAddress(
+            f"The part before '@' cannot exceed {MAX_LOCAL_LENGTH} characters."
+        )
     if not _LOCAL_PART.fullmatch(local):
         raise InvalidEmailAddress(
-            "The part before '@' contains characters or dot placement that address syntax does not allow."
+            "The part before '@' contains characters or dot placement that address "
+            "syntax does not allow."
         )
 
     if len(domain) > MAX_DOMAIN_LENGTH:
@@ -104,7 +109,9 @@ def validate_email(value: str) -> str:
         raise InvalidEmailAddress("The domain needs a dot-separated top-level domain.")
     for label in labels:
         if not label:
-            raise InvalidEmailAddress("The domain contains an empty label (a doubled or trailing dot).")
+            raise InvalidEmailAddress(
+                "The domain contains an empty label (a doubled or trailing dot)."
+            )
         if len(label) > MAX_LABEL_LENGTH or not _LABEL.fullmatch(label):
             raise InvalidEmailAddress(f"The domain label '{label}' is not valid.")
     if not _TOP_LEVEL_LABEL.fullmatch(labels[-1]):
@@ -127,5 +134,6 @@ def _reject_undeliverable_domain(domain: str) -> None:
     for suffix in RESERVED_SUFFIXES:
         if domain.endswith(suffix):
             raise InvalidEmailAddress(
-                f"The domain '{domain}' uses the reserved '{suffix}' suffix and cannot receive email."
+                f"The domain '{domain}' uses the reserved '{suffix}' suffix and "
+                "cannot receive email."
             )
