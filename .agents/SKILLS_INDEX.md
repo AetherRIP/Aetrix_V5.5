@@ -1,6 +1,13 @@
-# SKILLS INDEX — MathChecker `UI_V5.5` Design Brainstorming Environment
+# SKILLS INDEX — design layer (2026-11-03)
 
-**Status:** 18 skills installed and verified · **Installed:** 2026-11-03 · **Workspace:** `TEMP` (future `UI_V5.5`)
+> **Superseded scope note (2026-11-07).** This file documents the original 18-skill design
+> layer only. The project skill set has since grown to 48 skills (25 external engineering
+> skills + 5 Aetrix-specific skills). The current catalog, licensing, activation model and
+> maintenance procedure live in [`docs/agent-skills/SKILL_CATALOG.md`](../docs/agent-skills/SKILL_CATALOG.md)
+> and [`docs/agent-skills/INSTALLATION_REPORT.md`](../docs/agent-skills/INSTALLATION_REPORT.md),
+> with per-task routing in [`AGENTS.md`](../AGENTS.md). Nothing below has been altered.
+
+**Status:** 18 design skills installed and verified · **Installed:** 2026-11-03 · **Workspace:** `TEMP` (future `UI_V5.5`)
 
 This directory prepares an AI agent to act as a **senior UI/UX designer, design-system architect and WPF desktop UI specialist** during brainstorming for the MathChecker redesign. It contains **design intelligence and planning material only** — no application code, no .NET solution, no XAML, no UI libraries.
 
