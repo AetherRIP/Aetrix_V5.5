@@ -11,15 +11,20 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test'
  * the navigation and the route guards all read that one claim.
  */
 
-type Role = 'platform_operator' | 'supervisor' | 'assistant'
+type Role = 'owner' | 'platform_operator' | 'supervisor' | 'assistant'
 
 const EMAIL: Record<Role, string> = {
+  owner: 'owner@aetrix.test',
   platform_operator: 'operator@aetrix.test',
   supervisor: 'teacher@aetrix.test',
   assistant: 'ana@aetrix.test',
 }
 
-function session(appMetadata: Record<string, unknown>, email: string) {
+function session(
+  appMetadata: Record<string, unknown>,
+  email: string,
+  userMetadata: Record<string, unknown> = {},
+) {
   const now = Math.floor(Date.now() / 1000)
   return {
     access_token: 'test-access-token',
@@ -38,7 +43,7 @@ function session(appMetadata: Record<string, unknown>, email: string) {
       confirmed_at: new Date(now * 1000).toISOString(),
       last_sign_in_at: new Date(now * 1000).toISOString(),
       app_metadata: appMetadata,
-      user_metadata: { full_name: 'Ana Ruiz', name: 'Ana Ruiz' },
+      user_metadata: { full_name: 'Ana Ruiz', name: 'Ana Ruiz', ...userMetadata },
       identities: [],
       created_at: new Date(now * 1000).toISOString(),
       updated_at: new Date(now * 1000).toISOString(),
@@ -51,6 +56,21 @@ async function withRole(page: Page, role: Role | null) {
   const payload = role
     ? session({ provider: 'google', aetrix_role: role }, EMAIL[role])
     : session({ provider: 'google' }, 'newcomer@aetrix.test')
+
+  await page.addInitScript((value) => {
+    window.localStorage.setItem('aetrix:auth', JSON.stringify(value))
+  }, payload)
+}
+
+/**
+ * A session whose *user-writable* metadata claims ownership. `user_metadata` is
+ * written by the account itself, so it must never be consulted for a role; only
+ * the identity provider can write `app_metadata`.
+ */
+async function withSpoofedOwner(page: Page) {
+  const payload = session({ provider: 'google' }, 'newcomer@aetrix.test', {
+    aetrix_role: 'owner',
+  })
 
   await page.addInitScript((value) => {
     window.localStorage.setItem('aetrix:auth', JSON.stringify(value))
@@ -117,6 +137,63 @@ test.describe('platform administrator', () => {
       await expect(page.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')
       await expect(page.locator('.gem-panel')).toBeVisible()
     }
+  })
+})
+
+test.describe('platform owner', () => {
+  test('renders the owner identity across the platform rail', async ({ context }) => {
+    const page = await open(context, '/platform', { role: 'owner' })
+
+    await expect(page.locator('.app')).toHaveAttribute('data-role', 'owner')
+    await expect(page.locator('.app-topbar__role')).toHaveText('Platform owner')
+
+    const nav = page.locator('.app-nav')
+    await expect(nav.getByRole('link', { name: 'Workspaces' })).toBeVisible()
+    // The owner is not locked out of the other two dashboards.
+    await expect(nav.getByRole('link', { name: 'Teacher dashboard' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Assistant overview' })).toBeVisible()
+  })
+
+  test('opens teacher and assistant areas without being confined', async ({ context }) => {
+    for (const path of ['/dashboard', '/students', '/queue', '/assistant', '/assistant/tasks']) {
+      const page = await open(context, path, { role: 'owner' })
+
+      await expect(page.locator('.app')).toHaveAttribute('data-role', 'owner')
+      await expect(
+        page.getByRole('heading', { name: 'This screen belongs to another account type' }),
+      ).toHaveCount(0)
+      await page.close()
+    }
+  })
+
+  test('opens the fleet screen with its contributor tab', async ({ context }) => {
+    const page = await open(context, '/platform/gemini', { role: 'owner' })
+
+    await expect(page.getByRole('heading', { level: 1, name: 'Gemini fleet' })).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Contributors' })).toBeVisible()
+  })
+
+  test('cannot be granted by editing user metadata', async ({ context }) => {
+    const page = await context.newPage()
+    await withSpoofedOwner(page)
+    await page.goto('/platform')
+
+    await expect(page.getByRole('heading', { name: 'No account role assigned' })).toBeVisible()
+    await expect(page.locator('.app')).toHaveCount(0)
+  })
+
+  test('gives an ordinary administrator no way to assign or remove it', async ({ context }) => {
+    const page = await open(context, '/platform/users', { role: 'platform_operator' })
+
+    await expect(
+      page.getByRole('heading', { name: 'Account management needs an admin surface' }),
+    ).toBeVisible()
+    // No control writes a role: assignment is an identity-provider action.
+    await expect(page.locator('select')).toHaveCount(0)
+    await expect(
+      page.getByRole('button', { name: /assign|grant|change role|remove role|promote/i }),
+    ).toHaveCount(0)
+    await expect(page.getByText(/identity provider/i).first()).toBeVisible()
   })
 })
 
@@ -199,6 +276,11 @@ test.describe('no role', () => {
  * below names a card that exists only on that screen.
  */
 const ROUTE_CONTENT: { role: Role; path: string; card: string }[] = [
+  { role: 'owner', path: '/platform', card: 'Workspace allocation' },
+  { role: 'owner', path: '/platform/users', card: 'Role assignment' },
+  { role: 'owner', path: '/platform/gemini', card: 'Gemini fleet' },
+  { role: 'owner', path: '/students', card: 'Classes' },
+  { role: 'owner', path: '/assistant', card: 'Review rules' },
   { role: 'platform_operator', path: '/platform', card: 'Workspace allocation' },
   { role: 'platform_operator', path: '/platform/workspaces', card: 'Allocation rules' },
   { role: 'platform_operator', path: '/platform/users', card: 'Role assignment' },

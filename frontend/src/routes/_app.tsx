@@ -189,9 +189,10 @@ function NoRole({ email, onSignOut }: { email: string | null; onSignOut: () => v
         <h1 className="app-boot__title">No account role assigned</h1>
         <p className="app-boot__body">
           {email ?? 'This account'} is signed in, but its verified claims carry no Aetrix
-          role. A platform administrator assigns one of <code>platform_operator</code>,{' '}
-          <code>supervisor</code> or <code>assistant</code> in the identity provider; this
-          screen cannot grant it, and no dashboard is opened without it.
+          role. The identity provider assigns <code>owner</code>,{' '}
+          <code>platform_operator</code>, <code>supervisor</code> or <code>assistant</code> in{' '}
+          the account's app metadata; this screen cannot grant it, and no dashboard is opened
+          without it.
         </p>
         <button type="button" className="btn btn--outline" onClick={onSignOut}>
           Sign out

@@ -33,9 +33,16 @@ function PlatformUsers() {
         />
       </Panel>
 
-      <Panel title="Role assignment" note="Identity provider">
+      <Panel title="Role assignment" note="Identity provider only">
         <CapabilityList
           items={[
+            {
+              label: 'owner',
+              detail:
+                'Platform ownership. Assigned only in the identity provider; this screen cannot grant, change or remove it.',
+              state: 'available',
+              icon: 'shield',
+            },
             {
               label: 'platform_operator',
               detail: 'Assigned in app_metadata; opens the platform area.',

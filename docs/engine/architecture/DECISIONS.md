@@ -384,3 +384,17 @@ retention procedure must handle both tables deliberately.
 - No administrator or contributor response can return key material, so revocation is the only way to stop a key being used.
 - The contributor ledger is append-only via `provider_usage`; a withdrawn contributor's history remains readable.
 - Contributor management is an operator responsibility with an audit trail, not an implicit side effect of adding a key.
+
+---
+
+## ADR-024 — Platform ownership is a fourth account role, assigned only by the identity provider
+
+**Context.** The product shipped three account types: `platform_operator`, `supervisor` and `assistant`. The platform's owner needs the operator surfaces *and* the teacher and assistant dashboards, and must not be creatable or removable by an ordinary administrator. The engine already used `OWNER` for workspace ownership, so reusing that value for platform ownership would have silently widened every workspace owner's reach.
+
+**Decision.** `owner` is a fourth `aetrix_role` in the identity provider's `app_metadata`, whose permission set is the union of the platform and workspace capabilities. The engine carries it as `PLATFORM_OWNER` in `users.role` (migration `0008_platform_owner`), admits it to `FLEET_ADMIN_ROLES`, and keeps the workspace capabilities the account had as `OWNER` (`is_reviewer`, `can_manage_exams`). No endpoint or screen writes a role: assignment is an identity-provider action, so there is no application path that grants, edits or removes ownership.
+
+**Consequences.**
+- Platform ownership cannot be self-granted: `user_metadata` is user-writable and is never read for a role.
+- An ordinary administrator has no control to promote or demote the owner; a downgrade requires identity-provider administrator access, and that action is outside this codebase by design.
+- Tenant isolation is unchanged: `PLATFORM_OWNER` widens *platform administration*, not the tenant scope of engine data queries, which still come from the verified token claim.
+- A new role must be added in three places deliberately (identity provider claim, frontend role table, engine check constraint), so forgetting one fails closed rather than half-working.

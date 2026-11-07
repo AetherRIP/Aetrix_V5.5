@@ -59,7 +59,9 @@ router = APIRouter(prefix="/admin/providers", tags=["provider administration"])
 
 #: The engine's ADMIN role is the platform operator.  A workspace OWNER is not
 #: one: they own a tenant, not the fleet.
-FLEET_ADMIN_ROLES = frozenset({"ADMIN"})
+#: Platform ownership includes the fleet. A workspace OWNER does not: their
+#: role is a tenant relationship and must never reach another tenant's keys.
+FLEET_ADMIN_ROLES = frozenset({"ADMIN", "PLATFORM_OWNER"})
 
 
 def require_fleet_admin(principal: Principal = Depends(get_principal)) -> Principal:

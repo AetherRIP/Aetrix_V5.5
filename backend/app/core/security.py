@@ -35,11 +35,13 @@ class Principal:
 
     @property
     def is_reviewer(self) -> bool:
-        return self.role in {"OWNER", "ADMIN", "TEACHER", "REVIEWER"}
+        # PLATFORM_OWNER keeps the workspace capabilities it had before the
+        # platform role existed; owning the platform must not remove them.
+        return self.role in {"OWNER", "ADMIN", "TEACHER", "REVIEWER", "PLATFORM_OWNER"}
 
     @property
     def can_manage_exams(self) -> bool:
-        return self.role in {"OWNER", "ADMIN", "TEACHER"}
+        return self.role in {"OWNER", "ADMIN", "TEACHER", "PLATFORM_OWNER"}
 
 
 class SecretBox:

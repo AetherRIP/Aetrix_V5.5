@@ -56,7 +56,12 @@ class User(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "subject", name="uq_users_tenant_subject"),
-        CheckConstraint("role IN ('OWNER','ADMIN','TEACHER','REVIEWER','VIEWER')", name="role"),
+        CheckConstraint(
+            # PLATFORM_OWNER is platform ownership, not a fifth workspace role:
+            # it keeps the workspace capabilities and adds the platform ones.
+            "role IN ('OWNER','ADMIN','TEACHER','REVIEWER','VIEWER','PLATFORM_OWNER')",
+            name="role",
+        ),
         Index("ix_users_subject", "subject"),
     )
 

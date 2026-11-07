@@ -12,6 +12,7 @@ cosmetic. No workspace id, role or ownership claim from the client is ever trust
 
 | Role | Scope | Intent | Typical holder |
 |---|---|---|---|
+| `platform_owner` | Platform + every workspace | Owns the platform outright: the only role holding both platform and workspace capabilities | Account owner |
 | `platform_operator` | Platform | Run the service; **no default access to workspace data** | You |
 | `workspace_owner` | Workspace | Owns the account, members, credentials and deletion | Head of department |
 | `workspace_admin` | Workspace | Runs the workspace day to day, except destruction/transfer | Department administrator |
@@ -22,6 +23,13 @@ cosmetic. No workspace id, role or ownership claim from the client is ever trust
 `platform_operator` is **not** a workspace role and does not imply membership. It grants platform
 surfaces only; reading customer data additionally requires a time-boxed, audited **support grant**
 (see `../security/SECURITY_REQUIREMENTS.md` §7).
+
+`platform_owner` (identity-provider claim `aetrix_role: "owner"`) is assigned **only** in the
+identity provider's `app_metadata`. No endpoint or screen writes a role, so an ordinary administrator
+has no path to grant, modify or remove ownership; a downgrade requires identity-provider administrator
+access. The engine carries the value as `PLATFORM_OWNER` in `users.role`, where it is admitted to the
+fleet-administration gate and keeps the workspace capabilities of `OWNER`. Platform ownership widens
+*platform* administration only: engine data queries remain scoped to the tenant in the verified token.
 
 ## 3. Permission keys
 

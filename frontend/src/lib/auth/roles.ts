@@ -11,7 +11,7 @@
  * that counts. See `docs/architecture/AETRIX_V5.5_SYSTEM.md`.
  */
 
-export type AccountRole = 'platform_operator' | 'supervisor' | 'assistant'
+export type AccountRole = 'owner' | 'platform_operator' | 'supervisor' | 'assistant'
 
 export type Permission =
   | 'platform.users.read'
@@ -40,8 +40,41 @@ export type Permission =
   | 'own.progress.read'
   | 'own.submissions.read'
 
-/** Explicit capability sets. A permission absent from a role is denied. */
+/**
+ * Explicit capability sets. A permission absent from a role is denied.
+ *
+ * `owner` is the only role that holds both platform and workspace capabilities.
+ * It is deliberately a separate account type rather than "operator plus": the
+ * identity provider can write one claim, and no screen or endpoint can grant it.
+ */
 const PERMISSIONS: Record<AccountRole, readonly Permission[]> = {
+  owner: [
+    'platform.users.read',
+    'platform.users.manage',
+    'platform.workspaces.read',
+    'platform.workspaces.manage',
+    'platform.allocations.manage',
+    'platform.health.read',
+    'platform.audit.read',
+    'platform.providers.configure',
+    'platform.settings.manage',
+    'workspace.settings.manage',
+    'workspace.assistants.manage',
+    'workspace.classroom.connect',
+    'students.read',
+    'students.manage',
+    'assignments.read',
+    'assignments.manage',
+    'submissions.read',
+    'submissions.review',
+    'gradebook.read',
+    'gradebook.manage',
+    'analytics.read',
+    'tasks.read',
+    'notifications.read',
+    'own.progress.read',
+    'own.submissions.read',
+  ],
   platform_operator: [
     'platform.users.read',
     'platform.users.manage',
@@ -100,13 +133,24 @@ export type RoleMeta = {
  * the product's three account types. The mapping is stated here so the wire
  * contract can be added without guessing later.
  */
-export const ENGINE_ROLE: Record<AccountRole, 'ADMIN' | 'OWNER' | 'REVIEWER'> = {
+export const ENGINE_ROLE: Record<
+  AccountRole,
+  'ADMIN' | 'OWNER' | 'REVIEWER' | 'PLATFORM_OWNER'
+> = {
+  owner: 'PLATFORM_OWNER',
   platform_operator: 'ADMIN',
   supervisor: 'OWNER',
   assistant: 'REVIEWER',
 }
 
 export const ROLE_META: Record<AccountRole, RoleMeta> = {
+  owner: {
+    role: 'owner',
+    label: 'Platform owner',
+    summary: 'Owns the platform: every workspace, account, role and setting.',
+    scope: 'Whole platform and every workspace',
+    home: '/platform',
+  },
   platform_operator: {
     role: 'platform_operator',
     label: 'Platform administrator',
@@ -130,7 +174,12 @@ export const ROLE_META: Record<AccountRole, RoleMeta> = {
   },
 }
 
-const ROLES: readonly AccountRole[] = ['platform_operator', 'supervisor', 'assistant']
+const ROLES: readonly AccountRole[] = [
+  'owner',
+  'platform_operator',
+  'supervisor',
+  'assistant',
+]
 
 function isRole(value: unknown): value is AccountRole {
   return typeof value === 'string' && (ROLES as readonly string[]).includes(value)
@@ -291,7 +340,38 @@ const PLATFORM_NAV: RoleNav = {
   ],
 }
 
+/**
+ * The owner's rail: every platform destination, plus a direct door into the
+ * teacher and assistant areas. Owning the platform is not a reason to be locked
+ * out of the two other dashboards the product has.
+ */
+const OWNER_NAV: RoleNav = {
+  primary: [
+    { to: '/platform', label: 'Platform overview', icon: 'shield' },
+    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
+    { to: '/platform/users', label: 'Accounts', icon: 'eye' },
+    { to: '/platform/health', label: 'System health', icon: 'server' },
+    { to: '/platform/audit', label: 'Audit log', icon: 'records' },
+  ],
+  groupLabel: 'Every area',
+  secondary: [
+    { to: '/platform/gemini', label: 'Gemini fleet', icon: 'blueprint' },
+    { to: '/platform/integrations', label: 'AI providers', icon: 'blueprint' },
+    { to: '/dashboard', label: 'Teacher dashboard', icon: 'chart' },
+    { to: '/queue', label: 'Marking queue', icon: 'pulse' },
+    { to: '/assistant', label: 'Assistant overview', icon: 'pen' },
+    { to: '/platform/settings', label: 'Settings', icon: 'lock' },
+  ],
+  tabs: [
+    { to: '/platform', label: 'Overview', icon: 'shield' },
+    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
+    { to: '/platform/users', label: 'Accounts', icon: 'eye' },
+    { to: '/platform/health', label: 'Health', icon: 'server' },
+  ],
+}
+
 export const NAV_BY_ROLE: Record<AccountRole, RoleNav> = {
+  owner: OWNER_NAV,
   platform_operator: PLATFORM_NAV,
   supervisor: TEACHER_NAV,
   assistant: ASSISTANT_NAV,
@@ -299,6 +379,24 @@ export const NAV_BY_ROLE: Record<AccountRole, RoleNav> = {
 
 /** Every route an account type may open, as path prefixes. */
 const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
+  // The owner holds every route either of the other account types can open.
+  owner: [
+    '/platform',
+    '/dashboard',
+    '/workspace',
+    '/inbox',
+    '/queue',
+    '/assignments',
+    '/reports',
+    '/settings',
+    '/students',
+    '/gradebook',
+    '/analytics',
+    '/assistants',
+    '/classroom',
+    '/assistant',
+    '/submissions',
+  ],
   platform_operator: ['/platform', '/settings'],
   supervisor: [
     '/dashboard',

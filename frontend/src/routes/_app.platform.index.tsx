@@ -82,9 +82,16 @@ function PlatformOverview() {
             />
           </Panel>
 
-          <Panel title="Accounts and roles" index={3} note="Three account types">
+          <Panel title="Accounts and roles" index={3} note="Four account types">
             <CapabilityList
               items={[
+                {
+                  label: 'owner',
+                  detail:
+                    'Owns the platform and every workspace. Assigned in the identity provider only; no screen grants or removes it.',
+                  state: 'available',
+                  icon: 'shield',
+                },
                 {
                   label: 'platform_operator',
                   detail: 'Operates the platform. No access to student records.',
