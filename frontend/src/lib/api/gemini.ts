@@ -49,6 +49,9 @@ export type ProjectRow = {
 
 export type FleetKey = {
   id: string
+  contributor_id: string | null
+  contributor_name: string | null
+  revoked_at: string | null
   project_id: string
   account_label: string
   key_fingerprint: string
@@ -187,4 +190,163 @@ export function setKeyEnabled(
 
 export function removeKey(id: string, options: RequestOptions): Promise<ApiResult<null>> {
   return apiRequest<null>(`${BASE}/keys/${id}`, { method: 'DELETE' }, options)
+}
+
+const CONTRIBUTIONS = `${BASE}/contributions`
+
+export type ContributorStatus = 'ACTIVE' | 'SUSPENDED' | 'WITHDRAWN'
+
+export type Contributor = {
+  id: string
+  user_id: string | null
+  display_name: string
+  contact_email: string | null
+  status: ContributorStatus
+  consent_version: string
+  consent_at: string
+  consent_reference: string | null
+  status_reason: string | null
+  suspended_at: string | null
+  withdrawn_at: string | null
+  created_at: string
+}
+
+export type ContributionUsage = {
+  requests: number
+  input_tokens: number
+  output_tokens: number
+  failures: number
+  quota_failures: number
+  last_success_at: string | null
+}
+
+export type ContributorRow = {
+  contributor: Contributor
+  keys_total: number
+  keys_eligible: number
+  keys_revoked: number
+  projects: string[]
+  window: ContributionUsage
+  today: ContributionUsage
+}
+
+export type CapacityProject = {
+  project_id: string
+  contributors: number
+  keys: number
+  requests_per_minute_remaining: number | null
+  requests_per_day_remaining: number | null
+  confidence: Confidence
+  cooldown_until: string | null
+}
+
+export type CapacityModel = {
+  model: string
+  projects: CapacityProject[]
+  totals: {
+    projects: number
+    requests_per_minute_remaining: number | null
+    requests_per_day_remaining: number | null
+    windows_measured: number
+    windows_unknown: number
+    confidence: Confidence
+  }
+}
+
+export type ContributionSummary = {
+  observed_at: string
+  window_started_at: string
+  day_started_at: string
+  aggregate: {
+    contributors_total: number
+    contributors_by_status: Record<string, number>
+    keys_contributed: number
+    keys_eligible: number
+    keys_revoked: number
+    platform_keys: number
+    orphaned_contributor_keys: number
+    projects: number
+    shared_projects: number
+    requests_in_window: number
+    requests_today: number
+    input_tokens_in_window: number
+    output_tokens_in_window: number
+    failures_in_window: number
+  }
+  contributors: ContributorRow[]
+  capacity: { models: CapacityModel[]; note: string }
+}
+
+export type ContributorDraft = {
+  display_name: string
+  contact_email?: string
+  user_id?: string
+  consent_version: string
+  consent_reference?: string
+}
+
+export type ContributorKeyDraft = {
+  project_id: string
+  api_key: string
+  label?: string
+  tier?: 'FREE' | 'PAID' | 'UNKNOWN'
+}
+
+export type Withdrawal = {
+  contributor_id: string
+  status: ContributorStatus
+  keys_revoked: number
+}
+
+export function contributionSummary(
+  days: number,
+  options: RequestOptions,
+): Promise<ApiResult<ContributionSummary>> {
+  return apiGet<ContributionSummary>(`${CONTRIBUTIONS}?window_days=${days}`, options)
+}
+
+export function createContributor(
+  draft: ContributorDraft,
+  options: RequestOptions,
+): Promise<ApiResult<Contributor>> {
+  return apiPost<Contributor>(CONTRIBUTIONS, draft, options)
+}
+
+export function addContributorKey(
+  contributorId: string,
+  draft: ContributorKeyDraft,
+  options: RequestOptions,
+): Promise<ApiResult<FleetKey>> {
+  return apiPost<FleetKey>(`${CONTRIBUTIONS}/${contributorId}/keys`, draft, options)
+}
+
+export function revokeContributorKey(
+  contributorId: string,
+  credentialId: string,
+  options: RequestOptions,
+): Promise<ApiResult<null>> {
+  return apiRequest<null>(`${CONTRIBUTIONS}/${contributorId}/keys/${credentialId}`, { method: 'DELETE' }, options)
+}
+
+export function suspendContributor(
+  contributorId: string,
+  reason: string,
+  options: RequestOptions,
+): Promise<ApiResult<Contributor>> {
+  return apiPost<Contributor>(`${CONTRIBUTIONS}/${contributorId}/suspend`, { reason }, options)
+}
+
+export function reinstateContributor(
+  contributorId: string,
+  options: RequestOptions,
+): Promise<ApiResult<Contributor>> {
+  return apiPost<Contributor>(`${CONTRIBUTIONS}/${contributorId}/reinstate`, {}, options)
+}
+
+export function withdrawContributor(
+  contributorId: string,
+  reason: string,
+  options: RequestOptions,
+): Promise<ApiResult<Withdrawal>> {
+  return apiPost<Withdrawal>(`${CONTRIBUTIONS}/${contributorId}/withdraw`, { reason }, options)
 }

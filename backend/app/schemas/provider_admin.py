@@ -47,6 +47,10 @@ class ProjectRead(BaseModel):
 
 class KeyRead(BaseModel):
     id: UUID
+    #: Null means the platform owns the key; a name means it was contributed.
+    contributor_id: UUID | None = None
+    contributor_name: str | None = None
+    revoked_at: datetime | None = None
     project_id: str
     account_label: str
     key_fingerprint: str

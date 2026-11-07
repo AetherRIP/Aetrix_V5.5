@@ -61,6 +61,8 @@ class CredentialLease:
     health: str
     #: The Google Cloud project the key bills against: the unit of quota.
     project_id: str
+    #: Null for a platform-owned key; set when the key was contributed.
+    contributor_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +129,9 @@ class CredentialPool:
         excluded: set[uuid.UUID] | None = None,
     ) -> CredentialLease:
         excluded = excluded or set()
+        # ``claim_candidates`` already excludes keys whose contributor is not
+        # ACTIVE or whose contributor revoked them, so a withdrawal takes effect
+        # before the next lease rather than at the next health sweep.
         candidates = self.credentials.claim_candidates(tenant_id, model, excluded)
         cooling_projects: set[str] = set()
         for credential in candidates:
@@ -156,6 +161,7 @@ class CredentialPool:
                 api_key=api_key,
                 health=credential.health,
                 project_id=project_id,
+                contributor_id=credential.contributor_id,
             )
         raise AppError(
             ErrorCode.PROVIDER_UNAVAILABLE,
@@ -267,6 +273,7 @@ class ProviderCallService:
         row = self.usage.record(
             tenant_id=tenant_id,
             credential_id=lease.credential_id if lease else None,
+            contributor_id=lease.contributor_id if lease else None,
             job_id=job_id,
             project_id=lease.project_id if lease else "unattributed",
             retry_count=retry_count,

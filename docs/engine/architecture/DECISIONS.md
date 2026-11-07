@@ -371,3 +371,16 @@ retention procedure must handle both tables deliberately.
   credentials.
 
 ---
+
+## ADR-023 — Keys belong to contributors; capacity still belongs to projects
+
+**Context.** The Gemini fleet will draw free-tier keys from several independent individuals, not from one operator. A flat credential list cannot say who lent a key, whether they still consent, or whose withdrawal must stop scheduling. It also tempts the opposite mistake: treating each new key as new capacity, which this repository already rejected for projects.
+
+**Decision.** `provider_contributors` records the contributor, an optional linked user, consent version and timestamp, status, and suspension/withdrawal timestamps. `provider_credentials.contributor_id` links each key to its contributor and stays nullable so platform-owned keys remain valid and are not misreported as unattributed contributions. Eligibility is decided in `CredentialRepository.claim_candidates`, which requires an active contributor and no `revoked_at`, so suspension and withdrawal take effect before the next lease. Withdrawal destroys the stored ciphertext and keeps the row; suspension keeps the ciphertext and withholds the key; reinstatement returns keys to `UNKNOWN`. Capacity is still computed per Google Cloud project per model, never per key, and usage is attributed to contributor, key, project, model and correction job.
+
+**Consequences.**
+- One contributor may hold many keys across many projects, and one project may serve several contributors; shared allowances are counted once.
+- A single contributor's keys going invalid, exhausted or withdrawn removes only their candidates from rotation, so the correction pipeline continues on every other eligible project.
+- No administrator or contributor response can return key material, so revocation is the only way to stop a key being used.
+- The contributor ledger is append-only via `provider_usage`; a withdrawn contributor's history remains readable.
+- Contributor management is an operator responsibility with an audit trail, not an implicit side effect of adding a key.

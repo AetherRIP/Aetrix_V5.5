@@ -97,6 +97,7 @@ def add_credential(
     tier: str = "UNKNOWN",
     auth_type: str = "api_key",
     tenant_id: uuid.UUID | None = None,
+    contributor_id: uuid.UUID | None = None,
 ) -> ProviderCredential:
     raw = api_key.get_secret_value().strip()
     if not raw:
@@ -119,6 +120,7 @@ def add_credential(
 
     credential = credentials.create(
         tenant_id=tenant_id,
+        contributor_id=contributor_id,
         project_id=project,
         account_label=_clean_label(label, project, 1),
         key_fingerprint=key_fingerprint,
@@ -246,6 +248,7 @@ def validate_credential(
         usage.record(
             tenant_id=credential.tenant_id,
             credential_id=credential.id,
+            contributor_id=credential.contributor_id,
             job_id=None,
             project_id=credential.project_id,
             provider=provider.name,
@@ -279,6 +282,7 @@ def validate_credential(
     usage.record(
         tenant_id=credential.tenant_id,
         credential_id=credential.id,
+        contributor_id=credential.contributor_id,
         job_id=None,
         project_id=credential.project_id,
         provider=provider.name,
@@ -308,8 +312,18 @@ def validate_credential(
 def set_enabled(
     session: Session, credential: ProviderCredential, *, enabled: bool
 ) -> ProviderCredential:
-    """Disabling is a health state, not a delete: history and the key survive."""
+    """Disabling is a health state, not a delete: history and the key survive.
 
+    A revoked key is never re-enabled here: revocation destroyed its ciphertext,
+    so "enabled" would only produce a credential that cannot authenticate.  A
+    contributor who wants back in registers a new key.
+    """
+
+    if credential.revoked_at is not None:
+        raise AppError(
+            ErrorCode.CONFLICT,
+            "This key was revoked; a withdrawn credential cannot be re-enabled.",
+        )
     if enabled:
         if credential.health == "DISABLED":
             credential.health = "UNKNOWN"
@@ -347,6 +361,8 @@ def remove_credential(
         credential.last_error = (
             "Removed by a platform administrator; usage history is retained."
         )
+        credential.revoked_at = utcnow()
+        credential.revoked_reason = "Removed by a platform administrator."
         credential.cooldown_until = None
         session.commit()
         return "retired"
@@ -387,6 +403,9 @@ def fleet_overview(session: Session, settings: Settings) -> dict[str, Any]:
             {
                 "project_id": project_id,
                 "keys": len(keys),
+                "contributors": len(
+                    {key.contributor_id for key in keys if key.contributor_id is not None}
+                ),
                 "healthy": sum(1 for key in keys if key.health == "HEALTHY"),
                 "disabled": sum(1 for key in keys if key.health == "DISABLED"),
                 "invalid": sum(1 for key in keys if key.health == "INVALID"),
@@ -400,6 +419,8 @@ def fleet_overview(session: Session, settings: Settings) -> dict[str, Any]:
     error_rate = today["failures"] / today["requests"] if today["requests"] else None
     return {
         "keys_total": len(credentials),
+        "external_keys": sum(1 for key in credentials if key.contributor_id is not None),
+        "platform_keys": sum(1 for key in credentials if key.contributor_id is None),
         "keys_by_health": by_health,
         "projects": len(projects),
         "requests_today": today["requests"],

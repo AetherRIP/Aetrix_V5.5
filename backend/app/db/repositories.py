@@ -33,6 +33,7 @@ from .models import (
     MarkSchemeVersion,
     PageQuestionMapping,
     PromptVersion,
+    ProviderContributor,
     ProviderCredential,
     ProviderProjectCooldown,
     ProviderQuotaReservation,
@@ -946,9 +947,11 @@ class CredentialRepository:
         auth_type: str = "api_key",
         tier: str = "UNKNOWN",
         health: str = "UNKNOWN",
+        contributor_id: uuid.UUID | None = None,
     ) -> ProviderCredential:
         credential = ProviderCredential(
             tenant_id=tenant_id,
+            contributor_id=contributor_id,
             project_id=project_id,
             account_label=account_label,
             key_fingerprint=key_fingerprint,
@@ -1041,17 +1044,43 @@ class CredentialRepository:
         self.session.delete(credential)
         self.session.flush()
 
+    def for_contributor(self, contributor_id: uuid.UUID) -> list[ProviderCredential]:
+        return list(
+            self.session.scalars(
+                select(ProviderCredential)
+                .where(ProviderCredential.contributor_id == contributor_id)
+                .order_by(ProviderCredential.project_id, ProviderCredential.account_label)
+            )
+        )
+
     def claim_candidates(
         self, tenant_id: uuid.UUID, model: str, excluded: set[uuid.UUID]
     ) -> list[ProviderCredential]:
+        """Credentials a request may be leased on.
+
+        Eligibility is decided by the contributor's status as well as the key's
+        own health: a suspended or withdrawn contributor must stop receiving
+        traffic even if an earlier health update left the row looking healthy.
+        Platform-owned keys (``contributor_id IS NULL``) are always eligible.
+        """
+
         statement = (
             select(ProviderCredential)
+            .outerjoin(
+                ProviderContributor,
+                ProviderContributor.id == ProviderCredential.contributor_id,
+            )
             .where(
                 or_(
                     ProviderCredential.tenant_id == tenant_id,
                     ProviderCredential.tenant_id.is_(None),
                 ),
                 ProviderCredential.health.not_in(["INVALID", "DISABLED"]),
+                ProviderCredential.revoked_at.is_(None),
+                or_(
+                    ProviderCredential.contributor_id.is_(None),
+                    ProviderContributor.status == "ACTIVE",
+                ),
                 or_(
                     ProviderCredential.cooldown_until.is_(None),
                     ProviderCredential.cooldown_until <= utcnow(),
@@ -1070,6 +1099,50 @@ class CredentialRepository:
                 continue
             result.append(row)
         return result
+
+
+class ContributorRepository:
+    """Contributors are platform-level, so these reads never filter by tenant."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, contributor_id: uuid.UUID) -> ProviderContributor | None:
+        return self.session.get(ProviderContributor, contributor_id)
+
+    def get_for_user(self, user_id: uuid.UUID) -> ProviderContributor | None:
+        return self.session.scalar(
+            select(ProviderContributor).where(ProviderContributor.user_id == user_id)
+        )
+
+    def list(self, status: str | None = None) -> list[ProviderContributor]:
+        statement = select(ProviderContributor).order_by(ProviderContributor.display_name)
+        if status:
+            statement = statement.where(ProviderContributor.status == status)
+        return list(self.session.scalars(statement))
+
+    def create(
+        self,
+        *,
+        display_name: str,
+        consent_version: str,
+        contact_email: str | None = None,
+        user_id: uuid.UUID | None = None,
+        consent_reference: str | None = None,
+        consent_at: Any | None = None,
+    ) -> ProviderContributor:
+        contributor = ProviderContributor(
+            user_id=user_id,
+            display_name=display_name,
+            contact_email=contact_email,
+            consent_version=consent_version,
+            consent_at=consent_at or utcnow(),
+            consent_reference=consent_reference,
+            status="ACTIVE",
+        )
+        self.session.add(contributor)
+        self.session.flush()
+        return contributor
 
 
 class QuotaReservationRepository:
@@ -1202,9 +1275,11 @@ class UsageRepository:
         error_class: str | None,
         project_id: str = "",
         retry_count: int = 0,
+        contributor_id: uuid.UUID | None = None,
     ) -> ProviderUsage:
         row = ProviderUsage(
             tenant_id=tenant_id,
+            contributor_id=contributor_id,
             credential_id=credential_id,
             job_id=job_id,
             project_id=project_id or "",
@@ -1352,6 +1427,52 @@ class UsageRepository:
             }
             for project, count, input_sum, output_sum, failures, quota_failures in rows
         ]
+
+    def contributor_window_stats(self, since: Any) -> dict[uuid.UUID, dict[str, Any]]:
+        """Contribution statistics per contributor.
+
+        Grouped by the ledger's denormalised ``contributor_id``, so a key that
+        was retired keeps counting toward the person who lent it.
+        """
+
+        rows = self.session.execute(
+            select(
+                ProviderUsage.contributor_id,
+                func.count(ProviderUsage.id),
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0),
+                func.coalesce(func.sum(ProviderUsage.output_tokens), 0),
+                func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(False)),
+                func.count(ProviderUsage.id).filter(
+                    ProviderUsage.error_class == "ProviderQuotaError"
+                ),
+                func.max(ProviderUsage.created_at).filter(ProviderUsage.success.is_(True)),
+            )
+            .where(
+                ProviderUsage.created_at >= since,
+                ProviderUsage.contributor_id.is_not(None),
+            )
+            .group_by(ProviderUsage.contributor_id)
+        ).all()
+        return {
+            contributor_id: {
+                "requests": int(count or 0),
+                "input_tokens": int(input_sum or 0),
+                "output_tokens": int(output_sum or 0),
+                "failures": int(failures or 0),
+                "quota_failures": int(quota_failures or 0),
+                "last_success_at": last_success,
+            }
+            for (
+                contributor_id,
+                count,
+                input_sum,
+                output_sum,
+                failures,
+                quota_failures,
+                last_success,
+            ) in rows
+            if contributor_id is not None
+        }
 
     def key_window_stats(self, since: Any) -> dict[uuid.UUID, dict[str, Any]]:
         rows = self.session.execute(

@@ -112,7 +112,7 @@ test.describe('platform administrator', () => {
 
     // No engine deployment: the screen names that, and renders no quota figure.
     await expect(page.getByText('no public HTTPS deployment yet').first()).toBeVisible()
-    for (const label of ['API keys', 'Projects', 'Usage', 'Alerts']) {
+    for (const label of ['API keys', 'Contributors', 'Projects', 'Usage', 'Alerts']) {
       await page.getByRole('tab', { name: label }).click()
       await expect(page.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')
       await expect(page.locator('.gem-panel')).toBeVisible()

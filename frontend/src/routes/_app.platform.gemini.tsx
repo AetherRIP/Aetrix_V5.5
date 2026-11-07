@@ -6,16 +6,26 @@ import { Icon } from '../components/ui/Icons'
 import { useAuth } from '../lib/auth/AuthProvider'
 import type { ApiResult, RequestOptions } from '../lib/api/client'
 import {
+  addContributorKey,
   addKey,
   alerts as fetchAlerts,
+  contributionSummary,
+  createContributor,
   importKeys,
   listKeys,
   overview as fetchOverview,
   removeKey,
   setKeyEnabled,
   usage as fetchUsage,
+  reinstateContributor,
+  revokeContributorKey,
+  suspendContributor,
   validateKey,
+  withdrawContributor,
+  type CapacityModel,
   type Confidence,
+  type ContributionSummary,
+  type ContributorRow,
   type FleetAlert,
   type FleetKey,
   type FleetOverview,
@@ -31,7 +41,7 @@ export const Route = createFileRoute('/_app/platform/gemini')({
   component: PlatformGemini,
 })
 
-const TABS = ['Overview', 'API keys', 'Projects', 'Usage', 'Alerts'] as const
+const TABS = ['Overview', 'API keys', 'Contributors', 'Projects', 'Usage', 'Alerts'] as const
 type Tab = (typeof TABS)[number]
 
 type Loaded<T> =
@@ -189,6 +199,9 @@ function PlatformGemini() {
         ) : null}
         {tab === 'API keys' ? (
           <KeysTab token={token} projects={overview.state === 'ok' ? overview.data.projects_detail : []} notify={setNotice} />
+        ) : null}
+        {tab === 'Contributors' ? (
+          <ContributorsTab token={token} notify={setNotice} />
         ) : null}
         {tab === 'Projects' ? (
           <ProjectsTab state={overview} onRefresh={reloadOverview} />
@@ -986,6 +999,588 @@ function AlertsTab({ token }: { token: string | null }) {
           check AI Studio for the project&rsquo;s real allowance before relying on them.
         </p>
       </StatePanel>
+    </div>
+  )
+}
+const CONTRIBUTOR_TONE: Record<string, 'ok' | 'attention' | 'neutral'> = {
+  ACTIVE: 'ok',
+  SUSPENDED: 'attention',
+  WITHDRAWN: 'neutral',
+}
+
+/**
+ * The contributor pool. Two rules shape this screen: a key belongs to a person,
+ * and capacity belongs to a Google Cloud project — never to a key. So the stats
+ * count contributors and projects, and the capacity section sums independent
+ * projects without ever adding a second key from the same project.
+ */
+function ContributorsTab({
+  token,
+  notify,
+}: {
+  token: string | null
+  notify: (message: string | null) => void
+}) {
+  const [summary, reloadSummary] = useResource<ContributionSummary>(
+    `contributions:${token ?? 'anonymous'}`,
+    token ? (options) => contributionSummary(14, options) : null,
+    { token },
+  )
+  const [keys, reloadKeys] = useResource<KeyPage>(
+    `contributed-keys:${token ?? 'anonymous'}`,
+    token ? (options) => listKeys({ limit: 200 }, options) : null,
+    { token },
+  )
+
+  const act = useCallback(
+    async (label: string, run: () => Promise<ApiResult<unknown>>) => {
+      const result = await run()
+      notify(result.status === 'ok' ? `${label} succeeded.` : `${label} failed: ${result.reason}`)
+      reloadSummary()
+      reloadKeys()
+    },
+    [notify, reloadSummary, reloadKeys],
+  )
+
+  if (summary.state !== 'ok') {
+    return (
+      <Panel title="Contributors" note="Awaits the engine">
+        <LoadFailure state={summary} capability="GET /api/v1/admin/providers/contributions" />
+      </Panel>
+    )
+  }
+
+  const data = summary.data
+  const aggregate = data.aggregate
+  const contributed = keys.state === 'ok' ? keys.data.items.filter((key) => key.contributor_id) : []
+  const active = data.contributors.filter((row) => row.contributor.status === 'ACTIVE')
+
+  return (
+    <div className="app-stack">
+      <Panel title="Contributor pool" note={`window since ${stamp(data.window_started_at)}`}>
+        <div className="gem-stats">
+          <Stat
+            label="Contributors"
+            value={count(aggregate.contributors_total)}
+            note={`${count(aggregate.contributors_by_status.ACTIVE ?? 0)} active`}
+          />
+          <Stat
+            label="Suspended"
+            value={count(aggregate.contributors_by_status.SUSPENDED ?? 0)}
+            note="keys withheld, ciphertext kept"
+          />
+          <Stat
+            label="Withdrawn"
+            value={count(aggregate.contributors_by_status.WITHDRAWN ?? 0)}
+            note="keys revoked for good"
+          />
+          <Stat
+            label="Contributed keys"
+            value={count(aggregate.keys_contributed)}
+            note={`${count(aggregate.keys_eligible)} eligible · ${count(aggregate.keys_revoked)} revoked`}
+          />
+          <Stat
+            label="Platform-owned keys"
+            value={count(aggregate.platform_keys)}
+            note="not attributed to a contributor"
+          />
+          <Stat
+            label="Projects"
+            value={count(aggregate.projects)}
+            note={`${count(aggregate.shared_projects)} shared by more than one contributor`}
+          />
+          <Stat
+            label="Requests today"
+            value={count(aggregate.requests_today)}
+            note="attributed ledger entries"
+          />
+          <Stat
+            label="Requests in window"
+            value={count(aggregate.requests_in_window)}
+            note={`${count(aggregate.failures_in_window)} failures`}
+          />
+        </div>
+        <p className="gem-footnote">{data.capacity.note}</p>
+        <button type="button" className="btn btn--outline gem-refresh" onClick={reloadSummary}>
+          Refresh
+        </button>
+      </Panel>
+
+      <Panel title="Capacity across independent projects" note="One allowance per project, per model">
+        {data.capacity.models.length === 0 ? (
+          <p className="panel-copy">
+            No contributed key is eligible, so there is no independent project capacity to count.
+          </p>
+        ) : (
+          data.capacity.models.map((model) => <CapacityCard key={model.model} model={model} />)
+        )}
+      </Panel>
+
+      <Panel title="Contributors" note={`${count(data.contributors.length)} records`}>
+        {data.contributors.length === 0 ? (
+          <p className="panel-copy">
+            No one has contributed a key yet. Registration records who lent the key and which
+            agreement they consented to — it does not validate the key.
+          </p>
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table gem-table">
+              <caption className="visually-hidden">Contributors and the keys they lent</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Contributor</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Consent</th>
+                  <th scope="col">Keys eligible / total</th>
+                  <th scope="col">Projects</th>
+                  <th scope="col">Requests today</th>
+                  <th scope="col">Requests in window</th>
+                  <th scope="col">Last success</th>
+                  <th scope="col">
+                    <span className="visually-hidden">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.contributors.map((row) => (
+                  <ContributorTableRow key={row.contributor.id} row={row} token={token} act={act} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Register a contributor" note="Consent is recorded before any key">
+        <RegisterContributor token={token} notify={notify} onDone={reloadSummary} />
+      </Panel>
+
+      <Panel
+        title="Add a contributed key"
+        note={`${count(active.length)} active contributor${active.length === 1 ? '' : 's'}`}
+      >
+        {active.length === 0 ? (
+          <p className="panel-copy">
+            Register an active contributor before adding a key to their record.
+          </p>
+        ) : (
+          <AddContributorKey
+            token={token}
+            contributors={active}
+            notify={notify}
+            onDone={() => {
+              reloadSummary()
+              reloadKeys()
+            }}
+          />
+        )}
+      </Panel>
+
+      <Panel
+        title="Contributed keys"
+        note={keys.state === 'ok' ? `${count(contributed.length)} keys` : 'Awaits the engine'}
+      >
+        {keys.state !== 'ok' ? (
+          <LoadFailure state={keys} capability="GET /api/v1/admin/providers/keys" />
+        ) : contributed.length === 0 ? (
+          <p className="panel-copy">No key is attributed to a contributor.</p>
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table gem-table">
+              <caption className="visually-hidden">Keys attributed to a contributor</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Key</th>
+                  <th scope="col">Contributor</th>
+                  <th scope="col">Project</th>
+                  <th scope="col">Health</th>
+                  <th scope="col">Requests</th>
+                  <th scope="col">Last success</th>
+                  <th scope="col">Revoked</th>
+                  <th scope="col">
+                    <span className="visually-hidden">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {contributed.map((key) => {
+                  const contributorId = key.contributor_id
+                  return (
+                    <tr key={key.id}>
+                      <td>
+                        <span className="gem-key__label">{key.account_label}</span>
+                        <span className="gem-key__fp mono">{key.key_fingerprint}</span>
+                      </td>
+                      <td>{key.contributor_name ?? '—'}</td>
+                      <td className="mono">{key.project_id}</td>
+                      <td>
+                        <StatusChip tone={HEALTH_TONE[key.health] ?? 'neutral'}>{key.health}</StatusChip>
+                      </td>
+                      <td className="mono">{count(key.requests)}</td>
+                      <td>{stamp(key.last_success_at)}</td>
+                      <td>{stamp(key.revoked_at)}</td>
+                      <td>
+                        {contributorId && !key.revoked_at ? (
+                          <button
+                            type="button"
+                            className="btn btn--outline btn--small"
+                            disabled={!token}
+                            onClick={() => {
+                              const question = `Revoke ${key.account_label}? It stops being scheduled immediately and its stored ciphertext is destroyed.`
+                              if (!window.confirm(question)) return
+                              void act('Revocation', () =>
+                                revokeContributorKey(contributorId, key.id, { token }),
+                              )
+                            }}
+                          >
+                            Revoke
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </div>
+  )
+}
+
+function CapacityCard({ model }: { model: CapacityModel }) {
+  const totals = model.totals
+  const unknown =
+    totals.windows_unknown > 0
+      ? ` · ${count(totals.windows_unknown)} window${totals.windows_unknown === 1 ? '' : 's'} with no known limit`
+      : ''
+  return (
+    <section className="gem-model" aria-label={`Capacity for ${model.model}`}>
+      <div className="gem-model__head">
+        <h3 className="gem-model__name mono">{model.model}</h3>
+        <StatusChip tone={totals.confidence === 'CONFIRMED' ? 'ok' : 'attention'}>
+          {CONFIDENCE_LABEL[totals.confidence]}
+        </StatusChip>
+      </div>
+      <p className="gem-model__reset">
+        {count(totals.requests_per_minute_remaining)} requests/min and{' '}
+        {count(totals.requests_per_day_remaining)} requests/day remaining across{' '}
+        {count(totals.projects)} independent project{totals.projects === 1 ? '' : 's'}
+        {unknown}
+      </p>
+      <ul className="gem-projects">
+        {model.projects.map((project) => (
+          <li key={project.project_id} className="gem-projects__row">
+            <span className="gem-projects__id mono">{project.project_id}</span>
+            <span className="gem-projects__keys">
+              {count(project.contributors)} contributor{project.contributors === 1 ? '' : 's'} ·{' '}
+              {count(project.keys)} key{project.keys === 1 ? '' : 's'} ·{' '}
+              {count(project.requests_per_day_remaining)} requests left today
+            </span>
+            <StatusChip tone={project.confidence === 'CONFIRMED' ? 'ok' : 'attention'}>
+              {CONFIDENCE_LABEL[project.confidence]}
+            </StatusChip>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function ContributorTableRow({
+  row,
+  token,
+  act,
+}: {
+  row: ContributorRow
+  token: string | null
+  act: (label: string, run: () => Promise<ApiResult<unknown>>) => Promise<void>
+}) {
+  const contributor = row.contributor
+  const withdrawQuestion = `Withdraw ${contributor.display_name}? Every key they contributed is revoked and its ciphertext destroyed. This cannot be undone.`
+  return (
+    <tr>
+      <td>
+        <span className="gem-key__label">{contributor.display_name}</span>
+        <span className="gem-key__fp mono">{contributor.id.slice(0, 8)}</span>
+      </td>
+      <td>
+        <StatusChip tone={CONTRIBUTOR_TONE[contributor.status] ?? 'neutral'}>
+          {contributor.status}
+        </StatusChip>
+        {contributor.status_reason ? (
+          <span className="gem-key__cooldown">{contributor.status_reason}</span>
+        ) : null}
+      </td>
+      <td>
+        <span className="mono">{contributor.consent_version}</span>
+        <span className="gem-key__fp">{stamp(contributor.consent_at)}</span>
+      </td>
+      <td className="mono">
+        {count(row.keys_eligible)} / {count(row.keys_total)}
+        {row.keys_revoked ? (
+          <span className="gem-key__cooldown">{count(row.keys_revoked)} revoked</span>
+        ) : null}
+      </td>
+      <td className="mono">{row.projects.length > 0 ? row.projects.join(', ') : '—'}</td>
+      <td className="mono">{count(row.today.requests)}</td>
+      <td className="mono">{count(row.window.requests)}</td>
+      <td>{stamp(row.window.last_success_at)}</td>
+      <td>
+        <div className="gem-actions">
+          {contributor.status === 'ACTIVE' ? (
+            <button
+              type="button"
+              className="btn btn--outline btn--small"
+              disabled={!token}
+              onClick={() =>
+                void act('Suspension', () =>
+                  suspendContributor(contributor.id, 'Withheld by a platform administrator.', {
+                    token,
+                  }),
+                )
+              }
+            >
+              Suspend
+            </button>
+          ) : null}
+          {contributor.status === 'SUSPENDED' ? (
+            <button
+              type="button"
+              className="btn btn--outline btn--small"
+              disabled={!token}
+              onClick={() =>
+                void act('Reinstatement', () => reinstateContributor(contributor.id, { token }))
+              }
+            >
+              Reinstate
+            </button>
+          ) : null}
+          {contributor.status !== 'WITHDRAWN' ? (
+            <button
+              type="button"
+              className="btn btn--outline btn--small"
+              disabled={!token}
+              onClick={() => {
+                if (!window.confirm(withdrawQuestion)) return
+                void act('Withdrawal', () =>
+                  withdrawContributor(contributor.id, 'Withdrawn by a platform administrator.', {
+                    token,
+                  }),
+                )
+              }}
+            >
+              Withdraw
+            </button>
+          ) : null}
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function RegisterContributor({
+  token,
+  notify,
+  onDone,
+}: {
+  token: string | null
+  notify: (message: string | null) => void
+  onDone: () => void
+}) {
+  const [displayName, setDisplayName] = useState('')
+  const [email, setEmail] = useState('')
+  const [consentVersion, setConsentVersion] = useState('')
+  const [reference, setReference] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!token) return
+    setBusy(true)
+    const result = await createContributor(
+      {
+        display_name: displayName.trim(),
+        contact_email: email.trim() || undefined,
+        consent_version: consentVersion.trim(),
+        consent_reference: reference.trim() || undefined,
+      },
+      { token },
+    )
+    setBusy(false)
+    if (result.status === 'ok') {
+      notify(`${result.data.display_name} registered as a contributor.`)
+      setDisplayName('')
+      setEmail('')
+      setConsentVersion('')
+      setReference('')
+      onDone()
+    } else {
+      notify(`Registration failed: ${result.reason}`)
+    }
+  }
+
+  return (
+    <div className="gem-add">
+      <form className="gem-add__form" onSubmit={submit}>
+        <h3 className="gem-add__title">Contributor</h3>
+        <label className="gem-field">
+          <span>Display name</span>
+          <input
+            value={displayName}
+            required
+            maxLength={200}
+            placeholder="who lent the key"
+            onChange={(event) => setDisplayName(event.target.value)}
+          />
+        </label>
+        <label className="gem-field">
+          <span>Contact email</span>
+          <input
+            type="email"
+            value={email}
+            maxLength={320}
+            placeholder="optional"
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </label>
+        <label className="gem-field">
+          <span>Consent version</span>
+          <input
+            value={consentVersion}
+            required
+            maxLength={40}
+            placeholder="2026-11"
+            onChange={(event) => setConsentVersion(event.target.value)}
+          />
+        </label>
+        <label className="gem-field">
+          <span>Consent reference</span>
+          <input
+            value={reference}
+            maxLength={200}
+            placeholder="optional: agreement id or date"
+            onChange={(event) => setReference(event.target.value)}
+          />
+        </label>
+        <button type="submit" className="btn btn--primary" disabled={busy || !token}>
+          {busy ? 'Registering…' : 'Register contributor'}
+        </button>
+        <p className="gem-add__hint">
+          A contribution without a recorded agreement is refused by the engine; the reference is the
+          evidence an operator would cite if the use of a key were ever questioned.
+        </p>
+      </form>
+    </div>
+  )
+}
+
+function AddContributorKey({
+  token,
+  contributors,
+  notify,
+  onDone,
+}: {
+  token: string | null
+  contributors: ContributorRow[]
+  notify: (message: string | null) => void
+  onDone: () => void
+}) {
+  const [contributorId, setContributorId] = useState(contributors[0]?.contributor.id ?? '')
+  const [projectId, setProjectId] = useState('')
+  const [apiKeyValue, setApiKeyValue] = useState('')
+  const [label, setLabel] = useState('')
+  const [tier, setTier] = useState<'FREE' | 'PAID' | 'UNKNOWN'>('UNKNOWN')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!token || !contributorId) return
+    setBusy(true)
+    const result = await addContributorKey(
+      contributorId,
+      {
+        project_id: projectId.trim(),
+        api_key: apiKeyValue.trim(),
+        label: label.trim() || undefined,
+        tier,
+      },
+      { token },
+    )
+    setBusy(false)
+    if (result.status === 'ok') {
+      notify(`Key ${result.data.account_label} registered in ${result.data.project_id}.`)
+      setApiKeyValue('')
+      setProjectId('')
+      setLabel('')
+      onDone()
+    } else {
+      notify(`Registration failed: ${result.reason}`)
+    }
+  }
+
+  return (
+    <div className="gem-add">
+      <form className="gem-add__form" onSubmit={submit}>
+        <h3 className="gem-add__title">Key and its project</h3>
+        <label className="gem-field">
+          <span>Contributor</span>
+          <select value={contributorId} onChange={(event) => setContributorId(event.target.value)}>
+            {contributors.map((row) => (
+              <option key={row.contributor.id} value={row.contributor.id}>
+                {row.contributor.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="gem-field">
+          <span>Google Cloud project</span>
+          <input
+            value={projectId}
+            required
+            maxLength={100}
+            placeholder="their-gcp-project"
+            onChange={(event) => setProjectId(event.target.value)}
+          />
+        </label>
+        <label className="gem-field">
+          <span>API key</span>
+          <input
+            type="password"
+            value={apiKeyValue}
+            required
+            minLength={8}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => setApiKeyValue(event.target.value)}
+          />
+        </label>
+        <label className="gem-field">
+          <span>Label</span>
+          <input
+            value={label}
+            maxLength={120}
+            placeholder="optional"
+            onChange={(event) => setLabel(event.target.value)}
+          />
+        </label>
+        <label className="gem-field">
+          <span>Tier</span>
+          <select value={tier} onChange={(event) => setTier(event.target.value as typeof tier)}>
+            <option value="UNKNOWN">Unverified</option>
+            <option value="FREE">Free</option>
+            <option value="PAID">Paid</option>
+          </select>
+        </label>
+        <button type="submit" className="btn btn--primary" disabled={busy || !token}>
+          {busy ? 'Registering…' : 'Add key'}
+        </button>
+        <p className="gem-add__hint">
+          The key is encrypted before storage and never returned by the API. Two keys in one project
+          still share that project&rsquo;s allowance, so this screen counts projects, not keys.
+        </p>
+      </form>
     </div>
   )
 }

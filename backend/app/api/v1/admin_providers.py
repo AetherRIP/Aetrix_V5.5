@@ -21,7 +21,12 @@ from ...core.errors import AppError, ErrorCode
 from ...core.ids import utcnow
 from ...core.security import Principal
 from ...db.models import ProviderCredential
-from ...db.repositories import AuditRepository, CredentialRepository, UsageRepository
+from ...db.repositories import (
+    AuditRepository,
+    ContributorRepository,
+    CredentialRepository,
+    UsageRepository,
+)
 from ...db.session import get_db_session
 from ...providers.base import LLMProvider
 from ...schemas.provider_admin import (
@@ -66,12 +71,17 @@ def require_fleet_admin(principal: Principal = Depends(get_principal)) -> Princi
     return principal
 
 
-def _key_read(
-    credential: ProviderCredential, stats: dict[str, object] | None
+def key_read(
+    credential: ProviderCredential,
+    stats: dict[str, object] | None,
+    contributor_name: str | None = None,
 ) -> KeyRead:
     stats = stats or {}
     return KeyRead(
         id=credential.id,
+        contributor_id=credential.contributor_id,
+        contributor_name=contributor_name,
+        revoked_at=credential.revoked_at,
         project_id=credential.project_id,
         account_label=credential.account_label,
         key_fingerprint=credential.key_fingerprint,
@@ -155,8 +165,16 @@ def list_keys(
     stats = UsageRepository(session).key_window_stats(
         utcnow() - timedelta(days=30)
     )
+    names = {row.id: row.display_name for row in ContributorRepository(session).list()}
     return KeyPage(
-        items=[_key_read(row, stats.get(row.id)) for row in rows],
+        items=[
+            key_read(
+                row,
+                stats.get(row.id),
+                names.get(row.contributor_id) if row.contributor_id else None,
+            )
+            for row in rows
+        ],
         total=total,
         limit=limit,
         offset=offset,
@@ -194,7 +212,7 @@ def create_key(
             "auth_type": credential.auth_type,
         },
     )
-    return _key_read(credential, None)
+    return key_read(credential, None)
 
 
 @router.post("/keys/import", response_model=list[ImportOutcomeRead])
@@ -267,7 +285,7 @@ def set_key_enabled(
         tenant_id=credential.tenant_id,
         detail={"enabled": payload.enabled, "health": credential.health},
     )
-    return _key_read(credential, None)
+    return key_read(credential, None)
 
 
 @router.delete("/keys/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)

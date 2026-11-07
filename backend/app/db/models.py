@@ -550,6 +550,48 @@ class ReviewDecision(UUIDPrimaryKey, TenantScoped, Base):
     )
 
 
+class ProviderContributor(UUIDPrimaryKey, TimestampMixin, Base):
+    """An independent person who lent API keys to the platform.
+
+    A contributor is not a tenant and not a role: the keys they lend belong to
+    an external Google Cloud account, and the platform's job is to keep the
+    contribution attributable, revocable and consent-bound.  ``user_id`` is the
+    Aetrix account that may act on the contribution (register keys, withdraw
+    them); it is nullable because a contributor can exist before they sign in.
+
+    Status is the single source of truth for eligibility:
+
+    * ``ACTIVE``    — keys may be leased.
+    * ``SUSPENDED`` — keys are disabled but the ciphertext is kept, so the
+      contribution can be reinstated without asking for the secret again.
+    * ``WITHDRAWN`` — the contributor took the keys back.  Ciphertext is
+      destroyed and status never returns to ACTIVE; a new contribution is a new
+      row.
+    """
+
+    __tablename__ = "provider_contributors"
+    __table_args__ = (
+        CheckConstraint("status IN ('ACTIVE','SUSPENDED','WITHDRAWN')", name="status"),
+        UniqueConstraint("user_id", name="uq_provider_contributor_user"),
+        Index("ix_provider_contributor_status", "status"),
+    )
+
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    contact_email: Mapped[str | None] = mapped_column(String(320))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    #: The agreement the contributor accepted, and when.  Consent is a record,
+    #: not a checkbox that disappears with the form.
+    consent_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consent_reference: Mapped[str | None] = mapped_column(String(200))
+    status_reason: Mapped[str | None] = mapped_column(String(300))
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
     """One Gemini API key.
 
@@ -558,6 +600,12 @@ class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
     never derived from the key itself — an operator supplies it, because several
     keys routinely belong to one project and a rotation must not look like a new
     pool.
+
+    ``contributor_id`` is null for a key the platform owns itself; a null is an
+    explicit "platform-provisioned", never an unattributed contribution.  The
+    ownership chain the fleet is built on is
+    contributor -> credential -> Google Cloud project -> model quota, and one
+    contributor may appear in any number of those chains.
     """
 
     __tablename__ = "provider_credentials"
@@ -570,7 +618,16 @@ class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
         UniqueConstraint("key_fingerprint", name="uq_provider_credential_fingerprint"),
         Index("ix_provider_credential_project", "project_id"),
         Index("ix_provider_credential_project_health", "project_id", "health"),
+        Index("ix_provider_credential_contributor", "contributor_id"),
     )
+
+    contributor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("provider_contributors.id", ondelete="SET NULL"), nullable=True
+    )
+    #: Set when a contributor withdraws a key or an administrator revokes it.
+    #: The row is kept because the usage ledger must keep its provenance.
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_reason: Mapped[str | None] = mapped_column(String(300))
 
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
@@ -599,8 +656,10 @@ class ProviderUsage(UUIDPrimaryKey, Base):
 
     ``project_id`` is denormalised so a project's consumption can be aggregated
     without joining every credential, and so history survives a key being
-    deleted.  It is Aetrix's own record; Google's console remains the only
-    authoritative source for what Google billed.
+    deleted.  ``contributor_id`` is denormalised for the same reason: a
+    contribution statistic must survive the key being retired.  It is Aetrix's
+    own record; Google's console remains the only authoritative source for what
+    Google billed.
     """
 
     __tablename__ = "provider_usage"
@@ -609,6 +668,11 @@ class ProviderUsage(UUIDPrimaryKey, Base):
         Index("ix_provider_usage_job", "job_id"),
         Index("ix_provider_usage_project_created", "project_id", "created_at"),
         Index("ix_provider_usage_model_created", "model", "created_at"),
+        Index("ix_provider_usage_contributor_created", "contributor_id", "created_at"),
+    )
+
+    contributor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("provider_contributors.id", ondelete="SET NULL"), nullable=True
     )
 
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
