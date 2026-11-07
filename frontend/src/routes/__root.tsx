@@ -1,5 +1,6 @@
 import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles/app.css?url'
+import hubCss from '../styles/hub.css?url'
 import { THEME_INIT_SCRIPT } from '../lib/theme'
 import { AuthProvider } from '../lib/auth/AuthProvider'
 
@@ -18,6 +19,9 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: 'stylesheet', href: appCss },
+      // The authenticated hub loads after the marketing surface so it can build
+      // on the same tokens without touching the public pages.
+      { rel: 'stylesheet', href: hubCss },
       {
         rel: 'preload',
         href: '/fonts/schibsted-grotesk.woff2',

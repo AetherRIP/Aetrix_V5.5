@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Outlet, createFileRoute, useRouter, useRouterState } from '@tanstack/react-router'
-import { AppShell } from '../components/app/AppShell'
+import { AppShell, HubBoot } from '../components/app/AppShell'
 import { storeNextPath, useAuth } from '../lib/auth/AuthProvider'
 import { Icon } from '../components/ui/Icons'
 
@@ -23,10 +23,12 @@ function pageMeta(pathname: string): PageMeta {
     return { title: 'Submission review', eyebrow: 'Work · submission' }
   }
 
+  // An empty title means the route renders its own `h1`. The dashboard does:
+  // its greeting is the page heading, and a second one would compete with it.
   const table: Record<string, PageMeta> = {
     '/dashboard': {
-      title: 'Dashboard',
-      eyebrow: 'Workspace overview',
+      title: '',
+      eyebrow: 'Hub',
       description:
         'The working view of marking throughput and exceptions for the current workspace.',
     },
@@ -83,6 +85,9 @@ function AppLayout() {
   const { status, authUnavailableReason } = useAuth()
   const router = useRouter()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
+  // Static hosting serves directory URLs with a trailing slash; the metadata
+  // table is keyed without one, so `/dashboard/` must resolve to the same page.
+  const routePath = pathname.replace(/\/+$/, '') || '/'
 
   useEffect(() => {
     if (status !== 'anonymous') return
@@ -106,7 +111,8 @@ function AppLayout() {
   }
 
   if (status === 'loading') {
-    return <SessionGate message="Checking your session" detail="Verifying with Supabase." />
+    // The workspace is about to appear: show its shape and say what is happening.
+    return <HubBoot />
   }
 
   if (status === 'anonymous') {
@@ -115,7 +121,7 @@ function AppLayout() {
     )
   }
 
-  const meta = pageMeta(pathname)
+  const meta = pageMeta(routePath)
 
   return (
     <AppShell title={meta.title} eyebrow={meta.eyebrow} description={meta.description}>

@@ -59,6 +59,11 @@
   --r-xs: 2px;
   --r-sm: 3px;
   --r-md: 6px;
+  /* Hub controls: one step larger than the marketing surface, because the
+     workspace is made of panels and rail rows rather than flat bands. */
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-2xl: 20px;
 
   /* ── primitive: motion ─────────────────────────────────────────────── */
   --dur-fast: 140ms;

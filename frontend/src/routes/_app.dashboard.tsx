@@ -1,94 +1,91 @@
-import { createFileRoute } from '@tanstack/react-router'
+import type { CSSProperties } from 'react'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { StatePanel } from '../components/app/StatePanel'
+import { HubActions } from '../components/hub/HubActions'
+import { HubFeed } from '../components/hub/HubFeed'
+import { HubHealth } from '../components/hub/HubHealth'
+import { HubHero } from '../components/hub/HubHero'
+import { HubSection } from '../components/hub/HubSection'
+import { HubSession } from '../components/hub/HubSession'
+import { HubStats } from '../components/hub/HubStats'
+import { Icon } from '../components/ui/Icons'
 import { displayName, useAuth } from '../lib/auth/AuthProvider'
 import { API_UNAVAILABLE_REASON } from '../lib/env'
-import { formatDateTime } from '../lib/format'
-import { Icon } from '../components/ui/Icons'
 
 export const Route = createFileRoute('/_app/dashboard')({
   component: Dashboard,
 })
 
-const METRICS = [
-  { label: 'Submissions received', unit: 'scripts' },
-  { label: 'Awaiting marking', unit: 'scripts' },
-  { label: 'Needing review', unit: 'scripts' },
-  { label: 'Marked this week', unit: 'scripts' },
+const WORKS = [
+  'Google authentication through Supabase',
+  'Persistent session with automatic refresh',
+  'Protected routes and sign-out',
+  'Theme preference across the application',
 ] as const
 
 function Dashboard() {
-  const { user, session } = useAuth()
+  const { user } = useAuth()
   const name = displayName(user)
+  const firstName = name.split(/\s+/)[0] || name
 
   return (
-    <div className="app-stack">
-      <section className="app-callout" aria-label="Session summary">
-        <div>
-          <p className="app-callout__kicker mono">Signed in</p>
-          <p className="app-callout__title">{name}</p>
-          <p className="app-callout__body">
-            Session verified by Supabase at {formatDateTime(session?.user.last_sign_in_at)}.
-            This is live session data, not a placeholder.
-          </p>
+    <div className="hub-main">
+      <HubHero
+        name={firstName}
+        actions={
+          <>
+            <Link to="/queue" className="btn btn--primary">
+              Open marking queue
+              <Icon name="arrow" size={16} />
+            </Link>
+            <Link to="/workspace" className="btn btn--outline">
+              Workspaces
+            </Link>
+          </>
+        }
+      />
+
+      <HubStats />
+
+      <div className="hub-grid">
+        <div className="hub-col">
+          <HubSession index={2} />
+          <HubActions index={3} />
+
+          <HubSection id="hub-works" title="What already works" index={4}>
+            <ul className="hub-works">
+              {WORKS.map((item) => (
+                <li key={item}>
+                  <Icon name="check" size={14} />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </HubSection>
         </div>
-        <span className="chip app-chip" data-tone="ok">
-          <Icon name="shield" size={13} /> Authenticated
-        </span>
-      </section>
 
-      <section className="metric-grid" aria-label="Workspace metrics">
-        {METRICS.map((metric) => (
-          <article className="metric" key={metric.label}>
-            <p className="metric__label mono">{metric.label}</p>
-            <p className="metric__value" aria-label={`${metric.label}: unavailable`}>
-              —
-            </p>
-            <p className="metric__unit">{metric.unit} · awaits engine</p>
-          </article>
-        ))}
-      </section>
+        <aside className="hub-col hub-col--aside" aria-label="Workspace context">
+          <HubHealth />
+          <HubFeed />
+        </aside>
+      </div>
 
-      <StatePanel
-        tone="wip"
-        title="Live figures need the deployed engine"
-        capability="GET /api/v1/workspaces/{id}/dashboard"
-      >
-        <p>{API_UNAVAILABLE_REASON}</p>
-        <p>
-          The dashboard contract is wired but unpopulated: the metric cards above are
-          deliberately empty rather than filled with invented numbers. As soon as the
-          API answers, this section renders the same cards with real counts.
-        </p>
-      </StatePanel>
-
-      <div className="app-split">
-        <StatePanel tone="wip" title="Marking activity" capability="correction job events">
+      {/* Full width, at the foot of the page: the statement belongs to the
+          screen as a whole, and a half-width panel here would leave the aside
+          hanging beside an empty column. */}
+      <div className="hub-engine" style={{ '--i': 5 } as CSSProperties}>
+        <StatePanel
+          tone="wip"
+          title="Live figures need the deployed engine"
+          capability="GET /api/v1/workspaces/{id}/dashboard"
+        >
+          <p>{API_UNAVAILABLE_REASON}</p>
           <p>
-            Recent job transitions appear here once the correction pipeline is
-            implemented. The pipeline is intentionally unavailable today, so there is
-            no activity to show and none is fabricated.
+            The dashboard contract is wired but unpopulated: the figures above are
+            deliberately empty rather than filled with invented numbers. As soon as the
+            API answers, this section renders the same ledger with real counts.
           </p>
         </StatePanel>
-
-        <section className="app-card" aria-labelledby="next-steps-title">
-          <h2 className="app-card__title" id="next-steps-title">
-            What already works
-          </h2>
-          <ul className="app-list">
-            <li>
-              <Icon name="check" size={15} /> Google authentication through Supabase
-            </li>
-            <li>
-              <Icon name="check" size={15} /> Persistent session with automatic refresh
-            </li>
-            <li>
-              <Icon name="check" size={15} /> Protected routes and sign-out
-            </li>
-            <li>
-              <Icon name="check" size={15} /> Theme preference across the application
-            </li>
-          </ul>
-        </section>
       </div>
     </div>
   )

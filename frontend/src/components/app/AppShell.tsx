@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useRouter } from '@tanstack/react-router'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Link, useRouter, useRouterState } from '@tanstack/react-router'
 import { displayName, initials, useAuth } from '../../lib/auth/AuthProvider'
 import { ThemeSwitch } from '../site/ThemeSwitch'
 import { Brand } from '../ui/Brand'
@@ -27,12 +27,48 @@ const PRIMARY_NAV: NavItem[] = [
 
 const SECONDARY_NAV: NavItem[] = [{ to: '/settings', label: 'Settings', icon: 'lock' }]
 
-function NavLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
+/**
+ * The four destinations that are one tap away on a phone. Everything else lives
+ * in the "More" sheet, so no route is ever further than two taps from anywhere.
+ */
+const TABS: NavItem[] = [
+  { to: '/dashboard', label: 'Dashboard', icon: 'chart' },
+  { to: '/assignments', label: 'Assignments', icon: 'assignment' },
+  { to: '/queue', label: 'Queue', icon: 'pulse' },
+  { to: '/inbox', label: 'Inbox', icon: 'records' },
+]
+
+const SHEET_NAV: NavItem[] = [...PRIMARY_NAV, ...SECONDARY_NAV].filter(
+  (item) => !TABS.some((tab) => tab.to === item.to),
+)
+
+/** Trailing slashes are normal on static hosting, so the comparison strips them. */
+function useActivePath() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname })
+  return pathname.replace(/\/+$/, '') || '/'
+}
+
+function isActive(path: string, item: NavItem) {
+  if (item.to === '/dashboard') return path === '/dashboard'
+  return path === item.to || path.startsWith(`${item.to}/`)
+}
+
+function NavLink({
+  item,
+  path,
+  onNavigate,
+}: {
+  item: NavItem
+  path: string
+  onNavigate?: () => void
+}) {
+  const active = isActive(path, item)
   return (
     <Link
       to={item.to}
       className="app-nav__link"
-      activeProps={{ className: 'app-nav__link is-active', 'aria-current': 'page' }}
+      data-active={active ? '' : undefined}
+      aria-current={active ? 'page' : undefined}
       onClick={onNavigate}
     >
       <Icon name={item.icon} size={17} />
@@ -41,7 +77,38 @@ function NavLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void 
   )
 }
 
-function UserMenu() {
+/**
+ * The active marker is one rule that slides between links rather than a static
+ * inset shadow on each: the rail reads as a single continuous list, and the eye
+ * follows the movement instead of searching for a new highlight.
+ */
+function useNavMarker(path: string) {
+  const nav = useRef<HTMLElement>(null)
+  const [y, setY] = useState<number | null>(null)
+
+  useEffect(() => {
+    const element = nav.current
+    if (!element) return
+
+    const measure = () => {
+      const active = element.querySelector<HTMLElement>('[data-active]')
+      if (!active) {
+        setY(null)
+        return
+      }
+      setY(active.offsetTop + (active.offsetHeight - 18) / 2)
+    }
+
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [path])
+
+  return { nav, y }
+}
+
+function ProfileMenu() {
   const { user, signOut } = useAuth()
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -73,42 +140,35 @@ function UserMenu() {
   const name = displayName(user)
 
   return (
-    <div className="user-menu">
+    <div className="hub-profile">
       <button
         ref={button}
         type="button"
-        className="user-menu__button"
+        className="hub-profile__trigger"
         aria-expanded={open}
-        aria-haspopup="menu"
-        aria-controls="user-menu-panel"
+        aria-controls="hub-profile-menu"
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="user-menu__avatar" aria-hidden="true">
+        <span className="hub-avatar" aria-hidden="true">
           {initials(name) || 'A'}
         </span>
-        <span className="user-menu__name">{name}</span>
-        <Icon name="arrow" size={14} />
+        <span className="hub-profile__id">
+          <span className="hub-profile__name">{name}</span>
+          <span className="hub-profile__email">{user?.email ?? 'No email on session'}</span>
+        </span>
+        <Icon name="chevron" size={14} className="hub-profile__caret" />
       </button>
 
-      <div
-        className="user-menu__panel"
-        id="user-menu-panel"
-        ref={panel}
-        role="menu"
-        hidden={!open}
-      >
-        <div className="user-menu__identity">
-          <p className="user-menu__identity-name">{name}</p>
-          <p className="user-menu__identity-email mono">{user?.email ?? 'No email on session'}</p>
-        </div>
-        <p className="user-menu__note">
-          Roles and workspace membership are read from the engine, which is not deployed yet.
-          The interface never infers a role from the browser session.
+      <div className="hub-profile__menu" id="hub-profile-menu" ref={panel} hidden={!open}>
+        <p className="hub-profile__label mono">Signed in</p>
+        <p className="hub-profile__account mono">{user?.email ?? 'No email on session'}</p>
+        <p className="hub-profile__note">
+          Roles and workspace membership are read from the engine, which is not deployed
+          yet. The interface never infers a role from the browser session.
         </p>
         <button
           type="button"
-          role="menuitem"
-          className="user-menu__signout"
+          className="hub-profile__signout"
           onClick={() => {
             void (async () => {
               await signOut()
@@ -117,6 +177,7 @@ function UserMenu() {
             })()
           }}
         >
+          <Icon name="logout" size={15} />
           Sign out
         </button>
       </div>
@@ -124,9 +185,110 @@ function UserMenu() {
   )
 }
 
+function AccountSheet({
+  open,
+  onClose,
+  path,
+}: {
+  open: boolean
+  onClose: () => void
+  path: string
+}) {
+  const { user, signOut } = useAuth()
+  const router = useRouter()
+  const panel = useRef<HTMLDivElement>(null)
+  const name = displayName(user)
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (panel.current?.contains(target)) return
+      if ((target as HTMLElement).closest?.('.hub-tab--more')) return
+      onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [open, onClose])
+
+  return (
+    <div className="hub-sheet" id="hub-sheet" ref={panel} hidden={!open}>
+      <div className="hub-sheet__identity">
+        <span className="hub-avatar" aria-hidden="true">
+          {initials(name) || 'A'}
+        </span>
+        <span>
+          <span className="hub-sheet__name">{name}</span>
+          <span className="hub-sheet__email mono">{user?.email ?? 'No email on session'}</span>
+        </span>
+      </div>
+
+      <nav className="hub-sheet__nav" aria-label="More sections">
+        {SHEET_NAV.map((item) => (
+          <Link
+            key={item.to}
+            to={item.to}
+            className="hub-sheet__link"
+            data-active={isActive(path, item) ? '' : undefined}
+            aria-current={isActive(path, item) ? 'page' : undefined}
+            onClick={onClose}
+          >
+            <Icon name={item.icon} size={16} />
+            <span>{item.label}</span>
+          </Link>
+        ))}
+        <Link to="/" className="hub-sheet__link" onClick={onClose}>
+          <Icon name="arrow" size={16} />
+          <span>Marketing site</span>
+        </Link>
+      </nav>
+
+      <div className="hub-sheet__row">
+        <span>Appearance</span>
+        <ThemeSwitch />
+      </div>
+
+      <button
+        type="button"
+        className="hub-sheet__signout"
+        onClick={() => {
+          void (async () => {
+            await signOut()
+            onClose()
+            await router.navigate({ to: '/sign-in', replace: true })
+          })()
+        }}
+      >
+        <Icon name="logout" size={16} />
+        Sign out
+      </button>
+
+      <p className="hub-sheet__note">
+        Roles and workspace membership come from the engine, which is not deployed yet.
+      </p>
+    </div>
+  )
+}
+
 /**
- * The authenticated application frame. Marketing pages do not use it; this is
- * the chrome for every signed-in screen.
+ * The authenticated application frame.
+ *
+ * Marketing pages do not use it. This is the chrome for every signed-in screen:
+ * a rail with the workspace and account always visible on a wide screen, and a
+ * bottom tab bar with an account sheet on a phone.
+ *
+ * A route supplies the page heading through `title`. The dashboard passes an
+ * empty title because its greeting is the page's own `h1`.
  */
 export function AppShell({
   title,
@@ -141,117 +303,164 @@ export function AppShell({
   actions?: ReactNode
   children: ReactNode
 }) {
-  const [navOpen, setNavOpen] = useState(false)
-  const toggle = useRef<HTMLButtonElement>(null)
+  const path = useActivePath()
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const { user } = useAuth()
+  const { nav, y } = useNavMarker(path)
+  const name = displayName(user)
 
-  const closeNav = useCallback((restoreFocus = true) => {
-    setNavOpen(false)
-    if (restoreFocus) toggle.current?.focus()
-  }, [])
-
+  // A navigation is a complete answer to the sheet, so it closes with the route.
   useEffect(() => {
-    if (!navOpen) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        closeNav()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [navOpen, closeNav])
+    setSheetOpen(false)
+  }, [path])
 
   return (
-    <div className="app" data-nav-open={navOpen}>
+    <div className="app">
       <a className="skip-link" href="#app-content">
         Skip to content
       </a>
 
       <aside className="app-sidebar" id="app-sidebar">
-        <div className="app-sidebar__head">
-          <Link to="/dashboard" className="brand-link" aria-label="Aetrix dashboard">
-            <Brand size={26} />
-          </Link>
-          <button
-            type="button"
-            className="app-sidebar__close"
-            onClick={() => closeNav()}
-            aria-label="Close navigation"
-          >
-            <Icon name="close" size={18} />
-          </button>
-        </div>
+        <Link to="/dashboard" className="hub-rail__brand" aria-label="Aetrix dashboard">
+          <Brand size={26} />
+        </Link>
 
-        <div className="workspace-switch" aria-label="Workspace">
-          <p className="workspace-switch__label mono">Workspace</p>
-          <button type="button" className="workspace-switch__control" disabled>
-            <span className="workspace-switch__name">Not connected</span>
-            <span className="chip app-chip" data-tone="attention">
+        <div className="hub-workspace" aria-label="Workspace">
+          <p className="hub-workspace__label mono">Workspace</p>
+          <p className="hub-workspace__row">
+            <span className="hub-workspace__name">Not connected</span>
+            <span className="hub-chip" data-tone="wip">
               WIP
             </span>
-          </button>
-          <p className="workspace-switch__note">
-            Workspace membership comes from the engine API, which has no public deployment yet.
+          </p>
+          <p className="hub-workspace__note">
+            Membership comes from the engine API, which has no public deployment yet.
           </p>
         </div>
 
-        <nav className="app-nav" aria-label="Application">
+        <nav className="app-nav" aria-label="Application" ref={nav}>
+          {y !== null ? (
+            <span className="app-nav__marker" style={{ transform: `translateY(${y}px)` }} aria-hidden="true" />
+          ) : null}
+
           {PRIMARY_NAV.map((item) => (
-            <NavLink key={item.to} item={item} onNavigate={() => closeNav(false)} />
+            <NavLink key={item.to} item={item} path={path} />
           ))}
+
           <p className="app-nav__group mono">Account</p>
           {SECONDARY_NAV.map((item) => (
-            <NavLink key={item.to} item={item} onNavigate={() => closeNav(false)} />
+            <NavLink key={item.to} item={item} path={path} />
           ))}
         </nav>
 
         <div className="app-sidebar__foot">
-          <p className="app-sidebar__note mono">Aetrix V5.5 · pre-release</p>
-          <Link to="/" className="app-sidebar__marketing">
-            Marketing site
+          <Link to="/" className="hub-rail__site">
             <Icon name="arrow" size={14} />
+            <span>Marketing site</span>
           </Link>
+          <ProfileMenu />
         </div>
       </aside>
 
-      {navOpen ? (
-        <button
-          type="button"
-          className="app-scrim"
-          aria-label="Close navigation"
-          onClick={() => closeNav()}
-        />
-      ) : null}
-
       <div className="app-main">
+        <span className="app-ambient" aria-hidden="true" />
+
         <header className="app-topbar">
-          <button
-            ref={toggle}
-            type="button"
-            className="app-topbar__toggle"
-            aria-expanded={navOpen}
-            aria-controls="app-sidebar"
-            aria-label={navOpen ? 'Close navigation' : 'Open navigation'}
-            onClick={() => setNavOpen((value) => !value)}
-          >
-            <Icon name={navOpen ? 'close' : 'menu'} size={20} />
-          </button>
+          <Link to="/dashboard" className="app-topbar__brand" aria-label="Aetrix dashboard">
+            <Brand size={22} />
+          </Link>
 
           <p className="app-topbar__crumb mono">{eyebrow}</p>
 
           <div className="app-topbar__actions">
-            <ThemeSwitch />
-            <UserMenu />
+            <span className="app-topbar__theme">
+              <ThemeSwitch />
+            </span>
+            <button
+              type="button"
+              className="app-topbar__avatar"
+              aria-expanded={sheetOpen}
+              aria-controls="hub-sheet"
+              aria-label={sheetOpen ? 'Close account menu' : 'Open account menu'}
+              onClick={() => setSheetOpen((value) => !value)}
+            >
+              <span className="hub-avatar" aria-hidden="true">
+                {initials(name) || 'A'}
+              </span>
+            </button>
           </div>
         </header>
 
         <main className="app-content" id="app-content" tabIndex={-1}>
-          <div className="app-page-head">
-            <h1 className="app-page-head__title">{title}</h1>
-            {description ? <p className="app-page-head__lede">{description}</p> : null}
-            {actions ? <div className="app-page-head__actions">{actions}</div> : null}
+          <div className="hub-page" key={path}>
+            {title ? (
+              <div className="app-page-head">
+                <div className="app-page-head__copy">
+                  <h1 className="app-page-head__title">{title}</h1>
+                  {description ? <p className="app-page-head__lede">{description}</p> : null}
+                </div>
+                {actions ? <div className="app-page-head__actions">{actions}</div> : null}
+              </div>
+            ) : null}
+            {children}
           </div>
-          {children}
+        </main>
+
+        <nav className="hub-tabs" aria-label="Workspace sections">
+          {TABS.map((item) => {
+            const active = isActive(path, item)
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                className="hub-tab"
+                data-active={active ? '' : undefined}
+                aria-current={active ? 'page' : undefined}
+              >
+                <Icon name={item.icon} size={19} />
+                <span>{item.label}</span>
+              </Link>
+            )
+          })}
+          <button
+            type="button"
+            className="hub-tab hub-tab--more"
+            aria-expanded={sheetOpen}
+            aria-controls="hub-sheet"
+            onClick={() => setSheetOpen((value) => !value)}
+          >
+            <Icon name="menu" size={19} />
+            <span>More</span>
+          </button>
+        </nav>
+
+        <AccountSheet open={sheetOpen} onClose={() => setSheetOpen(false)} path={path} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The real loading state while the client reads the stored session. It shows the
+ * shape of the workspace that is about to appear, and says what is happening.
+ */
+export function HubBoot() {
+  return (
+    <div className="app app--boot" aria-busy="true" aria-live="polite">
+      <div className="app-sidebar app-sidebar--skeleton" aria-hidden="true">
+        <div className="hub-skel hub-skel--brand" />
+        <div className="hub-skel hub-skel--nav" />
+        <div className="hub-skel hub-skel--nav" />
+        <div className="hub-skel hub-skel--nav" />
+      </div>
+      <div className="app-main">
+        <main className="app-content">
+          <div className="hub-boot">
+            <p className="hub-boot__date mono">Checking your session</p>
+            <div className="hub-skel hub-skel--title" />
+            <div className="hub-skel hub-skel--line" />
+            <p className="hub-boot__note">Verifying with Supabase.</p>
+          </div>
         </main>
       </div>
     </div>
