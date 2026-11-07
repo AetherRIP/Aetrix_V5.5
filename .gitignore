@@ -58,3 +58,8 @@ benchmark/*.log
 
 # Keep the checked-in template while ignoring real local configuration
 !backend/.env.example
+
+# Local run artefacts from START_BACKEND.bat / STOP_BACKEND.bat
+backend/.aetrix-backend.pid
+backend/.aetrix-backend.log
+backend/.aetrix-backend.log.err

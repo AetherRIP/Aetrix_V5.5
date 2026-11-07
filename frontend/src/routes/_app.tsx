@@ -114,6 +114,12 @@ function pageMeta(pathname: string): PageMeta {
       eyebrow: 'Platform',
       description: 'Append-only record of privileged actions across the platform.',
     },
+    '/platform/gemini': {
+      title: 'Gemini fleet',
+      eyebrow: 'Platform · providers',
+      description:
+        'Keys grouped by Google Cloud project, the quota each project shares, and the usage Aetrix recorded.',
+    },
     '/platform/integrations': {
       title: 'AI providers',
       eyebrow: 'Platform',

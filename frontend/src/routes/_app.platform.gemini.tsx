@@ -142,7 +142,7 @@ function PlatformGemini() {
     <div className="app-stack">
       <section className="app-card gem-head" aria-label="Gemini fleet">
         <div className="app-card__head">
-          <h1 className="app-card__title">Gemini fleet</h1>
+          <h2 className="app-card__title">Gemini fleet</h2>
           <span className="app-card__note mono">
             {overview.state === 'ok' ? `observed ${stamp(overview.data.observed_at)}` : 'engine'}
           </span>

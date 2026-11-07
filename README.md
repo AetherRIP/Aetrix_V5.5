@@ -69,6 +69,19 @@ Run the API with `python -m uvicorn app.main:app --port 8000` from `backend/`, o
 installed `aetrix-api` entry point. Run the worker separately with `aetrix-worker`.
 The worker currently parks correction jobs with `PIPELINE_UNAVAILABLE`; that is deliberate.
 
+On Windows, the two scripts at the repository root wrap that command:
+
+```bat
+START_BACKEND.bat   :: starts uvicorn on http://127.0.0.1:8000 if it is not already up
+STOP_BACKEND.bat    :: stops only the process the start script began
+```
+
+`START_BACKEND.bat` reads `backend\.env`, refuses to run without it, binds the loopback
+interface only, and reports `/health` and `/ready`. `/ready` returning 503 means the API is up
+but the database in `backend\.env` is not reachable. Both scripts keep a PID file under
+`backend\`; stopping verifies the process command line (`uvicorn app.main:app` on port 8000)
+before ending it, so unrelated Python services are untouched.
+
 ### Frontend
 
 ```bash
