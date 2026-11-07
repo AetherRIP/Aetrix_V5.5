@@ -185,6 +185,7 @@ export type AppPath =
   | '/platform/users'
   | '/platform/health'
   | '/platform/audit'
+  | '/platform/gemini'
   | '/platform/integrations'
   | '/platform/settings'
   | '/assistant'
@@ -278,6 +279,7 @@ const PLATFORM_NAV: RoleNav = {
   ],
   groupLabel: 'Platform',
   secondary: [
+    { to: '/platform/gemini', label: 'Gemini fleet', icon: 'blueprint' },
     { to: '/platform/integrations', label: 'AI providers', icon: 'blueprint' },
     { to: '/platform/settings', label: 'Settings', icon: 'lock' },
   ],

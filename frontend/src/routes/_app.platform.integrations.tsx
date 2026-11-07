@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { StatePanel } from '../components/app/StatePanel'
 import { CapabilityList, Panel } from '../components/app/PageBlocks'
 
@@ -7,8 +7,9 @@ export const Route = createFileRoute('/_app/platform/integrations')({
 })
 
 /**
- * The reserved slot for provider work. Quota monitoring is explicitly *not*
- * implemented, so the screen states the gap instead of drawing an empty chart.
+ * The provider screen. Fleet quota monitoring now has a home of its own at
+ * `/platform/gemini`; until the engine is hosted neither screen has figures, and
+ * both say so instead of drawing an empty chart.
  */
 function PlatformIntegrations() {
   return (
@@ -30,7 +31,8 @@ function PlatformIntegrations() {
             },
             {
               label: 'Quota and usage monitoring',
-              detail: 'Not implemented. This page reserves the navigation slot for it.',
+              detail:
+                'Engine endpoints and the fleet screen exist; no deployment answers them yet.',
               state: 'pending',
               icon: 'chart',
             },
@@ -44,17 +46,16 @@ function PlatformIntegrations() {
         />
       </Panel>
 
-      <Panel title="Gemini usage" note="Reserved">
+      <Panel title="Gemini usage" note="Platform operators">
         <p className="panel-copy">
-          Usage and quota monitoring will live here: request counts, tokens consumed and
-          remaining allowance per workspace. The engine already records append-only{' '}
-          <code>provider_usage</code> rows, but no aggregation endpoint exists and no quota
-          figures should be inferred from the interface.
+          Request counts, tokens consumed and the estimated remaining allowance are managed per
+          Google Cloud project on the Gemini fleet screen. Quota is never counted per key: keys in
+          one project share one allowance. Every figure there is labelled confirmed, estimated or
+          unknown, and nothing is inferred when no limit is known.
         </p>
-        <div className="reserved-slot" aria-hidden="true">
-          <span className="reserved-slot__label mono">Quota monitor</span>
-          <span className="reserved-slot__note">Reserved for a later release</span>
-        </div>
+        <Link to="/platform/gemini" className="btn btn--outline">
+          Open the Gemini fleet
+        </Link>
       </Panel>
 
       <StatePanel

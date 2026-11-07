@@ -348,6 +348,24 @@ class BlueprintOverride(UUIDPrimaryKey, TenantScoped, Base):
     )
 
 
+class ProviderProjectCooldown(Base):
+    """A platform-level pause on one Google Cloud project.
+
+    Shared free-tier quota is exhausted for the *project*, so every key under it
+    has to stand down together.  A key-level cooldown would let the next key in
+    rotation walk straight into the same 429.
+    """
+
+    __tablename__ = "provider_project_cooldowns"
+
+    project_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(300), nullable=False)
+    cooldown_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class ProviderQuotaReservation(UUIDPrimaryKey, TenantScoped, Base):
     __tablename__ = "provider_quota_reservations"
     __table_args__ = (
@@ -533,17 +551,35 @@ class ReviewDecision(UUIDPrimaryKey, TenantScoped, Base):
 
 
 class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
+    """One Gemini API key.
+
+    ``project_id`` is the Google Cloud project the key bills against, and it is
+    the unit of quota: keys sharing a project share one rate-limit pool.  It is
+    never derived from the key itself — an operator supplies it, because several
+    keys routinely belong to one project and a rotation must not look like a new
+    pool.
+    """
+
     __tablename__ = "provider_credentials"
     __table_args__ = (
         CheckConstraint(
             "health IN ('HEALTHY','COOLDOWN','INVALID','DISABLED','UNKNOWN')", name="health"
         ),
+        CheckConstraint("tier IN ('FREE','PAID','UNKNOWN')", name="tier"),
+        CheckConstraint("auth_type IN ('api_key','oauth')", name="auth_type"),
         UniqueConstraint("key_fingerprint", name="uq_provider_credential_fingerprint"),
+        Index("ix_provider_credential_project", "project_id"),
+        Index("ix_provider_credential_project_health", "project_id", "health"),
     )
 
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    #: Google Cloud project id (or a synthetic pool id for legacy keys).
+    project_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    auth_type: Mapped[str] = mapped_column(String(20), nullable=False, default="api_key")
+    #: FREE / PAID / UNKNOWN.  UNKNOWN is never upgraded by guessing.
+    tier: Mapped[str] = mapped_column(String(20), nullable=False, default="UNKNOWN")
     account_label: Mapped[str] = mapped_column(String(120), nullable=False)
     key_fingerprint: Mapped[str] = mapped_column(String(32), nullable=False)
     encrypted_secret: Mapped[str] = mapped_column(Text, nullable=False)
@@ -552,14 +588,27 @@ class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
     health: Mapped[str] = mapped_column(String(20), nullable=False, default="UNKNOWN")
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_status: Mapped[int | None] = mapped_column(Integer)
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(String(400))
 
 
 class ProviderUsage(UUIDPrimaryKey, Base):
+    """The append-only ledger of Aetrix-recorded provider calls.
+
+    ``project_id`` is denormalised so a project's consumption can be aggregated
+    without joining every credential, and so history survives a key being
+    deleted.  It is Aetrix's own record; Google's console remains the only
+    authoritative source for what Google billed.
+    """
+
     __tablename__ = "provider_usage"
     __table_args__ = (
         Index("ix_provider_usage_tenant_created", "tenant_id", "created_at"),
         Index("ix_provider_usage_job", "job_id"),
+        Index("ix_provider_usage_project_created", "project_id", "created_at"),
+        Index("ix_provider_usage_model_created", "model", "created_at"),
     )
 
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -571,9 +620,11 @@ class ProviderUsage(UUIDPrimaryKey, Base):
     job_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("correction_jobs.id", ondelete="SET NULL"), nullable=True
     )
+    project_id: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     provider: Mapped[str] = mapped_column(String(40), nullable=False, default="google")
     model: Mapped[str] = mapped_column(String(120), nullable=False)
     purpose: Mapped[str] = mapped_column(String(40), nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     prompt_version_id: Mapped[uuid.UUID | None] = mapped_column(

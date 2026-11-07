@@ -122,12 +122,40 @@ class ProviderSettings(BaseModel):
     )
 
 
+class ModelQuota(BaseModel):
+    """The limits an operator attributes to one model on one project.
+
+    ``source`` is what makes an estimate honest: ``"google"`` means the numbers
+    were read from an authoritative Google surface and may be reported as
+    CONFIRMED; anything else is an operator-entered policy and can only ever be
+    ESTIMATED.  No default here is presented as a Google-confirmed limit.
+    """
+
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    tokens_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_day: int | None = Field(default=None, ge=1)
+    source: str = Field(default="operator", pattern="^(operator|google)$")
+
+
 class QuotaSettings(BaseModel):
+    #: Platform defaults applied to a model with no explicit entry in
+    #: ``model_limits``.  They are Aetrix policy, never a Google figure.
     requests_per_minute: int = Field(default=10, ge=1)
     requests_per_day: int = Field(default=200, ge=1)
     review_budget_share: float = Field(default=0.25, ge=0.0, le=1.0)
     cooldown_seconds: int = Field(default=60, ge=1, le=3600)
     reservation_ttl_seconds: int = Field(default=300, ge=30, le=1800)
+    #: Tokens-per-minute policy, per project and model.  ``None`` means unknown:
+    #: the estimate reports UNKNOWN rather than dividing by a made-up number.
+    tokens_per_minute: int | None = Field(default=None, ge=1)
+    model_limits: dict[str, ModelQuota] = Field(default_factory=dict)
+    #: Gemini's daily free-tier window resets at midnight Pacific time.
+    daily_reset_timezone: str = "America/Los_Angeles"
+    #: Usage above this share of a limit raises an "approaching quota" alert.
+    alert_threshold: float = Field(default=0.8, ge=0.1, le=1.0)
+    #: How often the background monitor samples project health.  It never
+    #: validates the whole fleet inline with a correction request.
+    monitoring_interval_seconds: int = Field(default=300, ge=30, le=3600)
 
 
 class MarkingSettings(BaseModel):

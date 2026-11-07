@@ -59,6 +59,8 @@ class CredentialLease:
     reservation_id: uuid.UUID
     api_key: SecretStr
     health: str
+    #: The Google Cloud project the key bills against: the unit of quota.
+    project_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,14 +86,37 @@ class CredentialPool:
             )
         self._box = SecretBox(settings.security.encryption_key.get_secret_value())
 
-    def _within_quota(self, credential_id: uuid.UUID) -> bool:
+    def _within_quota(self, project_id: str, model: str) -> bool:
+        """Count against the project, never against the key alone.
+
+        Ten keys in one Google Cloud project share one free-tier allowance.  If
+        this counted per credential, rotation would multiply the real limit and
+        the fleet would answer 429s all day while believing it had capacity.
+        """
+
         now = utcnow()
-        minute = self.reservations.count_since(credential_id, now - timedelta(minutes=1), now)
-        day = self.reservations.count_since(credential_id, now - timedelta(days=1), now)
-        return (
-            minute < self.settings.quota.requests_per_minute
-            and day < self.settings.quota.requests_per_day
+        limits = self.settings.quota.model_limits.get(model)
+        per_minute = (
+            limits.requests_per_minute
+            if limits and limits.requests_per_minute is not None
+            else self.settings.quota.requests_per_minute
         )
+        per_day = (
+            limits.requests_per_day
+            if limits and limits.requests_per_day is not None
+            else self.settings.quota.requests_per_day
+        )
+        minute = self.reservations.count_since_project(
+            project_id, now - timedelta(minutes=1), now
+        )
+        day = self.reservations.count_since_project(
+            project_id, now - timedelta(days=1), now
+        )
+        return minute < per_minute and day < per_day
+
+    def _project_in_cooldown(self, project_id: str) -> bool:
+        cooldown = self.reservations.project_cooldown(project_id)
+        return cooldown is not None and cooldown.cooldown_until > utcnow()
 
     def acquire(
         self,
@@ -103,8 +128,16 @@ class CredentialPool:
     ) -> CredentialLease:
         excluded = excluded or set()
         candidates = self.credentials.claim_candidates(tenant_id, model, excluded)
+        cooling_projects: set[str] = set()
         for credential in candidates:
-            if not self._within_quota(credential.id):
+            project_id = credential.project_id
+            if project_id in cooling_projects:
+                continue
+            if self._project_in_cooldown(project_id):
+                cooling_projects.add(project_id)
+                continue
+            if not self._within_quota(project_id, model):
+                cooling_projects.add(project_id)
                 continue
             api_key = SecretStr(self._box.decrypt(credential.encrypted_secret))
             reservation = self.reservations.reserve(
@@ -122,10 +155,11 @@ class CredentialPool:
                 reservation_id=reservation.id,
                 api_key=api_key,
                 health=credential.health,
+                project_id=project_id,
             )
         raise AppError(
             ErrorCode.PROVIDER_UNAVAILABLE,
-            "No provider credential is available within its quota.",
+            "No provider credential is available within its project's quota.",
             details={"model": model},
         )
 
@@ -140,22 +174,38 @@ class CredentialPool:
     ) -> None:
         credential = self.session.get(ProviderCredential, lease.credential_id)
         reservation = self.session.get(ProviderQuotaReservation, lease.reservation_id)
+        now = utcnow()
         if reservation is not None:
             reservation.status = status
         if credential is not None:
             credential.health = health
             credential.last_error = error[:400] if error else None
             if health == "HEALTHY":
-                credential.last_success_at = utcnow()
+                credential.last_success_at = now
                 credential.cooldown_until = None
-            elif health == "COOLDOWN":
-                credential.cooldown_until = utcnow() + timedelta(
-                    seconds=cooldown_seconds or self.settings.quota.cooldown_seconds
-                )
+            else:
+                credential.last_failure_at = now
+                if health == "COOLDOWN":
+                    credential.cooldown_until = now + timedelta(
+                        seconds=cooldown_seconds or self.settings.quota.cooldown_seconds
+                    )
         self.session.commit()
 
     def success(self, lease: CredentialLease) -> None:
+        # A successful call proves the project is usable again, so a stale
+        # project-wide pause is lifted rather than left to expire.
+        self.reservations.clear_project_cooldown(lease.project_id)
         self._finish(lease, status="CONSUMED", health="HEALTHY")
+
+    def project_cooldown(self, lease: CredentialLease, seconds: int, reason: str) -> None:
+        """Pause every key in the project: the 429 is shared, not personal."""
+
+        self.reservations.set_project_cooldown(
+            project_id=lease.project_id,
+            reason=reason,
+            cooldown_until=utcnow() + timedelta(seconds=seconds),
+        )
+        self.session.commit()
 
     def failure(
         self,
@@ -211,12 +261,15 @@ class ProviderCallService:
         latency_ms: int | None,
         http_status: int | None,
         error_class: str | None,
+        retry_count: int = 0,
     ) -> tuple[uuid.UUID, Decimal | None]:
         cost = estimate_cost(rate_for(self.settings, model), usage) if success else None
         row = self.usage.record(
             tenant_id=tenant_id,
             credential_id=lease.credential_id if lease else None,
             job_id=job_id,
+            project_id=lease.project_id if lease else "unattributed",
+            retry_count=retry_count,
             provider=self.provider.name,
             model=model,
             purpose=purpose,
@@ -292,17 +345,27 @@ class ProviderCallService:
                 is_transient = isinstance(error, ProviderTransientError)
                 if is_auth or is_quota:
                     excluded.add(lease.credential_id)
+                cooldown_seconds = (
+                    int(error.retry_after_seconds)
+                    if is_quota and error.retry_after_seconds
+                    else None
+                )
                 self.pool.failure(
                     lease,
                     health="INVALID" if is_auth else ("COOLDOWN" if is_quota else "UNKNOWN"),
                     error=f"{type(error).__name__}: {error}",
                     count_toward_quota=not is_auth,
-                    cooldown_seconds=(
-                        int(error.retry_after_seconds)
-                        if is_quota and error.retry_after_seconds
-                        else None
-                    ),
+                    cooldown_seconds=cooldown_seconds,
                 )
+                if is_quota:
+                    # Free-tier quota is shared by the project, so one 429 pauses
+                    # every key under it; rotating to a sibling key would only
+                    # produce another 429.
+                    self.pool.project_cooldown(
+                        lease,
+                        seconds=cooldown_seconds or self.settings.quota.cooldown_seconds,
+                        reason=f"Project quota exhausted: {error}",
+                    )
                 self._record(
                     tenant_id=tenant_id,
                     lease=lease,
@@ -316,6 +379,7 @@ class ProviderCallService:
                     latency_ms=None,
                     http_status=error.status_code,
                     error_class=type(error).__name__,
+                    retry_count=attempt,
                 )
                 self.session.commit()
                 if is_auth or is_quota or is_transient:
@@ -346,6 +410,7 @@ class ProviderCallService:
                     latency_ms=response.latency_ms,
                     http_status=200,
                     error_class=None,
+                    retry_count=attempt,
                 )
                 self.pool.success(lease)
                 return ProviderCallResult(

@@ -84,6 +84,7 @@ test.describe('platform administrator', () => {
     await expect(nav.getByRole('link', { name: 'Accounts' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'System health' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Audit log' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Gemini fleet' })).toBeVisible()
 
     // Academic destinations are not in an operator's rail at all.
     await expect(nav.getByRole('link', { name: 'Marking queue' })).toHaveCount(0)
@@ -95,14 +96,27 @@ test.describe('platform administrator', () => {
     await expect(page).toHaveURL(/\/platform\/?$/, { timeout: 20_000 })
   })
 
-  test('keeps the Gemini quota slot as an explicit placeholder', async ({ context }) => {
+  test('routes the Gemini quota slot to the fleet screen', async ({ context }) => {
     const page = await open(context, '/platform/integrations', { role: 'platform_operator' })
 
     await expect(page.getByRole('heading', { level: 1, name: 'AI providers' })).toBeVisible()
-    await expect(page.locator('.reserved-slot')).toContainText('Quota monitor')
-    await expect(page.locator('.reserved-slot')).toContainText('Reserved for a later release')
-    // The screen says the integration is absent instead of showing a figure.
     await expect(page.getByRole('main')).toContainText('Gemini')
+
+    await page.getByRole('link', { name: 'Open the Gemini fleet' }).click()
+    await expect(page).toHaveURL(/\/platform\/gemini\/?$/)
+    await expect(page.getByRole('heading', { level: 1, name: 'Gemini fleet' })).toBeVisible()
+  })
+
+  test('states the fleet data gap rather than showing figures', async ({ context }) => {
+    const page = await open(context, '/platform/gemini', { role: 'platform_operator' })
+
+    // No engine deployment: the screen names that, and renders no quota figure.
+    await expect(page.getByText('no public HTTPS deployment yet').first()).toBeVisible()
+    for (const label of ['API keys', 'Projects', 'Usage', 'Alerts']) {
+      await page.getByRole('tab', { name: label }).click()
+      await expect(page.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')
+      await expect(page.locator('.gem-panel')).toBeVisible()
+    }
   })
 })
 
@@ -191,6 +205,7 @@ const ROUTE_CONTENT: { role: Role; path: string; card: string }[] = [
   { role: 'platform_operator', path: '/platform/health', card: 'Service state' },
   { role: 'platform_operator', path: '/platform/audit', card: 'What is recorded' },
   { role: 'platform_operator', path: '/platform/integrations', card: 'Gemini usage' },
+  { role: 'platform_operator', path: '/platform/gemini', card: 'Gemini fleet' },
   { role: 'platform_operator', path: '/platform/settings', card: 'Platform defaults' },
   { role: 'supervisor', path: '/students', card: 'Classes' },
   { role: 'supervisor', path: '/gradebook', card: 'Marks' },

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from . import corrections, documents, exams, usage
+from . import admin_providers, corrections, documents, exams, usage
 
 router = APIRouter()
+router.include_router(admin_providers.router)
 router.include_router(corrections.router)
 router.include_router(documents.router)
 router.include_router(exams.router)

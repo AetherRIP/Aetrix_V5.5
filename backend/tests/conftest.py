@@ -194,6 +194,7 @@ def provider_credential(identity, db_session) -> ProviderCredential:
     box = SecretBox(get_settings().security.encryption_key.get_secret_value())
     credential = ProviderCredential(
         tenant_id=identity.tenant_a.id,
+        project_id="fixture-project",
         account_label="fixture-key",
         key_fingerprint=fingerprint("fixture-provider-key"),
         encrypted_secret=box.encrypt("fixture-provider-key"),

@@ -34,6 +34,7 @@ from .models import (
     PageQuestionMapping,
     PromptVersion,
     ProviderCredential,
+    ProviderProjectCooldown,
     ProviderQuotaReservation,
     ProviderUsage,
     Submission,
@@ -937,22 +938,108 @@ class CredentialRepository:
         self,
         *,
         tenant_id: uuid.UUID | None,
+        project_id: str,
         account_label: str,
         key_fingerprint: str,
         encrypted_secret: str,
         model_access: list[str],
+        auth_type: str = "api_key",
+        tier: str = "UNKNOWN",
+        health: str = "UNKNOWN",
     ) -> ProviderCredential:
         credential = ProviderCredential(
             tenant_id=tenant_id,
+            project_id=project_id,
             account_label=account_label,
             key_fingerprint=key_fingerprint,
             encrypted_secret=encrypted_secret,
             model_access=model_access,
-            health="HEALTHY",
+            auth_type=auth_type,
+            tier=tier,
+            health=health,
         )
         self.session.add(credential)
         self.session.flush()
         return credential
+
+    def get_by_fingerprint(self, key_fingerprint: str) -> ProviderCredential | None:
+        return self.session.scalar(
+            select(ProviderCredential).where(
+                ProviderCredential.key_fingerprint == key_fingerprint
+            )
+        )
+
+    def fleet(
+        self,
+        *,
+        project_id: str | None = None,
+        health: str | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ProviderCredential], int]:
+        """Every key on the platform, not only the caller's tenant.
+
+        Fleet administration is a platform capability: keys are provisioned by
+        the operator and leased across workspaces, so filtering by tenant here
+        would hide most of the fleet.
+        """
+
+        conditions = []
+        if project_id:
+            conditions.append(ProviderCredential.project_id == project_id)
+        if health:
+            conditions.append(ProviderCredential.health == health)
+        if search:
+            pattern = f"%{search.lower()}%"
+            conditions.append(
+                or_(
+                    func.lower(ProviderCredential.account_label).like(pattern),
+                    func.lower(ProviderCredential.project_id).like(pattern),
+                    func.lower(ProviderCredential.key_fingerprint).like(pattern),
+                )
+            )
+
+        total = int(
+            self.session.scalar(
+                select(func.count(ProviderCredential.id)).where(*conditions)
+            )
+            or 0
+        )
+        rows = list(
+            self.session.scalars(
+                select(ProviderCredential)
+                .where(*conditions)
+                .order_by(
+                    ProviderCredential.project_id,
+                    ProviderCredential.account_label,
+                    ProviderCredential.id,
+                )
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        return rows, total
+
+    def all_credentials(self) -> list[ProviderCredential]:
+        return list(
+            self.session.scalars(
+                select(ProviderCredential).order_by(ProviderCredential.project_id)
+            )
+        )
+
+    def project_ids(self) -> list[str]:
+        return list(
+            self.session.scalars(
+                select(ProviderCredential.project_id).distinct().order_by(
+                    ProviderCredential.project_id
+                )
+            )
+        )
+
+    def delete(self, credential: ProviderCredential) -> None:
+        self.session.delete(credential)
+        self.session.flush()
 
     def claim_candidates(
         self, tenant_id: uuid.UUID, model: str, excluded: set[uuid.UUID]
@@ -1005,6 +1092,70 @@ class QuotaReservationRepository:
             or 0
         )
 
+    def count_since_project(self, project_id: str, since: Any, now: Any) -> int:
+        """Reservations for every credential in one Google Cloud project.
+
+        This is the number that matters: quota is shared per project, so adding
+        keys must not add capacity.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(ProviderQuotaReservation.id))
+                .join(
+                    ProviderCredential,
+                    ProviderCredential.id == ProviderQuotaReservation.credential_id,
+                )
+                .where(
+                    ProviderCredential.project_id == project_id,
+                    ProviderQuotaReservation.created_at >= since,
+                    or_(
+                        ProviderQuotaReservation.status == "CONSUMED",
+                        (ProviderQuotaReservation.status == "RESERVED")
+                        & (ProviderQuotaReservation.expires_at > now),
+                    ),
+                )
+            )
+            or 0
+        )
+
+    def project_cooldown(self, project_id: str) -> ProviderProjectCooldown | None:
+        return self.session.get(ProviderProjectCooldown, project_id)
+
+    def set_project_cooldown(
+        self, *, project_id: str, reason: str, cooldown_until: Any
+    ) -> ProviderProjectCooldown:
+        row = self.session.get(ProviderProjectCooldown, project_id)
+        if row is None:
+            row = ProviderProjectCooldown(
+                project_id=project_id,
+                reason=reason[:300],
+                cooldown_until=cooldown_until,
+                updated_at=utcnow(),
+            )
+            self.session.add(row)
+        else:
+            row.reason = reason[:300]
+            row.cooldown_until = cooldown_until
+            row.updated_at = utcnow()
+        self.session.flush()
+        return row
+
+    def clear_project_cooldown(self, project_id: str) -> None:
+        row = self.session.get(ProviderProjectCooldown, project_id)
+        if row is not None:
+            self.session.delete(row)
+            self.session.flush()
+
+    def active_project_cooldowns(self, now: Any) -> list[ProviderProjectCooldown]:
+        return list(
+            self.session.scalars(
+                select(ProviderProjectCooldown).where(
+                    ProviderProjectCooldown.cooldown_until > now
+                )
+            )
+        )
+
     def reserve(
         self, *, tenant_id: uuid.UUID, credential_id: uuid.UUID, purpose: str, ttl_seconds: int
     ) -> ProviderQuotaReservation:
@@ -1049,14 +1200,18 @@ class UsageRepository:
         latency_ms: int | None,
         http_status: int | None,
         error_class: str | None,
+        project_id: str = "",
+        retry_count: int = 0,
     ) -> ProviderUsage:
         row = ProviderUsage(
             tenant_id=tenant_id,
             credential_id=credential_id,
             job_id=job_id,
+            project_id=project_id or "",
             provider=provider,
             model=model,
             purpose=purpose,
+            retry_count=retry_count,
             prompt_version_id=prompt_version_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -1108,6 +1263,173 @@ class UsageRepository:
             "cost_usd": float(cost),
             "by_model": by_model,
         }
+
+    # ── fleet aggregation ───────────────────────────────────────────────────
+
+    def window_stats(self, since: Any, *, project_id: str | None = None) -> dict[str, Any]:
+        """Requests, tokens and failures since ``since``.
+
+        Failures are split by class so a 429 (quota) cannot be confused with a
+        500 (provider outage) in an alert or a rate calculation.
+        """
+
+        conditions = [ProviderUsage.created_at >= since]
+        if project_id is not None:
+            conditions.append(ProviderUsage.project_id == project_id)
+
+        row = self.session.execute(
+            select(
+                func.count(ProviderUsage.id),
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0),
+                func.coalesce(func.sum(ProviderUsage.output_tokens), 0),
+                func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(False)),
+                func.count(ProviderUsage.id).filter(
+                    ProviderUsage.error_class == "ProviderQuotaError"
+                ),
+                func.count(ProviderUsage.id).filter(
+                    ProviderUsage.error_class == "ProviderAuthenticationError"
+                ),
+            ).where(*conditions)
+        ).one()
+        requests, input_tokens, output_tokens, failures, quota_failures, auth_failures = row
+        return {
+            "requests": int(requests or 0),
+            "input_tokens": int(input_tokens or 0),
+            "output_tokens": int(output_tokens or 0),
+            "failures": int(failures or 0),
+            "quota_failures": int(quota_failures or 0),
+            "auth_failures": int(auth_failures or 0),
+        }
+
+    def model_window_stats(self, since: Any) -> list[dict[str, Any]]:
+        rows = self.session.execute(
+            select(
+                ProviderUsage.model,
+                func.count(ProviderUsage.id),
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0),
+                func.coalesce(func.sum(ProviderUsage.output_tokens), 0),
+                func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(False)),
+            )
+            .where(ProviderUsage.created_at >= since)
+            .group_by(ProviderUsage.model)
+            .order_by(ProviderUsage.model)
+        ).all()
+        return [
+            {
+                "model": model,
+                "requests": int(count),
+                "input_tokens": int(input_sum or 0),
+                "output_tokens": int(output_sum or 0),
+                "failures": int(failures or 0),
+            }
+            for model, count, input_sum, output_sum, failures in rows
+        ]
+
+    def project_window_stats(self, since: Any) -> list[dict[str, Any]]:
+        rows = self.session.execute(
+            select(
+                ProviderUsage.project_id,
+                func.count(ProviderUsage.id),
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0),
+                func.coalesce(func.sum(ProviderUsage.output_tokens), 0),
+                func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(False)),
+                func.count(ProviderUsage.id).filter(
+                    ProviderUsage.error_class == "ProviderQuotaError"
+                ),
+            )
+            .where(ProviderUsage.created_at >= since)
+            .group_by(ProviderUsage.project_id)
+            .order_by(ProviderUsage.project_id)
+        ).all()
+        return [
+            {
+                "project_id": project,
+                "requests": int(count),
+                "input_tokens": int(input_sum or 0),
+                "output_tokens": int(output_sum or 0),
+                "failures": int(failures or 0),
+                "quota_failures": int(quota_failures or 0),
+            }
+            for project, count, input_sum, output_sum, failures, quota_failures in rows
+        ]
+
+    def key_window_stats(self, since: Any) -> dict[uuid.UUID, dict[str, Any]]:
+        rows = self.session.execute(
+            select(
+                ProviderUsage.credential_id,
+                func.count(ProviderUsage.id),
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0),
+                func.coalesce(func.sum(ProviderUsage.output_tokens), 0),
+                func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(False)),
+                func.count(ProviderUsage.id).filter(
+                    ProviderUsage.error_class == "ProviderQuotaError"
+                ),
+                func.max(ProviderUsage.created_at).filter(ProviderUsage.success.is_(True)),
+                func.max(ProviderUsage.created_at).filter(ProviderUsage.success.is_(False)),
+            )
+            .where(
+                ProviderUsage.created_at >= since,
+                ProviderUsage.credential_id.is_not(None),
+            )
+            .group_by(ProviderUsage.credential_id)
+        ).all()
+        return {
+            credential_id: {
+                "requests": int(count or 0),
+                "input_tokens": int(input_sum or 0),
+                "output_tokens": int(output_sum or 0),
+                "failures": int(failures or 0),
+                "quota_failures": int(quota_failures or 0),
+                "last_success_at": last_success,
+                "last_failure_at": last_failure,
+            }
+            for (
+                credential_id,
+                count,
+                input_sum,
+                output_sum,
+                failures,
+                quota_failures,
+                last_success,
+                last_failure,
+            ) in rows
+            if credential_id is not None
+        }
+
+    def daily(self, since: Any) -> list[dict[str, Any]]:
+        day = func.date_trunc("day", ProviderUsage.created_at).label("day")
+        rows = self.session.execute(
+            select(
+                day,
+                func.count(ProviderUsage.id),
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0),
+                func.coalesce(func.sum(ProviderUsage.output_tokens), 0),
+                func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(False)),
+            )
+            .where(ProviderUsage.created_at >= since)
+            .group_by(day)
+            .order_by(day)
+        ).all()
+        return [
+            {
+                "day": day_value,
+                "requests": int(count),
+                "input_tokens": int(input_sum or 0),
+                "output_tokens": int(output_sum or 0),
+                "failures": int(failures or 0),
+            }
+            for day_value, count, input_sum, output_sum, failures in rows
+        ]
+
+    def recent_failures(self, limit: int = 20) -> list[ProviderUsage]:
+        return list(
+            self.session.scalars(
+                select(ProviderUsage)
+                .where(ProviderUsage.success.is_(False))
+                .order_by(ProviderUsage.created_at.desc())
+                .limit(limit)
+            )
+        )
 
 
 class AuditRepository:
