@@ -1797,7 +1797,9 @@ a.hub-action--primary:hover > svg {
 @media (min-width: 1024px) {
   .app {
     display: grid;
-    grid-template-columns: 236px minmax(0, 1fr);
+    /* The rail's width is its own, so collapsing it can animate (a
+       grid-template-columns transition is unreliable across engines). */
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
   }
 
@@ -1805,8 +1807,10 @@ a.hub-action--primary:hover > svg {
     display: flex;
     position: sticky;
     top: 0;
+    width: 236px;
     height: 100vh;
     height: 100dvh;
+    transition: width 240ms var(--ease-out);
   }
 
   .hub-tabs,
@@ -1924,6 +1928,384 @@ a.hub-action--primary:hover > svg {
   }
 }
 
+/* ══ 6b. Account dashboards ════════════════════════════════════════════ */
+
+/*
+ * The three account types share one vocabulary: a card head with provenance, a
+ * capability ledger, a numbered routine and a rules list. They differ in what
+ * they contain, never in how they are drawn.
+ */
+
+.app-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+}
+
+.app-card__note {
+  color: var(--text-3);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.app-card__head + * {
+  margin-top: var(--s-4);
+}
+
+/* the ledger: what a screen can do, and why it cannot do the rest */
+
+.cap-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cap-list__row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.cap-list__row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.cap-list__icon {
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--text-3);
+}
+
+.cap-list__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cap-list__label {
+  color: var(--text);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.cap-list__detail {
+  color: var(--text-3);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.cap-list__row .app-chip {
+  margin-top: 1px;
+}
+
+/* a short numbered routine */
+
+.step-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.step-list__row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.step-list__row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.step-list__index {
+  color: var(--text-3);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+}
+
+.step-list__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.step-list__title {
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.step-list__body {
+  color: var(--text-3);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+/* fixed rules, stated as rules rather than as prose */
+
+.rule-list {
+  display: grid;
+  gap: 8px;
+  margin: var(--s-4) 0 0;
+  padding: 0 0 0 16px;
+  list-style: none;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.rule-list li {
+  position: relative;
+  padding-left: 2px;
+}
+
+.rule-list li::before {
+  content: '';
+  position: absolute;
+  top: 0.62em;
+  left: -12px;
+  width: 5px;
+  height: 1px;
+  background: var(--text-3);
+}
+
+.app-stack > .rule-list,
+.app-stack > .panel-copy {
+  margin: 0;
+}
+
+/* plain prose and its one onward link, inside a card */
+
+.panel-copy {
+  max-width: 62ch;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+.panel-copy em {
+  font-style: normal;
+  color: var(--text);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.panel-copy code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.panel-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--s-3);
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--text);
+  font-size: 0.8125rem;
+  transition: border-color 140ms var(--ease);
+}
+
+.panel-link:hover {
+  border-bottom-color: var(--text);
+}
+
+.panel-link svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* a navigation slot kept for a feature that does not exist yet */
+
+.reserved-slot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.reserved-slot__label {
+  color: var(--text-2);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.reserved-slot__note {
+  color: var(--text-3);
+  font-size: 0.6875rem;
+  text-align: right;
+}
+
+/* the account type, stated once in the top bar */
+
+.app-topbar__role {
+  display: none;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  color: var(--text-2);
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* the sheet's scope line */
+
+.hub-sheet__group {
+  margin: 0 8px 4px;
+  color: var(--text-3);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* rail head and its collapse control */
+
+.hub-rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.hub-rail__collapse {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    color 140ms var(--ease),
+    background-color 140ms var(--ease),
+    border-color 140ms var(--ease);
+}
+
+.hub-rail__collapse:hover {
+  border-color: var(--line-soft);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.hub-rail__collapse svg {
+  transition: transform 240ms var(--ease-out);
+}
+
+.hub-rail__collapse[aria-expanded='false'] svg {
+  transform: rotate(180deg);
+}
+
+.hub-rail__collapse:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Collapsed rail: icons only. A preference, remembered per browser. */
+
+@media (min-width: 1024px) {
+  .app--rail-collapsed .app-sidebar {
+    width: 72px;
+    padding-inline: 10px;
+  }
+
+  .app--rail-collapsed .hub-rail__head {
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 0;
+  }
+
+  .app--rail-collapsed .hub-rail__brand {
+    padding: 2px 0 0;
+  }
+
+  .app--rail-collapsed .hub-workspace,
+  .app--rail-collapsed .app-nav__group,
+  .app--rail-collapsed .app-nav__link span,
+  .app--rail-collapsed .hub-rail__site span,
+  .app--rail-collapsed .hub-profile__id,
+  .app--rail-collapsed .hub-profile__caret {
+    display: none;
+  }
+
+  .app--rail-collapsed .app-nav__link,
+  .app--rail-collapsed .hub-rail__site {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .app--rail-collapsed .app-nav__link:hover svg {
+    transform: none;
+  }
+
+  .app--rail-collapsed .hub-profile__trigger {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .app--rail-collapsed .hub-profile__menu {
+    bottom: 0;
+    left: calc(100% + 10px);
+    transform-origin: bottom left;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-topbar__role {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 479px) {
+  .cap-list__row {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .cap-list__row .app-chip {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 4px;
+  }
+
+  .reserved-slot {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .reserved-slot__note {
+    text-align: left;
+  }
+}
+
 /* ══ 7. Motion ═════════════════════════════════════════════════════════ */
 
 @keyframes hub-rise {
@@ -2006,7 +2388,11 @@ a.hub-action--primary:hover > svg {
   .hub-profile__caret,
   .hub-profile__signout,
   .hub-sheet__link,
-  .app-card {
+  .app-card,
+  .app-sidebar,
+  .hub-rail__collapse,
+  .hub-rail__collapse svg,
+  .panel-link {
     transition: none !important;
   }
 

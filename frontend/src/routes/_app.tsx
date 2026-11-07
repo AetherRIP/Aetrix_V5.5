@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
-import { Outlet, createFileRoute, useRouter, useRouterState } from '@tanstack/react-router'
+import { Link, Outlet, createFileRoute, useRouter, useRouterState } from '@tanstack/react-router'
 import { AppShell, HubBoot } from '../components/app/AppShell'
 import { storeNextPath, useAuth } from '../lib/auth/AuthProvider'
+import { allowsPath, homeFor, readRole, ROLE_META } from '../lib/auth/roles'
 import { Icon } from '../components/ui/Icons'
+import { StatePanel } from '../components/app/StatePanel'
 
 export const Route = createFileRoute('/_app')({
   component: AppLayout,
@@ -23,8 +25,8 @@ function pageMeta(pathname: string): PageMeta {
     return { title: 'Submission review', eyebrow: 'Work · submission' }
   }
 
-  // An empty title means the route renders its own `h1`. The dashboard does:
-  // its greeting is the page heading, and a second one would compete with it.
+  // An empty title means the route renders its own `h1`. The dashboards do:
+  // their greeting is the page heading, and a second one would compete with it.
   const table: Record<string, PageMeta> = {
     '/dashboard': {
       title: '',
@@ -62,6 +64,91 @@ function pageMeta(pathname: string): PageMeta {
       eyebrow: 'Account',
       description: 'Your identity, session and workspace preferences.',
     },
+    '/students': {
+      title: 'Classes & students',
+      eyebrow: 'Teaching',
+      description: 'The classes allocated to this workspace and the students in them.',
+    },
+    '/gradebook': {
+      title: 'Gradebook',
+      eyebrow: 'Outcomes',
+      description: 'Marks per student, per assignment, with the review state of each.',
+    },
+    '/analytics': {
+      title: 'Performance analytics',
+      eyebrow: 'Insight',
+      description: 'Where the cohort is strong and where it needs teaching time.',
+    },
+    '/assistants': {
+      title: 'Assistants',
+      eyebrow: 'Team',
+      description: 'The assistants working in this workspace and what each may do.',
+    },
+    '/classroom': {
+      title: 'Google Classroom',
+      eyebrow: 'Integration',
+      description: 'Roster import and class allocation for this workspace.',
+    },
+    '/platform': {
+      title: '',
+      eyebrow: 'Platform',
+      description: 'The operator view of the platform: workspaces, accounts and health.',
+    },
+    '/platform/workspaces': {
+      title: 'Workspaces',
+      eyebrow: 'Platform',
+      description: 'Every teacher workspace, its allocation and its state.',
+    },
+    '/platform/users': {
+      title: 'Accounts',
+      eyebrow: 'Platform',
+      description: 'Teachers, assistants and operators, with the role each holds.',
+    },
+    '/platform/health': {
+      title: 'System health',
+      eyebrow: 'Platform',
+      description: 'API, worker, database and provider status as the engine reports it.',
+    },
+    '/platform/audit': {
+      title: 'Audit log',
+      eyebrow: 'Platform',
+      description: 'Append-only record of privileged actions across the platform.',
+    },
+    '/platform/integrations': {
+      title: 'AI providers',
+      eyebrow: 'Platform',
+      description: 'Provider configuration and, in future, Gemini usage and quota.',
+    },
+    '/platform/settings': {
+      title: 'Platform settings',
+      eyebrow: 'Platform',
+      description: 'Defaults applied to every workspace on the platform.',
+    },
+    '/assistant': {
+      title: '',
+      eyebrow: 'My work',
+      description: 'Your assigned classes, queue and the work waiting on you.',
+    },
+    '/assistant/classes': {
+      title: 'Assigned classes',
+      eyebrow: 'My work',
+      description: 'The classes and students your teacher has assigned to you.',
+    },
+    '/assistant/work': {
+      title: 'Marking workspace',
+      eyebrow: 'My work',
+      description: 'Review the submissions assigned to you, one script at a time.',
+    },
+    '/assistant/tasks': {
+      title: 'Tasks',
+      eyebrow: 'My work',
+      description: 'Everything waiting on you, ordered by what is due first.',
+    },
+    '/assistant/progress': {
+      title: 'My progress',
+      eyebrow: 'My work',
+      description: 'What you have completed and what remains in this marking cycle.',
+    },
   }
 
   return table[pathname] ?? { title: 'Workspace', eyebrow: 'Aetrix' }
@@ -81,13 +168,41 @@ function SessionGate({ message, detail }: { message: string; detail?: string }) 
   )
 }
 
+/**
+ * A verified session without an account role. The interface refuses to guess:
+ * no dashboard opens until an operator assigns the role in the identity
+ * provider, which is the only place it can be written.
+ */
+function NoRole({ email, onSignOut }: { email: string | null; onSignOut: () => void }) {
+  return (
+    <main className="app-boot">
+      <div className="app-boot__card" role="status" aria-live="polite">
+        <p className="app-boot__badge mono">
+          <Icon name="lock" size={14} /> Role required
+        </p>
+        <h1 className="app-boot__title">No account role assigned</h1>
+        <p className="app-boot__body">
+          {email ?? 'This account'} is signed in, but its verified claims carry no Aetrix
+          role. A platform administrator assigns one of <code>platform_operator</code>,{' '}
+          <code>supervisor</code> or <code>assistant</code> in the identity provider; this
+          screen cannot grant it, and no dashboard is opened without it.
+        </p>
+        <button type="button" className="btn btn--outline" onClick={onSignOut}>
+          Sign out
+        </button>
+      </div>
+    </main>
+  )
+}
+
 function AppLayout() {
-  const { status, authUnavailableReason } = useAuth()
+  const { status, user, authUnavailableReason, signOut } = useAuth()
   const router = useRouter()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   // Static hosting serves directory URLs with a trailing slash; the metadata
   // table is keyed without one, so `/dashboard/` must resolve to the same page.
   const routePath = pathname.replace(/\/+$/, '') || '/'
+  const role = readRole(user)
 
   useEffect(() => {
     if (status !== 'anonymous') return
@@ -100,6 +215,19 @@ function AppLayout() {
     storeNextPath(pathname)
     void router.navigate({ to: '/sign-in', replace: true })
   }, [status, pathname, router])
+
+  // A role may only reach its own area. A platform operator who lands on a
+  // workspace route is moved to the platform home rather than shown a broken
+  // shell, and a teacher who types /platform is moved back to the workspace.
+  useEffect(() => {
+    if (status !== 'authenticated' || !role) return
+    if (allowsPath(role, routePath)) return
+    const home = homeFor(role)
+    if (routePath === home) return
+    if (role === 'platform_operator' || routePath.startsWith('/platform')) {
+      void router.navigate({ to: home, replace: true })
+    }
+  }, [status, role, routePath, router])
 
   if (status === 'unconfigured') {
     return (
@@ -121,11 +249,52 @@ function AppLayout() {
     )
   }
 
+  if (!role) {
+    return (
+      <NoRole
+        email={user?.email ?? null}
+        onSignOut={() => {
+          void (async () => {
+            await signOut()
+            await router.navigate({ to: '/sign-in', replace: true })
+          })()
+        }}
+      />
+    )
+  }
+
   const meta = pageMeta(routePath)
+  const permitted = allowsPath(role, routePath)
 
   return (
-    <AppShell title={meta.title} eyebrow={meta.eyebrow} description={meta.description}>
-      <Outlet />
+    <AppShell
+      title={meta.title}
+      eyebrow={meta.eyebrow}
+      description={meta.description}
+      role={role}
+    >
+      {permitted ? (
+        <Outlet />
+      ) : (
+        <div className="app-stack">
+          <StatePanel
+            tone="error"
+            title="This screen belongs to another account type"
+            capability="role-scoped route"
+          >
+            <p>
+              You are signed in as <strong>{ROLE_META[role].label}</strong>, whose scope is{' '}
+              {ROLE_META[role].scope.toLowerCase()}. <code>{routePath}</code> is outside it,
+              so nothing is loaded here.
+            </p>
+            <p>
+              <Link className="btn btn--outline" to={homeFor(role)}>
+                Go to my dashboard
+              </Link>
+            </p>
+          </StatePanel>
+        </div>
+      )}
     </AppShell>
   )
 }

@@ -11,17 +11,34 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as MarketingRouteImport } from './routes/_marketing'
+import { Route as AppAnalyticsRouteImport } from './routes/_app.analytics'
 import { Route as AppAssignmentsRouteImport } from './routes/_app.assignments'
+import { Route as AppAssistantsRouteImport } from './routes/_app.assistants'
+import { Route as AppClassroomRouteImport } from './routes/_app.classroom'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppGradebookRouteImport } from './routes/_app.gradebook'
 import { Route as AppInboxRouteImport } from './routes/_app.inbox'
 import { Route as AppQueueRouteImport } from './routes/_app.queue'
 import { Route as AppReportsRouteImport } from './routes/_app.reports'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as AppStudentsRouteImport } from './routes/_app.students'
 import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
 import { Route as MarketingIndexRouteImport } from './routes/_marketing.index'
 import { Route as MarketingSignInRouteImport } from './routes/_marketing.sign-in'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AppAssignmentsAssignmentIdRouteImport } from './routes/_app.assignments.$assignmentId'
+import { Route as AppAssistantIndexRouteImport } from './routes/_app.assistant.index'
+import { Route as AppAssistantClassesRouteImport } from './routes/_app.assistant.classes'
+import { Route as AppAssistantProgressRouteImport } from './routes/_app.assistant.progress'
+import { Route as AppAssistantTasksRouteImport } from './routes/_app.assistant.tasks'
+import { Route as AppAssistantWorkRouteImport } from './routes/_app.assistant.work'
+import { Route as AppPlatformIndexRouteImport } from './routes/_app.platform.index'
+import { Route as AppPlatformAuditRouteImport } from './routes/_app.platform.audit'
+import { Route as AppPlatformHealthRouteImport } from './routes/_app.platform.health'
+import { Route as AppPlatformIntegrationsRouteImport } from './routes/_app.platform.integrations'
+import { Route as AppPlatformSettingsRouteImport } from './routes/_app.platform.settings'
+import { Route as AppPlatformUsersRouteImport } from './routes/_app.platform.users'
+import { Route as AppPlatformWorkspacesRouteImport } from './routes/_app.platform.workspaces'
 import { Route as AppSubmissionsSubmissionIdRouteImport } from './routes/_app.submissions.$submissionId'
 
 const AppRoute = AppRouteImport.update({
@@ -32,14 +49,34 @@ const MarketingRoute = MarketingRouteImport.update({
   id: '/_marketing',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAnalyticsRoute = AppAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAssignmentsRoute = AppAssignmentsRouteImport.update({
   id: '/assignments',
   path: '/assignments',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAssistantsRoute = AppAssistantsRouteImport.update({
+  id: '/assistants',
+  path: '/assistants',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppClassroomRoute = AppClassroomRouteImport.update({
+  id: '/classroom',
+  path: '/classroom',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppGradebookRoute = AppGradebookRouteImport.update({
+  id: '/gradebook',
+  path: '/gradebook',
   getParentRoute: () => AppRoute,
 } as any)
 const AppInboxRoute = AppInboxRouteImport.update({
@@ -60,6 +97,11 @@ const AppReportsRoute = AppReportsRouteImport.update({
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStudentsRoute = AppStudentsRouteImport.update({
+  id: '/students',
+  path: '/students',
   getParentRoute: () => AppRoute,
 } as any)
 const AppWorkspaceRoute = AppWorkspaceRouteImport.update({
@@ -88,6 +130,66 @@ const AppAssignmentsAssignmentIdRoute =
     path: '/$assignmentId',
     getParentRoute: () => AppAssignmentsRoute,
   } as any)
+const AppAssistantIndexRoute = AppAssistantIndexRouteImport.update({
+  id: '/assistant/',
+  path: '/assistant/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAssistantClassesRoute = AppAssistantClassesRouteImport.update({
+  id: '/assistant/classes',
+  path: '/assistant/classes',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAssistantProgressRoute = AppAssistantProgressRouteImport.update({
+  id: '/assistant/progress',
+  path: '/assistant/progress',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAssistantTasksRoute = AppAssistantTasksRouteImport.update({
+  id: '/assistant/tasks',
+  path: '/assistant/tasks',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAssistantWorkRoute = AppAssistantWorkRouteImport.update({
+  id: '/assistant/work',
+  path: '/assistant/work',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPlatformIndexRoute = AppPlatformIndexRouteImport.update({
+  id: '/platform/',
+  path: '/platform/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPlatformAuditRoute = AppPlatformAuditRouteImport.update({
+  id: '/platform/audit',
+  path: '/platform/audit',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPlatformHealthRoute = AppPlatformHealthRouteImport.update({
+  id: '/platform/health',
+  path: '/platform/health',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPlatformIntegrationsRoute = AppPlatformIntegrationsRouteImport.update({
+  id: '/platform/integrations',
+  path: '/platform/integrations',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPlatformSettingsRoute = AppPlatformSettingsRouteImport.update({
+  id: '/platform/settings',
+  path: '/platform/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPlatformUsersRoute = AppPlatformUsersRouteImport.update({
+  id: '/platform/users',
+  path: '/platform/users',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPlatformWorkspacesRoute = AppPlatformWorkspacesRouteImport.update({
+  id: '/platform/workspaces',
+  path: '/platform/workspaces',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSubmissionsSubmissionIdRoute =
   AppSubmissionsSubmissionIdRouteImport.update({
     id: '/submissions/$submissionId',
@@ -97,94 +199,196 @@ const AppSubmissionsSubmissionIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof MarketingIndexRoute
+  '/analytics': typeof AppAnalyticsRoute
   '/assignments': typeof AppAssignmentsRouteWithChildren
+  '/assistants': typeof AppAssistantsRoute
+  '/classroom': typeof AppClassroomRoute
   '/dashboard': typeof AppDashboardRoute
+  '/gradebook': typeof AppGradebookRoute
   '/inbox': typeof AppInboxRoute
   '/queue': typeof AppQueueRoute
   '/reports': typeof AppReportsRoute
   '/settings': typeof AppSettingsRoute
+  '/students': typeof AppStudentsRoute
   '/workspace': typeof AppWorkspaceRoute
   '/sign-in': typeof MarketingSignInRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
+  '/assistant/classes': typeof AppAssistantClassesRoute
+  '/assistant/progress': typeof AppAssistantProgressRoute
+  '/assistant/tasks': typeof AppAssistantTasksRoute
+  '/assistant/work': typeof AppAssistantWorkRoute
+  '/platform/audit': typeof AppPlatformAuditRoute
+  '/platform/health': typeof AppPlatformHealthRoute
+  '/platform/integrations': typeof AppPlatformIntegrationsRoute
+  '/platform/settings': typeof AppPlatformSettingsRoute
+  '/platform/users': typeof AppPlatformUsersRoute
+  '/platform/workspaces': typeof AppPlatformWorkspacesRoute
   '/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
+  '/assistant/': typeof AppAssistantIndexRoute
+  '/platform/': typeof AppPlatformIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof MarketingIndexRoute
+  '/analytics': typeof AppAnalyticsRoute
   '/assignments': typeof AppAssignmentsRouteWithChildren
+  '/assistants': typeof AppAssistantsRoute
+  '/classroom': typeof AppClassroomRoute
   '/dashboard': typeof AppDashboardRoute
+  '/gradebook': typeof AppGradebookRoute
   '/inbox': typeof AppInboxRoute
   '/queue': typeof AppQueueRoute
   '/reports': typeof AppReportsRoute
   '/settings': typeof AppSettingsRoute
+  '/students': typeof AppStudentsRoute
   '/workspace': typeof AppWorkspaceRoute
   '/sign-in': typeof MarketingSignInRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
+  '/assistant/classes': typeof AppAssistantClassesRoute
+  '/assistant/progress': typeof AppAssistantProgressRoute
+  '/assistant/tasks': typeof AppAssistantTasksRoute
+  '/assistant/work': typeof AppAssistantWorkRoute
+  '/platform/audit': typeof AppPlatformAuditRoute
+  '/platform/health': typeof AppPlatformHealthRoute
+  '/platform/integrations': typeof AppPlatformIntegrationsRoute
+  '/platform/settings': typeof AppPlatformSettingsRoute
+  '/platform/users': typeof AppPlatformUsersRoute
+  '/platform/workspaces': typeof AppPlatformWorkspacesRoute
   '/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
+  '/assistant': typeof AppAssistantIndexRoute
+  '/platform': typeof AppPlatformIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_marketing': typeof MarketingRouteWithChildren
+  '/_app/analytics': typeof AppAnalyticsRoute
   '/_app/assignments': typeof AppAssignmentsRouteWithChildren
+  '/_app/assistants': typeof AppAssistantsRoute
+  '/_app/classroom': typeof AppClassroomRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/gradebook': typeof AppGradebookRoute
   '/_app/inbox': typeof AppInboxRoute
   '/_app/queue': typeof AppQueueRoute
   '/_app/reports': typeof AppReportsRoute
   '/_app/settings': typeof AppSettingsRoute
+  '/_app/students': typeof AppStudentsRoute
   '/_app/workspace': typeof AppWorkspaceRoute
   '/_marketing/sign-in': typeof MarketingSignInRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/_marketing/': typeof MarketingIndexRoute
   '/_app/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
+  '/_app/assistant/classes': typeof AppAssistantClassesRoute
+  '/_app/assistant/progress': typeof AppAssistantProgressRoute
+  '/_app/assistant/tasks': typeof AppAssistantTasksRoute
+  '/_app/assistant/work': typeof AppAssistantWorkRoute
+  '/_app/platform/audit': typeof AppPlatformAuditRoute
+  '/_app/platform/health': typeof AppPlatformHealthRoute
+  '/_app/platform/integrations': typeof AppPlatformIntegrationsRoute
+  '/_app/platform/settings': typeof AppPlatformSettingsRoute
+  '/_app/platform/users': typeof AppPlatformUsersRoute
+  '/_app/platform/workspaces': typeof AppPlatformWorkspacesRoute
   '/_app/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
+  '/_app/assistant/': typeof AppAssistantIndexRoute
+  '/_app/platform/': typeof AppPlatformIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/analytics'
     | '/assignments'
+    | '/assistants'
+    | '/classroom'
     | '/dashboard'
+    | '/gradebook'
     | '/inbox'
     | '/queue'
     | '/reports'
     | '/settings'
+    | '/students'
     | '/workspace'
     | '/sign-in'
     | '/auth/callback'
     | '/assignments/$assignmentId'
+    | '/assistant/classes'
+    | '/assistant/progress'
+    | '/assistant/tasks'
+    | '/assistant/work'
+    | '/platform/audit'
+    | '/platform/health'
+    | '/platform/integrations'
+    | '/platform/settings'
+    | '/platform/users'
+    | '/platform/workspaces'
     | '/submissions/$submissionId'
+    | '/assistant/'
+    | '/platform/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/analytics'
     | '/assignments'
+    | '/assistants'
+    | '/classroom'
     | '/dashboard'
+    | '/gradebook'
     | '/inbox'
     | '/queue'
     | '/reports'
     | '/settings'
+    | '/students'
     | '/workspace'
     | '/sign-in'
     | '/auth/callback'
     | '/assignments/$assignmentId'
+    | '/assistant/classes'
+    | '/assistant/progress'
+    | '/assistant/tasks'
+    | '/assistant/work'
+    | '/platform/audit'
+    | '/platform/health'
+    | '/platform/integrations'
+    | '/platform/settings'
+    | '/platform/users'
+    | '/platform/workspaces'
     | '/submissions/$submissionId'
+    | '/assistant'
+    | '/platform'
   id:
     | '__root__'
     | '/_app'
     | '/_marketing'
+    | '/_app/analytics'
     | '/_app/assignments'
+    | '/_app/assistants'
+    | '/_app/classroom'
     | '/_app/dashboard'
+    | '/_app/gradebook'
     | '/_app/inbox'
     | '/_app/queue'
     | '/_app/reports'
     | '/_app/settings'
+    | '/_app/students'
     | '/_app/workspace'
     | '/_marketing/sign-in'
     | '/auth/callback'
     | '/_marketing/'
     | '/_app/assignments/$assignmentId'
+    | '/_app/assistant/classes'
+    | '/_app/assistant/progress'
+    | '/_app/assistant/tasks'
+    | '/_app/assistant/work'
+    | '/_app/platform/audit'
+    | '/_app/platform/health'
+    | '/_app/platform/integrations'
+    | '/_app/platform/settings'
+    | '/_app/platform/users'
+    | '/_app/platform/workspaces'
     | '/_app/submissions/$submissionId'
+    | '/_app/assistant/'
+    | '/_app/platform/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -209,6 +413,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MarketingRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/analytics': {
+      id: '/_app/analytics'
+      path: '/analytics'
+      fullPath: '/analytics'
+      preLoaderRoute: typeof AppAnalyticsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/assignments': {
       id: '/_app/assignments'
       path: '/assignments'
@@ -216,11 +427,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAssignmentsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/assistants': {
+      id: '/_app/assistants'
+      path: '/assistants'
+      fullPath: '/assistants'
+      preLoaderRoute: typeof AppAssistantsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/classroom': {
+      id: '/_app/classroom'
+      path: '/classroom'
+      fullPath: '/classroom'
+      preLoaderRoute: typeof AppClassroomRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/dashboard': {
       id: '/_app/dashboard'
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/gradebook': {
+      id: '/_app/gradebook'
+      path: '/gradebook'
+      fullPath: '/gradebook'
+      preLoaderRoute: typeof AppGradebookRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/inbox': {
@@ -249,6 +481,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/students': {
+      id: '/_app/students'
+      path: '/students'
+      fullPath: '/students'
+      preLoaderRoute: typeof AppStudentsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/workspace': {
@@ -286,6 +525,90 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAssignmentsAssignmentIdRouteImport
       parentRoute: typeof AppAssignmentsRoute
     }
+    '/_app/assistant/': {
+      id: '/_app/assistant/'
+      path: '/assistant'
+      fullPath: '/assistant/'
+      preLoaderRoute: typeof AppAssistantIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/assistant/classes': {
+      id: '/_app/assistant/classes'
+      path: '/assistant/classes'
+      fullPath: '/assistant/classes'
+      preLoaderRoute: typeof AppAssistantClassesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/assistant/progress': {
+      id: '/_app/assistant/progress'
+      path: '/assistant/progress'
+      fullPath: '/assistant/progress'
+      preLoaderRoute: typeof AppAssistantProgressRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/assistant/tasks': {
+      id: '/_app/assistant/tasks'
+      path: '/assistant/tasks'
+      fullPath: '/assistant/tasks'
+      preLoaderRoute: typeof AppAssistantTasksRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/assistant/work': {
+      id: '/_app/assistant/work'
+      path: '/assistant/work'
+      fullPath: '/assistant/work'
+      preLoaderRoute: typeof AppAssistantWorkRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/platform/': {
+      id: '/_app/platform/'
+      path: '/platform'
+      fullPath: '/platform/'
+      preLoaderRoute: typeof AppPlatformIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/platform/audit': {
+      id: '/_app/platform/audit'
+      path: '/platform/audit'
+      fullPath: '/platform/audit'
+      preLoaderRoute: typeof AppPlatformAuditRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/platform/health': {
+      id: '/_app/platform/health'
+      path: '/platform/health'
+      fullPath: '/platform/health'
+      preLoaderRoute: typeof AppPlatformHealthRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/platform/integrations': {
+      id: '/_app/platform/integrations'
+      path: '/platform/integrations'
+      fullPath: '/platform/integrations'
+      preLoaderRoute: typeof AppPlatformIntegrationsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/platform/settings': {
+      id: '/_app/platform/settings'
+      path: '/platform/settings'
+      fullPath: '/platform/settings'
+      preLoaderRoute: typeof AppPlatformSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/platform/users': {
+      id: '/_app/platform/users'
+      path: '/platform/users'
+      fullPath: '/platform/users'
+      preLoaderRoute: typeof AppPlatformUsersRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/platform/workspaces': {
+      id: '/_app/platform/workspaces'
+      path: '/platform/workspaces'
+      fullPath: '/platform/workspaces'
+      preLoaderRoute: typeof AppPlatformWorkspacesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/submissions/$submissionId': {
       id: '/_app/submissions/$submissionId'
       path: '/submissions/$submissionId'
@@ -309,25 +632,59 @@ const AppAssignmentsRouteWithChildren = AppAssignmentsRoute._addFileChildren(
 )
 
 interface AppRouteChildren {
+  AppAnalyticsRoute: typeof AppAnalyticsRoute
   AppAssignmentsRoute: typeof AppAssignmentsRouteWithChildren
+  AppAssistantsRoute: typeof AppAssistantsRoute
+  AppClassroomRoute: typeof AppClassroomRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppGradebookRoute: typeof AppGradebookRoute
   AppInboxRoute: typeof AppInboxRoute
   AppQueueRoute: typeof AppQueueRoute
   AppReportsRoute: typeof AppReportsRoute
   AppSettingsRoute: typeof AppSettingsRoute
+  AppStudentsRoute: typeof AppStudentsRoute
   AppWorkspaceRoute: typeof AppWorkspaceRoute
+  AppAssistantClassesRoute: typeof AppAssistantClassesRoute
+  AppAssistantProgressRoute: typeof AppAssistantProgressRoute
+  AppAssistantTasksRoute: typeof AppAssistantTasksRoute
+  AppAssistantWorkRoute: typeof AppAssistantWorkRoute
+  AppPlatformAuditRoute: typeof AppPlatformAuditRoute
+  AppPlatformHealthRoute: typeof AppPlatformHealthRoute
+  AppPlatformIntegrationsRoute: typeof AppPlatformIntegrationsRoute
+  AppPlatformSettingsRoute: typeof AppPlatformSettingsRoute
+  AppPlatformUsersRoute: typeof AppPlatformUsersRoute
+  AppPlatformWorkspacesRoute: typeof AppPlatformWorkspacesRoute
   AppSubmissionsSubmissionIdRoute: typeof AppSubmissionsSubmissionIdRoute
+  AppAssistantIndexRoute: typeof AppAssistantIndexRoute
+  AppPlatformIndexRoute: typeof AppPlatformIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAnalyticsRoute: AppAnalyticsRoute,
   AppAssignmentsRoute: AppAssignmentsRouteWithChildren,
+  AppAssistantsRoute: AppAssistantsRoute,
+  AppClassroomRoute: AppClassroomRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppGradebookRoute: AppGradebookRoute,
   AppInboxRoute: AppInboxRoute,
   AppQueueRoute: AppQueueRoute,
   AppReportsRoute: AppReportsRoute,
   AppSettingsRoute: AppSettingsRoute,
+  AppStudentsRoute: AppStudentsRoute,
   AppWorkspaceRoute: AppWorkspaceRoute,
+  AppAssistantClassesRoute: AppAssistantClassesRoute,
+  AppAssistantProgressRoute: AppAssistantProgressRoute,
+  AppAssistantTasksRoute: AppAssistantTasksRoute,
+  AppAssistantWorkRoute: AppAssistantWorkRoute,
+  AppPlatformAuditRoute: AppPlatformAuditRoute,
+  AppPlatformHealthRoute: AppPlatformHealthRoute,
+  AppPlatformIntegrationsRoute: AppPlatformIntegrationsRoute,
+  AppPlatformSettingsRoute: AppPlatformSettingsRoute,
+  AppPlatformUsersRoute: AppPlatformUsersRoute,
+  AppPlatformWorkspacesRoute: AppPlatformWorkspacesRoute,
   AppSubmissionsSubmissionIdRoute: AppSubmissionsSubmissionIdRoute,
+  AppAssistantIndexRoute: AppAssistantIndexRoute,
+  AppPlatformIndexRoute: AppPlatformIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

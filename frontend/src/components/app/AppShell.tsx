@@ -1,46 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useRouter, useRouterState } from '@tanstack/react-router'
 import { displayName, initials, useAuth } from '../../lib/auth/AuthProvider'
+import { NAV_BY_ROLE, ROLE_META, type AppPath, type NavItem, type RoleNav } from '../../lib/auth/roles'
 import { ThemeSwitch } from '../site/ThemeSwitch'
 import { Brand } from '../ui/Brand'
-import { Icon, type IconName } from '../ui/Icons'
-
-type AppPath =
-  | '/dashboard'
-  | '/workspace'
-  | '/inbox'
-  | '/queue'
-  | '/assignments'
-  | '/reports'
-  | '/settings'
-
-type NavItem = { to: AppPath; label: string; icon: IconName }
-
-const PRIMARY_NAV: NavItem[] = [
-  { to: '/dashboard', label: 'Dashboard', icon: 'chart' },
-  { to: '/workspace', label: 'Workspaces', icon: 'classroom' },
-  { to: '/inbox', label: 'Inbox', icon: 'records' },
-  { to: '/queue', label: 'Marking queue', icon: 'pulse' },
-  { to: '/assignments', label: 'Assignments', icon: 'assignment' },
-  { to: '/reports', label: 'Reports', icon: 'blueprint' },
-]
-
-const SECONDARY_NAV: NavItem[] = [{ to: '/settings', label: 'Settings', icon: 'lock' }]
-
-/**
- * The four destinations that are one tap away on a phone. Everything else lives
- * in the "More" sheet, so no route is ever further than two taps from anywhere.
- */
-const TABS: NavItem[] = [
-  { to: '/dashboard', label: 'Dashboard', icon: 'chart' },
-  { to: '/assignments', label: 'Assignments', icon: 'assignment' },
-  { to: '/queue', label: 'Queue', icon: 'pulse' },
-  { to: '/inbox', label: 'Inbox', icon: 'records' },
-]
-
-const SHEET_NAV: NavItem[] = [...PRIMARY_NAV, ...SECONDARY_NAV].filter(
-  (item) => !TABS.some((tab) => tab.to === item.to),
-)
+import { Icon } from '../ui/Icons'
 
 /** Trailing slashes are normal on static hosting, so the comparison strips them. */
 function useActivePath() {
@@ -49,7 +13,9 @@ function useActivePath() {
 }
 
 function isActive(path: string, item: NavItem) {
-  if (item.to === '/dashboard') return path === '/dashboard'
+  if (item.to === '/dashboard' || item.to === '/platform' || item.to === '/assistant') {
+    return path === item.to
+  }
   return path === item.to || path.startsWith(`${item.to}/`)
 }
 
@@ -70,6 +36,7 @@ function NavLink({
       data-active={active ? '' : undefined}
       aria-current={active ? 'page' : undefined}
       onClick={onNavigate}
+      title={item.label}
     >
       <Icon name={item.icon} size={17} />
       <span>{item.label}</span>
@@ -103,12 +70,37 @@ function useNavMarker(path: string) {
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     return () => observer.disconnect()
+    // Re-measure when the group label or the role changes the list's height.
   }, [path])
 
   return { nav, y }
 }
 
-function ProfileMenu() {
+/** A rail preference is a preference, not state: it survives the session. */
+const RAIL_KEY = 'aetrix:rail'
+
+function useRailCollapsed() {
+  const [collapsed, setCollapsed] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setCollapsed(window.localStorage.getItem(RAIL_KEY) === 'collapsed')
+  }, [])
+
+  const toggle = () => {
+    setCollapsed((value) => {
+      const next = !value
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(RAIL_KEY, next ? 'collapsed' : 'expanded')
+      }
+      return next
+    })
+  }
+
+  return { collapsed, toggle }
+}
+
+function ProfileMenu({ role }: { role: keyof typeof ROLE_META | null }) {
   const { user, signOut } = useAuth()
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -138,6 +130,7 @@ function ProfileMenu() {
   }, [open])
 
   const name = displayName(user)
+  const meta = role ? ROLE_META[role] : null
 
   return (
     <div className="hub-profile">
@@ -154,7 +147,7 @@ function ProfileMenu() {
         </span>
         <span className="hub-profile__id">
           <span className="hub-profile__name">{name}</span>
-          <span className="hub-profile__email">{user?.email ?? 'No email on session'}</span>
+          <span className="hub-profile__email">{meta?.label ?? 'No role assigned'}</span>
         </span>
         <Icon name="chevron" size={14} className="hub-profile__caret" />
       </button>
@@ -163,8 +156,9 @@ function ProfileMenu() {
         <p className="hub-profile__label mono">Signed in</p>
         <p className="hub-profile__account mono">{user?.email ?? 'No email on session'}</p>
         <p className="hub-profile__note">
-          Roles and workspace membership are read from the engine, which is not deployed
-          yet. The interface never infers a role from the browser session.
+          {meta
+            ? `${meta.label} · ${meta.scope}. The engine, not this screen, decides what the account may read.`
+            : 'This account has no role in its verified claims, so no dashboard is opened for it.'}
         </p>
         <button
           type="button"
@@ -189,15 +183,25 @@ function AccountSheet({
   open,
   onClose,
   path,
+  nav,
+  role,
 }: {
   open: boolean
   onClose: () => void
   path: string
+  nav: RoleNav
+  role: keyof typeof ROLE_META | null
 }) {
   const { user, signOut } = useAuth()
   const router = useRouter()
   const panel = useRef<HTMLDivElement>(null)
   const name = displayName(user)
+  const meta = role ? ROLE_META[role] : null
+
+  // Every destination except the four one-tap tabs, in rail order.
+  const sheetNav = [...nav.primary, ...nav.secondary].filter(
+    (item) => !nav.tabs.some((tab) => tab.to === item.to),
+  )
 
   useEffect(() => {
     if (!open) return
@@ -229,12 +233,13 @@ function AccountSheet({
         </span>
         <span>
           <span className="hub-sheet__name">{name}</span>
-          <span className="hub-sheet__email mono">{user?.email ?? 'No email on session'}</span>
+          <span className="hub-sheet__email mono">{meta?.label ?? 'No role assigned'}</span>
         </span>
       </div>
 
       <nav className="hub-sheet__nav" aria-label="More sections">
-        {SHEET_NAV.map((item) => (
+        {meta ? <p className="hub-sheet__group mono">{meta.scope}</p> : null}
+        {sheetNav.map((item) => (
           <Link
             key={item.to}
             to={item.to}
@@ -274,7 +279,7 @@ function AccountSheet({
       </button>
 
       <p className="hub-sheet__note">
-        Roles and workspace membership come from the engine, which is not deployed yet.
+        Membership and permissions come from the engine, which is not deployed yet.
       </p>
     </div>
   )
@@ -285,29 +290,39 @@ function AccountSheet({
  *
  * Marketing pages do not use it. This is the chrome for every signed-in screen:
  * a rail with the workspace and account always visible on a wide screen, and a
- * bottom tab bar with an account sheet on a phone.
+ * bottom tab bar with an account sheet on a phone. The rail's destinations are
+ * supplied per account type, so the same shell reads as three different tools
+ * without introducing a second design language.
  *
- * A route supplies the page heading through `title`. The dashboard passes an
- * empty title because its greeting is the page's own `h1`.
+ * A route supplies the page heading through `title`. The dashboards pass an
+ * empty title because their greeting is the page's own `h1`.
  */
 export function AppShell({
   title,
   eyebrow,
   description,
   actions,
+  role,
   children,
 }: {
   title: string
   eyebrow: string
   description?: string
   actions?: ReactNode
+  /** The account type driving navigation; `null` renders the base rail. */
+  role: keyof typeof ROLE_META | null
   children: ReactNode
 }) {
   const path = useActivePath()
   const [sheetOpen, setSheetOpen] = useState(false)
   const { user } = useAuth()
   const { nav, y } = useNavMarker(path)
+  const { collapsed, toggle } = useRailCollapsed()
   const name = displayName(user)
+
+  const meta = role ? ROLE_META[role] : null
+  const layout = role ? NAV_BY_ROLE[role] : NAV_BY_ROLE.supervisor
+  const home: AppPath = meta ? meta.home : '/dashboard'
 
   // A navigation is a complete answer to the sheet, so it closes with the route.
   useEffect(() => {
@@ -315,18 +330,32 @@ export function AppShell({
   }, [path])
 
   return (
-    <div className="app">
+    <div className={collapsed ? 'app app--rail-collapsed' : 'app'} data-role={role ?? 'none'}>
       <a className="skip-link" href="#app-content">
         Skip to content
       </a>
 
       <aside className="app-sidebar" id="app-sidebar">
-        <Link to="/dashboard" className="hub-rail__brand" aria-label="Aetrix dashboard">
-          <Brand size={26} />
-        </Link>
+        <div className="hub-rail__head">
+          <Link to={home} className="hub-rail__brand" aria-label="Aetrix home">
+            <Brand size={26} />
+          </Link>
+          <button
+            type="button"
+            className="hub-rail__collapse"
+            aria-expanded={!collapsed}
+            aria-controls="app-sidebar"
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            onClick={toggle}
+          >
+            <Icon name="menu" size={15} />
+          </button>
+        </div>
 
         <div className="hub-workspace" aria-label="Workspace">
-          <p className="hub-workspace__label mono">Workspace</p>
+          <p className="hub-workspace__label mono">
+            {meta ? meta.label : 'Workspace'}
+          </p>
           <p className="hub-workspace__row">
             <span className="hub-workspace__name">Not connected</span>
             <span className="hub-chip" data-tone="wip">
@@ -334,7 +363,7 @@ export function AppShell({
             </span>
           </p>
           <p className="hub-workspace__note">
-            Membership comes from the engine API, which has no public deployment yet.
+            {meta ? meta.scope : 'Membership comes from the engine API, which has no public deployment yet.'}
           </p>
         </div>
 
@@ -343,12 +372,12 @@ export function AppShell({
             <span className="app-nav__marker" style={{ transform: `translateY(${y}px)` }} aria-hidden="true" />
           ) : null}
 
-          {PRIMARY_NAV.map((item) => (
+          {layout.primary.map((item) => (
             <NavLink key={item.to} item={item} path={path} />
           ))}
 
-          <p className="app-nav__group mono">Account</p>
-          {SECONDARY_NAV.map((item) => (
+          <p className="app-nav__group mono">{layout.groupLabel}</p>
+          {layout.secondary.map((item) => (
             <NavLink key={item.to} item={item} path={path} />
           ))}
         </nav>
@@ -358,7 +387,7 @@ export function AppShell({
             <Icon name="arrow" size={14} />
             <span>Marketing site</span>
           </Link>
-          <ProfileMenu />
+          <ProfileMenu role={role} />
         </div>
       </aside>
 
@@ -366,13 +395,14 @@ export function AppShell({
         <span className="app-ambient" aria-hidden="true" />
 
         <header className="app-topbar">
-          <Link to="/dashboard" className="app-topbar__brand" aria-label="Aetrix dashboard">
+          <Link to={home} className="app-topbar__brand" aria-label="Aetrix home">
             <Brand size={22} />
           </Link>
 
           <p className="app-topbar__crumb mono">{eyebrow}</p>
 
           <div className="app-topbar__actions">
+            {meta ? <span className="app-topbar__role mono">{meta.label}</span> : null}
             <span className="app-topbar__theme">
               <ThemeSwitch />
             </span>
@@ -407,7 +437,7 @@ export function AppShell({
         </main>
 
         <nav className="hub-tabs" aria-label="Workspace sections">
-          {TABS.map((item) => {
+          {layout.tabs.map((item) => {
             const active = isActive(path, item)
             return (
               <Link
@@ -434,7 +464,13 @@ export function AppShell({
           </button>
         </nav>
 
-        <AccountSheet open={sheetOpen} onClose={() => setSheetOpen(false)} path={path} />
+        <AccountSheet
+          open={sheetOpen}
+          onClose={() => setSheetOpen(false)}
+          path={path}
+          nav={layout}
+          role={role}
+        />
       </div>
     </div>
   )
@@ -444,7 +480,7 @@ export function AppShell({
  * The real loading state while the client reads the stored session. It shows the
  * shape of the workspace that is about to appear, and says what is happening.
  */
-export function HubBoot() {
+export function HubBoot({ label = 'Workspace' }: { label?: string }) {
   return (
     <div className="app app--boot" aria-busy="true" aria-live="polite">
       <div className="app-sidebar app-sidebar--skeleton" aria-hidden="true">
@@ -459,7 +495,7 @@ export function HubBoot() {
             <p className="hub-boot__date mono">Checking your session</p>
             <div className="hub-skel hub-skel--title" />
             <div className="hub-skel hub-skel--line" />
-            <p className="hub-boot__note">Verifying with Supabase.</p>
+            <p className="hub-boot__note">Verifying with Supabase · {label}</p>
           </div>
         </main>
       </div>
