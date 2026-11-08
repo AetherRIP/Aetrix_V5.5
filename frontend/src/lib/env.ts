@@ -6,9 +6,10 @@
  * project's authentication and row security policies. The service-role key is
  * never referenced in this bundle.
  *
- * `VITE_AETRIX_API_URL` is intentionally allowed to be absent. The correction
- * engine has no public HTTPS deployment yet, so the application renders an
- * explicit "work in progress" state instead of inventing an endpoint.
+ * `VITE_AETRIX_API_URL` is allowed to be absent. When it is absent the
+ * application renders an explicit "no data source" state instead of inventing
+ * an endpoint. When it is present it must be the engine's public HTTPS origin
+ * (compiled at build time, never a production localhost address).
  */
 
 type RawEnv = Record<string, string | undefined>
@@ -32,9 +33,9 @@ export const isSupabaseConfigured = Boolean(env.supabaseUrl && env.supabaseAnonK
 /** The engine API is optional until it is deployed. */
 export const isApiConfigured = Boolean(env.apiBaseUrl)
 
-/** Shown wherever a screen needs the engine and the engine is not deployed. */
+/** Shown wherever a screen needs an engine endpoint this build does not have. */
 export const API_UNAVAILABLE_REASON =
-  'The Aetrix correction API has no public HTTPS deployment yet, so this screen has no data source.'
+  'The correction engine does not expose this screen’s data yet, so there is nothing to show.'
 
 export const AUTH_UNAVAILABLE_REASON =
   'Supabase authentication is not configured for this build: VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY must be present at build time.'

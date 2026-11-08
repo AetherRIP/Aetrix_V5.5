@@ -32,7 +32,7 @@ function Dashboard() {
     <div className="hub-main">
       <HubHero
         name={firstName}
-        lede="Your workspace: its classes, assignments and marking load. Figures stay blank until the correction engine is deployed — nothing here is estimated."
+        lede="Your workspace: its classes, assignments and marking load. Figures stay blank until the engine exposes them — nothing here is estimated."
         actions={
           <>
             <Link to="/queue" className="btn btn--primary">

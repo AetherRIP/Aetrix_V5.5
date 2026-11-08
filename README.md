@@ -8,8 +8,9 @@ frozen correction benchmark, and the product/architecture record in one reposito
 
 > **Status: pre-release integration checkpoint.** The correction engine implements the
 > tenant, blueprint, job, provider, ingestion, mapping, extraction and override substrate.
-> Marking, verification, results, cohort intelligence and the authenticated workspace are
-> not implemented. The public marketing surface is the only frontend in this repository.
+> The frontend implements the marketing surface, Supabase sign-in, the role-scoped
+> dashboards and a live `/health` + `/ready` screen. Marking, verification, results and
+> cohort intelligence are not implemented, and most dashboard data has no engine endpoint.
 > No production-readiness, marking-accuracy or live-structured-output claim is made.
 
 ## Components
@@ -17,7 +18,7 @@ frozen correction benchmark, and the product/architecture record in one reposito
 | Path | What it is | Status |
 |---|---|---|
 | [`backend/`](backend/) | FastAPI correction engine, SQLAlchemy/Alembic schema, provider boundary, worker, tests | CP1–CP2 implemented |
-| [`frontend/`](frontend/) | TanStack Start/React public marketing and sign-in-status surface on Cloudflare Workers | Marketing surface only; authenticated app not built |
+| [`frontend/`](frontend/) | TanStack Start/React marketing surface and role-scoped dashboards on Cloudflare Pages | Marketing + role shell; one live engine screen |
 | [`benchmark/`](benchmark/) | Frozen A/B/C correction-strategy benchmark and teacher-certified holdout intake | 207 tests; holdout at zero certified papers |
 | [`docs/`](docs/) | Original product/architecture blueprint, audit and remediation set | Historical planning record |
 | [`docs/engine/`](docs/engine/) | Implemented-engine architecture, deployment, security and acceptance evidence | CP2 evidence; live Gemini UNVERIFIED |
@@ -37,9 +38,10 @@ Workflows. That set is preserved as history, not as the implemented data layer. 
 the conflict; the engine uses PostgreSQL/Supabase and the frontend has no D1/R2/Queue bindings.
 The authenticated app's hosting and identity decision remains a future integration point.
 
-The public frontend is a marketing surface only. It does not call the engine, store student data
-or claim that sign-in is enabled. The correction engine does not import frontend code or the
-benchmark.
+The frontend is a static TanStack Start build deployed to Cloudflare Pages. It signs in with
+Supabase and calls the engine only when `VITE_AETRIX_API_URL` was set at build time; today
+`/platform/health` is the one screen wired to a live engine endpoint. It stores no student
+data. The correction engine does not import frontend code or the benchmark.
 
 ## Local setup
 
@@ -82,6 +84,31 @@ but the database in `backend\.env` is not reachable. Both scripts keep a PID fil
 `backend\`; stopping verifies the process command line (`uvicorn app.main:app` on port 8000)
 before ending it, so unrelated Python services are untouched.
 
+### Local full stack with an HTTPS tunnel
+
+A deployed HTTPS page cannot call `http://127.0.0.1:8000`. `START_AETRIX.bat` starts the
+loopback backend, opens a free Cloudflare quick tunnel, waits for `/health`, verifies the
+public URL, and prints it:
+
+```bat
+START_AETRIX.bat   :: backend + tunnel; prints the public HTTPS origin
+STOP_AETRIX.bat    :: stops only the recorded tunnel and backend PIDs
+```
+
+The quick-tunnel hostname is new on every start, so after a restart put it in `frontend/.env`
+as `VITE_AETRIX_API_URL` (it is compiled into the bundle), rebuild and redeploy.
+`AETRIX_CORS_ORIGINS` must list the exact frontend origins
+(`https://aetrix.pages.dev,http://localhost:3000,http://127.0.0.1:3000`); a wildcard is
+refused in production and is never used for authenticated endpoints. A stable hostname
+needs a named tunnel bound to a Cloudflare-managed domain:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create aetrix
+cloudflared tunnel route dns aetrix api.example.com
+cloudflared tunnel run aetrix   # config points at http://127.0.0.1:8000
+```
+
 ### Frontend
 
 ```bash
@@ -92,9 +119,10 @@ npm run build
 npm run dev
 ```
 
-`npm run test:e2e` requires Playwright browsers. The marketing site has no backend calls and no
-secrets. Cloudflare deployment is not part of this checkpoint; `wrangler.jsonc` declares only
-the marketing Worker.
+`npm run test:e2e` requires Playwright browsers and a running preview. The browser bundle
+carries no service-role key, JWT secret or provider credential. Cloudflare Pages deployment is
+described in `.github/workflows/deploy-frontend.yml`; `wrangler.jsonc` only declares the
+frontend Worker.
 
 ### Benchmark
 
@@ -125,7 +153,9 @@ authorised provider key outside this repository; offline tests do not.
 ## Current limitations
 
 - No marking, SymPy verification, results, selective review or cohort-intelligence pipeline.
-- No authenticated workspace, workspace provisioning or D1/R2/Queue deployment.
+- No authenticated workspace data: the role shell exists, but the engine exposes no
+  workspaces, assignments, inbox, reports or gradebook endpoints, and no R2/D1/Queue
+  binding is declared.
 - The live Gemini structured-output path is `UNVERIFIED` after provider 403 responses.
 - The holdout has zero certified papers; no general marking-parity claim is possible.
 - The frontend build and browser tests depend on a local Node runtime; see the final report for

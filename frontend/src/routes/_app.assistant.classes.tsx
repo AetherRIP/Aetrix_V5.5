@@ -33,7 +33,7 @@ function AssistantClasses() {
       <StatePanel
         tone="wip"
         title="Class assignment is not implemented"
-        capability="engine: workspace membership (not deployed)"
+        capability="engine: workspace membership (not exposed yet)"
       >
         <p>
           The engine has no membership table and no route that returns “classes assigned to

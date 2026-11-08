@@ -54,7 +54,7 @@ function AssistantOverview() {
             <EmptyTable
               columns={['Submission', 'Class', 'Assignment', 'Assigned', 'Due']}
               caption="Submissions assigned to this assistant"
-              note="No rows — assignments come from the engine, which is not deployed."
+              note="No rows — assignments come from the engine, which does not expose them yet."
             />
           </Panel>
 

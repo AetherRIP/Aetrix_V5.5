@@ -130,8 +130,13 @@ test.describe('platform administrator', () => {
   test('states the fleet data gap rather than showing figures', async ({ context }) => {
     const page = await open(context, '/platform/gemini', { role: 'platform_operator' })
 
-    // No engine deployment: the screen names that, and renders no quota figure.
-    await expect(page.getByText('no public HTTPS deployment yet').first()).toBeVisible()
+    // Whether the build has no engine origin or the engine rejects the seeded
+    // token, the screen names the gap and renders no quota figure.
+    await expect(
+      page
+        .getByText(/no public HTTPS deployment yet|The engine rejected the request \(401\)/)
+        .first(),
+    ).toBeVisible()
     for (const label of ['API keys', 'Contributors', 'Projects', 'Usage', 'Alerts']) {
       await page.getByRole('tab', { name: label }).click()
       await expect(page.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')

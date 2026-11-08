@@ -79,6 +79,9 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          # Optional public engine origin. When set, the health screen calls it;
+          # when absent, every engine-backed screen renders its no-data state.
+          VITE_AETRIX_API_URL: ${{ vars.VITE_AETRIX_API_URL }}
         run: npm run build
 
       - name: Deploy to the existing `aetrix` Pages project

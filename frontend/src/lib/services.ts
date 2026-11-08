@@ -13,8 +13,31 @@ export type ServiceOptions = { token?: string | null }
 /**
  * Feature services. Each one is a thin, typed boundary over the engine API so
  * that screens depend on a contract rather than on `fetch`, a URL or Supabase.
- * Every call currently resolves to `unavailable` while the engine is undeployed.
+ * A call resolves to `unavailable` when the build has no `VITE_AETRIX_API_URL`;
+ * no screen falls back to invented data.
  */
+
+/** `GET /health` — liveness only; it answers with the database down. */
+export type EngineHealth = {
+  status: string
+  service: string
+  version: string
+}
+
+/** `GET /ready` — executes a real query before claiming readiness. */
+export type EngineReadiness = {
+  status: string
+  database: string
+  detail: string | null
+}
+
+export const healthService = {
+  live: (options?: ServiceOptions): Promise<ApiResult<EngineHealth>> =>
+    apiGet<EngineHealth>('/health', options),
+
+  ready: (options?: ServiceOptions): Promise<ApiResult<EngineReadiness>> =>
+    apiGet<EngineReadiness>('/ready', options),
+}
 export const workspaceService = {
   list: (options?: ServiceOptions): Promise<ApiResult<Workspace[]>> =>
     apiGet<Workspace[]>('/api/v1/workspaces', options),

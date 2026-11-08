@@ -279,7 +279,7 @@ function AccountSheet({
       </button>
 
       <p className="hub-sheet__note">
-        Membership and permissions come from the engine, which is not deployed yet.
+        Membership and permissions come from the engine, which does not expose this screen’s data yet.
       </p>
     </div>
   )

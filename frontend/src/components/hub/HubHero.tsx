@@ -39,7 +39,7 @@ export function HubHero({
         </h1>
         <p className="hub-hero__lede">
           {lede ??
-            'Your session is verified with Supabase. Marking figures stay blank until the correction engine is deployed — nothing on this screen is estimated.'}
+            'Your session is verified with Supabase. Marking figures stay blank until the engine exposes them — nothing on this screen is estimated.'}
         </p>
       </div>
 

@@ -46,7 +46,7 @@ function Queue() {
             <tbody>
               <tr>
                 <td colSpan={COLUMNS.length} className="data-table__empty">
-                  No rows — the API is not deployed, so no job data exists to display.
+                  No rows — the engine does not expose job data yet, so there is nothing to display.
                 </td>
               </tr>
             </tbody>
