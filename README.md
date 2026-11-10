@@ -90,7 +90,7 @@ The benchmark is frozen and never imported by production code.
 | Exams, blueprints and schemes | Implemented | Drafting, approval, immutable versions and overrides |
 | Assignments, submissions and documents | Implemented | Registration, PDF ingestion, validation, page mapping and local storage |
 | Correction jobs and worker | Implemented | Idempotency, leases, attempts, cancellation, retry policy and typed failure states |
-| Marking pipeline and results | Tested, live provider unverified | Strict structured output, SymPy verification, question results and evidence; no live Gemini generation claim |
+| Marking pipeline and results | Tested, live marking unverified | Strict structured output, SymPy verification, question results and evidence; provider reachability is not an accuracy claim |
 | Human review and approval | Implemented and integration-tested | Reviewer decisions, reasoned overrides, approval gate and audit |
 | Roster, classes and CSV import | Implemented | Tenant-owned roster with row-level import diagnostics |
 | Workspace data surfaces | Implemented | Dashboard, assignments, submissions, queue, gradebook, inbox, reports and history |
@@ -219,8 +219,9 @@ accuracy claim until the holdout contains independently certified papers.
 
 ## Limits
 
-- **Live marking is unverified.** No funded Gemini response has been certified, and the
-  benchmark holdout has zero certified papers.
+- **Live marking is unverified.** Provider reachability has been observed with registered
+  keys, but no live marking result has been certified and the benchmark holdout has zero
+  certified papers.
 - **Google OAuth is not fully configured.** The Supabase Google provider must use the
   matching client before an interactive consent round trip can be called complete.
 - **The demo backend is a workstation process.** It is not a 24/7 production service.
