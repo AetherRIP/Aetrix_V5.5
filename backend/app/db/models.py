@@ -729,6 +729,11 @@ class ProviderUsage(UUIDPrimaryKey, Base):
         Index("ix_provider_usage_project_created", "project_id", "created_at"),
         Index("ix_provider_usage_model_created", "model", "created_at"),
         Index("ix_provider_usage_contributor_created", "contributor_id", "created_at"),
+        Index(
+            "ix_provider_usage_failure_created",
+            "created_at",
+            postgresql_where=text("success = false"),
+        ),
     )
 
     contributor_id: Mapped[uuid.UUID | None] = mapped_column(
