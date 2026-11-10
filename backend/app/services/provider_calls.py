@@ -83,6 +83,7 @@ class CredentialPool:
         self.settings = settings
         self.credentials = CredentialRepository(session)
         self.reservations = QuotaReservationRepository(session)
+        self.usage = UsageRepository(session)
         if settings.security.encryption_key is None:
             raise AppError(
                 ErrorCode.CONFIGURATION_ERROR,

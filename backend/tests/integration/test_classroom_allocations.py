@@ -311,7 +311,9 @@ def test_a_workspace_owner_cannot_administer_allocations(
 ):
     headers = _owner_headers(identity)
     recorded = _register(client, headers)
-    workspace_owner = _headers(identity.user_a)
+    # A workspace owner has no platform claim; only the JWT claim grants
+    # platform administration, never the engine's workspace OWNER row.
+    workspace_owner = _headers(identity.user_a, "")
     teacher = _headers(identity.user_a, "supervisor")
 
     for user_headers in (workspace_owner, teacher):

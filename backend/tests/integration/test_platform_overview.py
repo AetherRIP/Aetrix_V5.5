@@ -160,7 +160,15 @@ def test_anonymous_is_refused(client: TestClient):
     assert response.status_code == 401
 
 
-def test_empty_platform_reports_real_zeros(client: TestClient, identity):
+def test_empty_platform_reports_real_zeros(
+    client: TestClient, identity, db_session
+):
+    # The identity fixture necessarily creates two active workspaces. Close
+    # them so this test measures the empty active, non-demo workspace set,
+    # rather than accidentally asserting against fixture rows.
+    identity.tenant_a.is_active = False
+    identity.tenant_b.is_active = False
+    db_session.commit()
     _unconfigured(client)
     try:
         response = client.get(
