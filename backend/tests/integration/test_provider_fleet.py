@@ -537,7 +537,9 @@ def test_validation_transient_failure_is_not_reported_as_invalid(
     result = provider_fleet.validate_credential(
         db_session,
         settings,
-        FakeProvider(error=ProviderTransientError("connect timed out")),
+        FakeProvider(
+            error=ProviderTransientError("connect timed out", reached_provider=False)
+        ),
         credential,
     )
 

@@ -410,7 +410,7 @@ class ProviderCallService:
                 cooldown_seconds = (
                     int(error.retry_after_seconds)
                     if is_quota and error.retry_after_seconds
-                    else None
+                    else self.settings.quota.cooldown_seconds if is_quota else None
                 )
                 # Only a 401 proves the credential invalid.  Permission, quota,
                 # network and provider failures say nothing about validity.

@@ -500,6 +500,7 @@ def validate_credential(
     credential.last_success_at = now
     credential.last_validated_at = now
     credential.cooldown_until = None
+    credential.last_error = None
     usage.record(
         tenant_id=credential.tenant_id,
         credential_id=credential.id,
