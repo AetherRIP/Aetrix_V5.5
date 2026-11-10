@@ -41,6 +41,20 @@ jobs:
       - name: Install the engine
         run: pip install -e "backend[dev]"
 
+      - name: Create the disposable Supabase Data API roles
+        run: |
+          python - <<'PY'
+          import os
+
+          import psycopg
+
+          dsn = os.environ["AETRIX_TEST_DATABASE_URL"].replace("+psycopg", "")
+          with psycopg.connect(dsn, autocommit=True) as connection:
+              connection.execute("CREATE ROLE anon NOLOGIN")
+              connection.execute("CREATE ROLE authenticated NOLOGIN")
+              connection.execute("CREATE ROLE service_role NOLOGIN BYPASSRLS")
+          PY
+
       - name: Ruff
         working-directory: backend
         run: python -m ruff check app tests migrations
