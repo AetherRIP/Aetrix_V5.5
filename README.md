@@ -111,7 +111,7 @@ has been exercised against a live provider.
 | Engine unit suite | `cd backend && .venv/Scripts/python.exe -m pytest tests/unit -q` | **237 passed** |
 | Frontend typecheck | `cd frontend && ../.tools/node/node.exe node_modules/typescript/bin/tsc --noEmit` | **exit 0** |
 | Production build | `cd frontend && ../.tools/node/node.exe node_modules/vite/bin/vite.js build` | **exit 0** |
-| Account browser tests | Playwright `tests/accounts.spec.ts` against a production preview | **8 passed** |
+| Account browser tests | Playwright `tests/accounts.spec.ts` against a production preview and the deployed Pages build | **8 passed in both runs** |
 | Full browser suite | Playwright against a production preview | **205 passed, 2 skipped** |
 | Live engine probes | `GET /health`, `GET /ready` | **200, 200** |
 
