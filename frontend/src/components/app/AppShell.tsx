@@ -279,7 +279,7 @@ function AccountSheet({
       </button>
 
       <p className="hub-sheet__note">
-        Membership and permissions come from the engine, which does not expose this screen’s data yet.
+        Membership and permissions are resolved by the engine for the signed-in account.
       </p>
     </div>
   )
@@ -357,13 +357,12 @@ export function AppShell({
             {meta ? meta.label : 'Workspace'}
           </p>
           <p className="hub-workspace__row">
-            <span className="hub-workspace__name">Not connected</span>
-            <span className="hub-chip" data-tone="wip">
-              WIP
-            </span>
+            <span className="hub-workspace__name">Signed-in workspace</span>
           </p>
           <p className="hub-workspace__note">
-            {meta ? meta.scope : 'Membership comes from the engine API, which has no public deployment yet.'}
+            {meta
+              ? meta.scope
+              : 'The engine resolves membership and permissions for the verified session.'}
           </p>
         </div>
 

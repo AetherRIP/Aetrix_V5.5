@@ -650,6 +650,71 @@
   letter-spacing: -0.02em;
 }
 
+/* platform overview figures: each metric states its own definition and state */
+
+.platform-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 14px;
+}
+
+.platform-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.platform-metric__label {
+  color: var(--text-3);
+  font-size: 0.75rem;
+  letter-spacing: 0.005em;
+}
+
+.platform-metric__value {
+  color: var(--text);
+  font-size: clamp(1.75rem, 2.6vw, 2.125rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.platform-metric__value--text {
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.platform-metric__state {
+  color: var(--text-3);
+  font-size: 0.6875rem;
+}
+
+.platform-metric__definition {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.6875rem;
+  line-height: 1.55;
+}
+
+.platform-overview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+.platform-overview__stamp {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
 /* editorial grid */
 
 .hub-grid {
@@ -2429,6 +2494,12 @@ a.hub-action--primary:hover > svg {
   }
 }
 
+.data-table__strong {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+}
+
 .gem-notice {
   margin: 0;
   padding: 10px 14px;
@@ -2802,5 +2873,1146 @@ a.hub-action--primary:hover > svg {
   .gem-panel,
   .gem-chart__bar {
     animation: none;
+  }
+}
+
+/* Google Cloud quota observations — a table, not a chart: every cell carries a
+ * source and an observation time, and unavailable values stay words. */
+.gem-quota-scroll {
+  margin-top: var(--s-3);
+  overflow-x: auto;
+}
+
+.gem-quota-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.gem-quota-table th {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.gem-quota-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text-2);
+  vertical-align: top;
+}
+
+.gem-quota-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.gem-quota-table__name {
+  display: block;
+  color: var(--text);
+}
+
+.gem-quota-table__source {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 0.625rem;
+}
+
+.gem-quota-table__number {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.gem-quota-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: var(--s-4) 0 0;
+  padding: 0;
+  list-style: none;
+  background: var(--line-soft);
+}
+
+.gem-quota-runs__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: 9px 12px;
+  background: var(--bg);
+  font-size: 0.6875rem;
+  color: var(--text-3);
+}
+
+.gem-credential {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  margin-top: var(--s-3);
+}
+
+/* Queue dialogs — the detail record and the destructive confirmation. A modal
+ * keeps the evidence in front of the reviewer instead of below the table, and
+ * the focus trap makes Escape and Tab behave like a real dialog. */
+.app-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: clamp(16px, 4vw, 48px);
+  background: color-mix(in srgb, var(--text) 55%, transparent);
+}
+
+.app-modal--confirm {
+  align-items: center;
+}
+
+.app-modal__panel {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: var(--s-5);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  box-shadow: var(--shadow-2);
+}
+
+.app-modal--confirm .app-modal__panel {
+  width: min(560px, 100%);
+  padding: var(--s-5);
+}
+
+.app-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.app-modal__kicker {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.app-modal__title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.app-modal__subtitle {
+  margin: 4px 0 0;
+  font-size: 0.6875rem;
+  color: var(--text-3);
+}
+
+.app-modal__body {
+  margin-top: var(--s-4);
+}
+
+.app-modal__section {
+  margin-top: var(--s-5);
+}
+
+.app-modal__section-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.app-modal__actions {
+  margin-top: var(--s-5);
+}
+
+.app-definitions--detail {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--s-5);
+}
+
+.app-definitions--detail > div {
+  min-width: 0;
+}
+
+.app-detail-muted {
+  color: var(--text-3);
+  font-size: 0.75rem;
+}
+
+.app-reasons {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.app-action-note {
+  display: block;
+  max-width: 230px;
+  margin-top: 6px;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.app-message[data-tone='error'] {
+  border-left-color: var(--text);
+}
+
+@media (max-width: 700px) {
+  .app-definitions--detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-modal {
+    padding: 12px;
+  }
+
+  .app-modal__panel,
+  .app-modal--confirm .app-modal__panel {
+    padding: var(--s-4);
+  }
+}
+
+/* ── Account detail record ───────────────────────────────────────────────── */
+
+/*
+ * The detail surface is a record sheet rather than another dashboard card.
+ * Identity and status establish the subject; fixed dates sit in one compact
+ * line; the long account id gets its own row so it can never distort the
+ * facts grid. The administration rail is deliberately quieter than the
+ * record itself and keeps destructive controls below the reversible ones.
+ */
+
+.account-detail {
+  position: relative;
+  padding: clamp(20px, 3vw, 32px);
+  overflow: hidden;
+  scroll-margin-top: 88px;
+  animation: account-detail-in 200ms var(--ease-out) both;
+}
+
+.account-detail::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line-strong), transparent 72%);
+}
+
+.account-detail__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.account-detail__identity {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-detail__eyebrow {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.account-detail__title {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(1.25rem, 2vw, 1.6rem);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.account-detail__email {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.account-detail__head-actions {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+
+.account-detail__badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.account-detail__close {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.account-detail__close:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  transform: rotate(90deg);
+}
+
+.account-detail__close:active {
+  transform: rotate(90deg) scale(0.94);
+}
+
+.account-detail__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: var(--s-5);
+  border-block: 1px solid var(--line-soft);
+  background: var(--line-soft);
+}
+
+.account-detail__fact {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 13px 16px;
+  background: var(--bg);
+}
+
+.account-detail__fact span,
+.account-detail__id span,
+.account-detail__fact small {
+  color: var(--text-3);
+  font-size: 0.625rem;
+  line-height: 1.4;
+}
+
+.account-detail__fact strong {
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.account-detail__id {
+  display: grid;
+  gap: 4px;
+  margin-top: var(--s-3);
+  padding: 12px 16px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface-2);
+}
+
+.account-detail__id code {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.account-detail__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  align-items: start;
+  gap: clamp(24px, 4vw, 48px);
+  margin-top: var(--s-5);
+}
+
+.account-detail__main {
+  display: grid;
+  min-width: 0;
+  gap: var(--s-5);
+}
+
+.account-detail__section {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.account-detail__section + .account-detail__section {
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--line-soft);
+}
+
+.account-detail__section .gem-add__title,
+.account-detail__side > .gem-add__title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.account-detail__main .gem-projects,
+.account-detail__main .gem-alerts {
+  margin-top: 0;
+}
+
+.account-detail__side {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+  padding: var(--s-4);
+  border: 1px solid var(--line-soft);
+  background: var(--surface-2);
+}
+
+.account-detail__side .panel-copy {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.account-detail__form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: var(--s-3);
+  margin: 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.account-detail__form .gem-field,
+.account-detail__form .gem-field--wide {
+  grid-column: auto;
+  min-width: 0;
+}
+
+.account-detail__form .gem-field input,
+.account-detail__form .gem-field select {
+  width: 100%;
+}
+
+.account-detail__form .btn {
+  justify-self: start;
+}
+
+.account-detail__side .gem-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.account-detail__side .gem-actions .btn {
+  justify-self: start;
+}
+
+.account-detail__side .gem-footnote {
+  margin: 0;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
+.account-detail__side .gem-footnote code {
+  font-size: 0.6875rem;
+}
+
+.account-detail__action-label {
+  color: var(--text-3);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.account-detail__danger-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.account-detail__side .gem-projects {
+  margin-top: var(--s-2);
+}
+
+.account-detail__footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--s-5);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line-soft);
+}
+
+.account-table tbody tr[data-selected='true'] {
+  background: var(--surface-2);
+}
+
+.account-table tbody tr {
+  transition: background-color var(--dur) var(--ease);
+}
+
+@keyframes account-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .account-detail__body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-5);
+  }
+
+  .account-detail__side {
+    padding-top: var(--s-4);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .account-detail {
+    padding: var(--s-4);
+  }
+
+  .account-detail__head {
+    flex-wrap: wrap;
+  }
+
+  .account-detail__head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .account-detail__badges {
+    justify-content: flex-start;
+  }
+
+  .account-detail__facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-detail__fact strong {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-detail {
+    animation: none !important;
+  }
+
+  .account-detail__close,
+  .account-table tbody tr {
+    transition: none !important;
+  }
+
+  .account-detail__close:hover,
+  .account-detail__close:active {
+    transform: none;
+  }
+}
+
+/* ── Account directory: one ledger surface ──────────────────────────────── */
+
+.account-page {
+  --account-motion: 160ms;
+}
+
+.account-page .account-directory {
+  min-width: 0;
+}
+
+.account-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-5);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.account-page-head__copy {
+  min-width: 0;
+  max-width: 68ch;
+}
+
+.account-page-head__title {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.account-page-head__lede {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.account-page-head__lede code {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.account-page-head__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+.account-page-head__chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.account-page-head .btn,
+.account-filters .btn,
+.account-pager .btn,
+.account-table .btn {
+  transition:
+    background-color var(--account-motion) var(--ease),
+    border-color var(--account-motion) var(--ease),
+    color var(--account-motion) var(--ease),
+    transform var(--account-motion) var(--ease);
+}
+
+.account-page-head .btn:focus-visible,
+.account-filters .btn:focus-visible,
+.account-pager .btn:focus-visible,
+.account-table .btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.account-pager .btn:disabled,
+.account-page-head .btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+  transform: none;
+}
+
+.account-pager .btn:disabled::after,
+.account-page-head .btn:disabled::after {
+  display: none;
+}
+
+.account-filters .btn:active,
+.account-pager .btn:active,
+.account-table .btn:active {
+  transform: translateY(1px);
+}
+
+/* the facts above the table read as a compact ledger, not a tile grid */
+
+.account-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: var(--s-4);
+  border-block: 1px solid var(--line-soft);
+  background: var(--line-soft);
+}
+
+.account-summary__fact {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-width: 0;
+  padding: 11px 14px;
+  background: var(--bg);
+}
+
+.account-summary__label,
+.account-summary__note {
+  color: var(--text-3);
+  font-size: 0.625rem;
+  line-height: 1.4;
+}
+
+.account-summary__value {
+  color: var(--text);
+  font-size: 1.125rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+/* filter row: one control height, one focus treatment */
+
+.account-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) repeat(3, minmax(118px, 0.72fr)) auto;
+  align-items: end;
+  gap: 10px;
+  width: 100%;
+  margin-top: var(--s-4);
+}
+
+.account-filters .gem-field {
+  min-width: 0;
+  gap: 5px;
+}
+
+.account-filters .gem-field span {
+  color: var(--text-3);
+  font-size: 0.625rem;
+  line-height: 1.4;
+}
+
+.account-filters .gem-field input,
+.account-filters .gem-field select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-color: var(--line);
+  font-size: 0.8125rem;
+  transition:
+    border-color var(--account-motion) var(--ease),
+    background-color var(--account-motion) var(--ease);
+}
+
+.account-filters .gem-field input:hover,
+.account-filters .gem-field select:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+}
+
+.account-filters .gem-field input:focus-visible,
+.account-filters .gem-field select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.account-filters__submit {
+  min-height: 38px;
+  padding-inline: 18px;
+  align-self: end;
+  font-size: 0.8125rem;
+}
+
+/* table surface */
+
+.account-table-scroll {
+  position: relative;
+  max-height: min(58vh, 580px);
+  margin-top: var(--s-4);
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  scrollbar-gutter: stable;
+}
+
+.account-table {
+  min-width: 980px;
+  table-layout: fixed;
+}
+
+.account-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.account-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-table th:nth-child(1) {
+  width: 24%;
+}
+
+.account-table th:nth-child(2) {
+  width: 21%;
+}
+
+.account-table th:nth-child(3) {
+  width: 12%;
+}
+
+.account-table th:nth-child(4) {
+  width: 11%;
+}
+
+.account-table th:nth-child(5) {
+  width: 9%;
+}
+
+.account-table th:nth-child(6) {
+  width: 13%;
+}
+
+.account-table th:nth-child(7) {
+  width: 10%;
+}
+
+.account-table th:last-child,
+.account-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: inset 1px 0 0 var(--line-soft);
+  text-align: right;
+}
+
+.account-table th:last-child {
+  z-index: 3;
+  background: var(--surface-2);
+}
+
+.account-table tbody tr:hover:not([data-selected='true']) td:last-child {
+  background: var(--surface-2);
+}
+
+.account-table tbody tr[data-selected='true'] td:last-child {
+  background: var(--surface-3);
+}
+
+.account-table td:last-child {
+  overflow: visible;
+}
+
+.account-table .gem-key__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-table .gem-key__fp {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-table tbody tr {
+  transition:
+    background-color var(--account-motion) var(--ease),
+    color var(--account-motion) var(--ease);
+}
+
+.account-table tbody tr:hover:not([data-selected='true']) {
+  background: var(--surface-2);
+}
+
+.account-table tbody tr[data-selected='true'] {
+  background: var(--surface-3);
+  box-shadow: inset 2px 0 0 var(--text);
+}
+
+.account-table tbody tr[data-selected='true'] td {
+  color: var(--text);
+}
+
+.account-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.account-table__email {
+  color: var(--text-2);
+}
+
+.account-table__count {
+  color: var(--text);
+}
+
+.account-table__action {
+  min-height: 30px;
+  padding-inline: 10px;
+  font-size: 0.75rem;
+}
+
+/* pager follows the table as one rule, not a second toolbar */
+
+.account-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.account-pager__status {
+  color: var(--text-3);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-pager__actions {
+  display: flex;
+  gap: var(--s-2);
+}
+
+/* empty and loading states stay inside the directory surface */
+
+.account-table-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  margin-top: var(--s-4);
+  padding: clamp(18px, 3vw, 28px);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+}
+
+.account-table-empty__glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--text-2);
+}
+
+.account-table-empty__copy {
+  min-width: 0;
+}
+
+.account-table-empty__title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.account-table-empty__note {
+  max-width: 58ch;
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.account-table-loading {
+  margin-top: var(--s-4);
+  padding: var(--s-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+}
+
+.account-table-loading__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.account-table-loading__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.account-table-loading__label {
+  color: var(--text-3);
+  font-size: 0.75rem;
+}
+
+.account-table-loading__rows {
+  display: grid;
+  gap: 1px;
+  margin-top: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.account-table-loading__row {
+  display: grid;
+  grid-template-columns: 1.55fr 1fr 0.55fr 0.4fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.account-table-loading .hub-skel {
+  display: block;
+  width: 100%;
+  height: 11px;
+  background: var(--surface-3);
+}
+
+/* the shared error panel becomes a quiet inside-table state here */
+
+.account-table-error {
+  margin-top: var(--s-4);
+}
+
+.account-table-error .state-panel {
+  padding: var(--s-4);
+  border-style: solid;
+  background: var(--surface-2);
+}
+
+.account-page .gem-notice {
+  border-left: 2px solid var(--line-strong);
+}
+
+.account-page .gem-notice[data-tone='error'] {
+  border-left-color: var(--text);
+  background: var(--surface-2);
+}
+
+@media (max-width: 900px) {
+  .account-page-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--s-4);
+  }
+
+  .account-page-head__actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .account-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-filters__search {
+    grid-column: 1 / -1;
+  }
+
+  .account-filters__submit {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 620px) {
+  .account-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-filters__search {
+    grid-column: auto;
+  }
+
+  .account-filters__submit {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .account-pager {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .account-pager__actions {
+    width: 100%;
+  }
+
+  .account-pager__actions .btn {
+    flex: 1;
+  }
+
+  .account-table-empty {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-page-head .btn,
+  .account-filters .btn,
+  .account-filters .gem-field input,
+  .account-filters .gem-field select,
+  .account-pager .btn,
+  .account-table .btn,
+  .account-table tbody tr {
+    transition: none !important;
+  }
+
+  .account-table .btn:active,
+  .account-filters .btn:active,
+  .account-pager .btn:active {
+    transform: none;
+  }
+
+  .account-table-loading .hub-skel::after {
+    animation: none !important;
   }
 }

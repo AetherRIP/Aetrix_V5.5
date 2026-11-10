@@ -156,7 +156,13 @@ function SignIn() {
 
           <details className="auth__alt">
             <summary>Use an email and password instead</summary>
-            <form className="auth__form" onSubmit={submitPassword} noValidate>
+            <form
+              className="auth__form"
+              onSubmit={submitPassword}
+              method="post"
+              action="/sign-in"
+              noValidate
+            >
               <label className="auth__field">
                 <span>Email address</span>
                 <input
@@ -236,8 +242,8 @@ function SignIn() {
             <div>
               <dt>Workspace provisioning</dt>
               <dd>
-                <span className="auth__dot" data-tone="wip" aria-hidden="true" />
-                Work in progress
+                <span className="auth__dot" aria-hidden="true" />
+                Invitation required
               </dd>
             </div>
             <div>

@@ -1,38 +1,142 @@
-import type { CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { StatePanel } from '../components/app/StatePanel'
-import { CapabilityList, Panel, StatsStrip } from '../components/app/PageBlocks'
+import { SystemStatusGrid } from '../components/app/SystemStatus'
+import { CapabilityList, Panel } from '../components/app/PageBlocks'
+import { useSystemStatus } from '../lib/api/useSystemStatus'
 import { HubHero } from '../components/hub/HubHero'
 import { HubSection } from '../components/hub/HubSection'
 import { Icon } from '../components/ui/Icons'
 import { displayName, useAuth } from '../lib/auth/AuthProvider'
+import {
+  consumePlatformOverviewStale,
+  platformOverview,
+  subscribePlatformOverviewChanged,
+  type OverviewMetric,
+  type PlatformOverview,
+} from '../lib/api/overview'
 
 export const Route = createFileRoute('/_app/platform/')({
-  component: PlatformOverview,
+  component: PlatformOverviewPage,
 })
 
+type Read =
+  | { state: 'loading' }
+  | { state: 'ok'; data: PlatformOverview }
+  | { state: 'unavailable'; reason: string }
+  | { state: 'error'; reason: string; code?: number }
+
+const PLACEHOLDER_LABELS = [
+  'Teacher workspaces',
+  'Teachers',
+  'Assistant accounts',
+  'Active class allocations',
+] as const
+
+function stamp(value: string | null): string {
+  if (!value) return 'not recorded'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return 'not recorded'
+  return parsed.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function metricText(metric: OverviewMetric): string {
+  if (metric.state === 'unavailable') return 'Unavailable'
+  return String(metric.value ?? 0)
+}
+
+function metricStateLabel(metric: OverviewMetric): string {
+  if (metric.state === 'unavailable') return 'Data unavailable'
+  if (metric.state === 'no_records') return 'No records'
+  return `Measured · ${metric.source}`
+}
+
 /**
- * The operator dashboard. It is deliberately a different instrument from the
- * academic ones: no classes, no students, no marks — workspaces, accounts,
- * allocation and service state.
+ * The operator dashboard. It reads one aggregate endpoint; the figures are
+ * counts, never rows, and each one states what it counts. Account and workspace
+ * mutations announce a data-change event, which refreshes this view immediately
+ * and bypasses the engine's census cache; the Refresh control does the same.
  */
-function PlatformOverview() {
-  const { user } = useAuth()
+function PlatformOverviewPage() {
+  const { user, session } = useAuth()
+  const [status, , checkedAt] = useSystemStatus()
+  const token = session?.access_token ?? null
   const firstName = displayName(user).split(/\s+/)[0]
+
+  const [state, setState] = useState<Read>({ state: 'loading' })
+  const [tick, setTick] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const forceNext = useRef(false)
+  const silentNext = useRef(false)
+
+  useEffect(() => {
+    if (!token) {
+      setState({ state: 'unavailable', reason: 'Sign in to read platform figures.' })
+      return
+    }
+    const pendingForce = forceNext.current
+    const silent = silentNext.current
+    forceNext.current = false
+    silentNext.current = false
+    const force = pendingForce || consumePlatformOverviewStale()
+    const controller = new AbortController()
+    let live = true
+    if (force) setRefreshing(true)
+    if (!silent && !force) setState({ state: 'loading' })
+
+    void platformOverview(force, { token, signal: controller.signal }).then((result) => {
+      if (!live) return
+      if (result.status === 'ok') setState({ state: 'ok', data: result.data })
+      else if (result.status === 'unavailable') {
+        setState({ state: 'unavailable', reason: result.reason })
+      } else {
+        setState({ state: 'error', reason: result.reason, code: result.code })
+      }
+    }).finally(() => {
+      if (live) setRefreshing(false)
+    })
+
+    return () => {
+      live = false
+      controller.abort()
+    }
+  }, [token, tick])
+
+  const reload = useCallback((force: boolean, silent = false) => {
+    forceNext.current = force
+    silentNext.current = silent
+    setTick((value) => value + 1)
+  }, [])
+
+  useEffect(
+    () => subscribePlatformOverviewChanged(() => reload(true, true)),
+    [reload],
+  )
+
+  const note =
+    state.state === 'ok'
+      ? `Read ${stamp(state.data.generated_at)}`
+      : 'Read from the engine'
 
   return (
     <div className="hub-main">
       <HubHero
         name={firstName}
-        lede="Platform-level view. Workspaces, accounts and service state are read from the engine; allocation is the operator’s job, not the teacher’s."
+        lede="Platform-level view. Workspace, account and allocation figures are read from the engine; allocation itself remains an operator action."
         actions={
           <>
             <Link to="/platform/workspaces" className="btn btn--primary">
-              Workspaces
+              Workspace allocation
               <Icon name="arrow" size={16} />
             </Link>
             <Link to="/platform/users" className="btn btn--outline">
-              Accounts
+              Account management
             </Link>
           </>
         }
@@ -41,18 +145,21 @@ function PlatformOverview() {
       <HubSection
         id="platform-figures"
         title="Platform overview"
-        note="Awaits the engine API"
+        note={note}
         index={1}
         className="hub-section--stats"
+        action={
+          <button
+            type="button"
+            className="btn btn--outline"
+            onClick={() => reload(true)}
+            disabled={refreshing || state.state === 'loading'}
+          >
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        }
       >
-        <StatsStrip
-          metrics={[
-            { label: 'Teacher workspaces' },
-            { label: 'Teachers' },
-            { label: 'Assistant accounts' },
-            { label: 'Active class allocations' },
-          ]}
-        />
+        <PlatformFigures state={state} onRetry={() => reload(true)} />
       </HubSection>
 
       <div className="hub-grid">
@@ -62,14 +169,16 @@ function PlatformOverview() {
               items={[
                 {
                   label: 'Allocate a Google Classroom class',
-                  detail: 'Operator-only action; a class holds one active allocation.',
-                  state: 'pending',
+                  detail:
+                    'Operator-only action; one active allocation per class. Courses come from an operator record or a workspace’s Classroom sync; operator-recorded courses stay unverified until Google lists them.',
+                  state: 'available',
                   icon: 'classroom',
                 },
                 {
                   label: 'Reassign an allocation',
-                  detail: 'Requires the previous workspace to release the class first.',
-                  state: 'pending',
+                  detail:
+                    'Releases the current allocation and creates the new one in one transaction.',
+                  state: 'available',
                   icon: 'pulse',
                 },
                 {
@@ -116,13 +225,15 @@ function PlatformOverview() {
         </div>
 
         <aside className="hub-col hub-col--aside" aria-label="Service context">
-          <Panel title="Service status" index={4} note="Not reported yet">
-            <CapabilityList
-              items={[
-                { label: 'API', detail: 'No public deployment.', state: 'pending', icon: 'server' },
-                { label: 'Worker', detail: 'Leases jobs; pipeline parks them.', state: 'pending', icon: 'pulse' },
-                { label: 'Database', detail: 'PostgreSQL; RLS guard passes in CI.', state: 'pending', icon: 'records' },
-              ]}
+          <Panel
+            title="Service status"
+            index={4}
+            note={status.state === 'ok' ? 'Read from /status' : 'Reading /status'}
+          >
+            <SystemStatusGrid
+              value={status}
+              checkedAt={checkedAt}
+              only={['api', 'database', 'worker']}
             />
           </Panel>
 
@@ -139,21 +250,105 @@ function PlatformOverview() {
           </Panel>
         </aside>
       </div>
+    </div>
+  )
+}
 
-      <div className="hub-engine" style={{ '--i': 6 } as CSSProperties}>
+function PlatformFigures({ state, onRetry }: { state: Read; onRetry: () => void }) {
+  if (state.state === 'loading') {
+    return (
+      <div className="platform-metrics" aria-busy="true" aria-label="Loading platform figures">
+        {PLACEHOLDER_LABELS.map((label) => (
+          <div className="platform-metric" key={label}>
+            <span className="platform-metric__label">{label}</span>
+            <span className="platform-metric__value platform-metric__value--text">Loading…</span>
+            <span className="platform-metric__state">Reading from the engine</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (state.state === 'unavailable') {
+    return (
+      <StatePanel
+        tone="wip"
+        title="Platform figures are unavailable"
+        capability="engine: platform overview"
+      >
+        <p>{state.reason}</p>
+        <button type="button" className="btn btn--outline" onClick={onRetry}>
+          Try again
+        </button>
+      </StatePanel>
+    )
+  }
+
+  if (state.state === 'error') {
+    if (state.code === 403) {
+      return (
         <StatePanel
-          tone="wip"
-          title="Platform figures need a platform-level API"
-          capability="engine: tenant-scoped endpoints only"
+          tone="error"
+          title="Access denied"
+          capability="platform authority"
         >
           <p>
-            The correction engine exposes tenant-scoped routes (<code>/api/v1/exams</code>,{' '}
-            <code>/api/v1/corrections</code>, <code>/api/v1/documents</code>,{' '}
-            <code>/api/v1/usage</code>). It has no platform-level endpoint, so this dashboard
-            shows an empty ledger rather than numbers invented for it.
+            This dashboard is restricted to the platform owner and administrators.
+            Your session is valid but does not carry platform authority.
           </p>
         </StatePanel>
+      )
+    }
+    return (
+      <StatePanel
+        tone="error"
+        title="Platform figures could not be read"
+        capability="engine: platform overview"
+      >
+        <p>{state.reason}</p>
+        <button type="button" className="btn btn--outline" onClick={onRetry}>
+          Retry
+        </button>
+      </StatePanel>
+    )
+  }
+
+  const census = state.data.account_census
+  return (
+    <>
+      <div className="platform-metrics" aria-label="Platform figures">
+        {state.data.metrics.map((metric) => (
+          <div className="platform-metric" key={metric.key} title={metric.definition}>
+            <span className="platform-metric__label">{metric.label}</span>
+            <span
+              className={
+                metric.state === 'available'
+                  ? 'platform-metric__value mono'
+                  : 'platform-metric__value platform-metric__value--text'
+              }
+              aria-label={`${metric.label}: ${metricText(metric)}`}
+            >
+              {metricText(metric)}
+            </span>
+            <span className="platform-metric__state">{metricStateLabel(metric)}</span>
+            <p className="platform-metric__definition">
+              {metric.state === 'unavailable' && metric.reason
+                ? metric.reason
+                : metric.definition}
+            </p>
+          </div>
+        ))}
       </div>
-    </div>
+      <div className="platform-overview__meta">
+        <p className="platform-overview__stamp">
+          Workspace and allocation counts come from PostgreSQL. Teacher and assistant
+          counts come from Supabase Auth and exclude suspended, unconfirmed and
+          non-teaching accounts.{' '}
+          {census.available
+            ? `Identity census ${census.cached ? 'reused' : 'read'} at ${stamp(census.captured_at)}.`
+            : 'The identity census is unavailable, so those two figures are not reported.'}
+        </p>
+      </div>
+    </>
   )
 }

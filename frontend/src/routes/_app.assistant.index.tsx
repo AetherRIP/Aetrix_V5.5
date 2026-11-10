@@ -34,7 +34,7 @@ function AssistantOverview() {
       <HubSection
         id="assistant-figures"
         title="My work"
-        note="Awaits the engine API"
+        note="No engine route for these counts"
         index={1}
         className="hub-section--stats"
       >

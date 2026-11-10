@@ -59,8 +59,13 @@ class UnavailablePipeline:
 def build_pipeline(settings: Settings) -> CorrectionPipeline:
     """Return the configured pipeline.
 
-    There is intentionally no fallback to a fake implementation.  The only
-    production choice is the real pipeline once it exists; until then the
-    unavailable pipeline is the truth.
+    There is intentionally no fallback to a fake implementation.  The real
+    pipeline is the production choice; when the provider is not configured it
+    raises while marking, which the runner records as a truthful parked job.
+    The import is local so the marking package can depend on this module's
+    outcome types without a cycle.
     """
-    return UnavailablePipeline()
+
+    from ..marking.pipeline import QuestionMarkingPipeline
+
+    return QuestionMarkingPipeline()

@@ -13,15 +13,24 @@ import uuid
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from ...core.errors import AppError, ErrorCode
 from ...core.security import Principal
+from ...db.repositories import (
+    AssignmentRepository,
+    JobRepository,
+    SubmissionRepository,
+    TenantRepository,
+)
 from ...db.session import get_db_session
 from ...schemas.api import (
     AssignmentCreate,
     AssignmentRead,
     ExamCreate,
     ExamRead,
+    JobRead,
     SubmissionCreate,
     SubmissionRead,
+    WorkspaceRead,
 )
 from ...schemas.blueprint import BlueprintPut, BlueprintRead
 from ...services.exams import (
@@ -33,6 +42,124 @@ from ...services.exams import (
 from ..deps import get_principal
 
 router = APIRouter(tags=["exams"])
+
+
+def _workspace_read(
+    principal: Principal, session: Session, workspace_id: uuid.UUID
+) -> WorkspaceRead:
+    if workspace_id != principal.tenant_id:
+        raise AppError(ErrorCode.NOT_FOUND, "Workspace not found.")
+    tenant = TenantRepository(session).get(principal.tenant_id)
+    if tenant is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Workspace not found.")
+    return WorkspaceRead(
+        id=tenant.id,
+        name=tenant.name,
+        slug=tenant.slug,
+        role=principal.role,
+        is_demo=tenant.is_demo,
+    )
+
+
+@router.get("/workspaces", response_model=list[WorkspaceRead])
+def list_workspaces(
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> list[WorkspaceRead]:
+    return [_workspace_read(principal, session, principal.tenant_id)]
+
+
+@router.get("/workspaces/{workspace_id}", response_model=WorkspaceRead)
+def get_workspace(
+    workspace_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceRead:
+    return _workspace_read(principal, session, workspace_id)
+
+
+@router.get("/workspaces/{workspace_id}/assignments", response_model=list[AssignmentRead])
+def list_workspace_assignments(
+    workspace_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> list[AssignmentRead]:
+    _workspace_read(principal, session, workspace_id)
+    return [
+        AssignmentRead.model_validate(row)
+        for row in AssignmentRepository(session).list(principal.tenant_id)
+    ]
+
+
+@router.get("/assignments/{assignment_id}", response_model=AssignmentRead)
+def get_assignment(
+    assignment_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> AssignmentRead:
+    assignment = AssignmentRepository(session).get(principal.tenant_id, assignment_id)
+    if assignment is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Assignment not found.")
+    return AssignmentRead.model_validate(assignment)
+
+
+@router.get(
+    "/assignments/{assignment_id}/submissions", response_model=list[SubmissionRead]
+)
+def list_assignment_submissions(
+    assignment_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> list[SubmissionRead]:
+    if AssignmentRepository(session).get(principal.tenant_id, assignment_id) is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Assignment not found.")
+    return [
+        SubmissionRead.model_validate(row)
+        for row in SubmissionRepository(session).list_for_assignment(
+            principal.tenant_id, assignment_id
+        )
+    ]
+
+
+@router.get("/submissions/{submission_id}", response_model=SubmissionRead)
+def get_submission(
+    submission_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> SubmissionRead:
+    submission = SubmissionRepository(session).get(principal.tenant_id, submission_id)
+    if submission is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Submission not found.")
+    return SubmissionRead.model_validate(submission)
+
+
+@router.get("/submissions/{submission_id}/corrections", response_model=list[JobRead])
+def list_submission_corrections(
+    submission_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> list[JobRead]:
+    if SubmissionRepository(session).get(principal.tenant_id, submission_id) is None:
+        raise AppError(ErrorCode.NOT_FOUND, "Submission not found.")
+    return [
+        JobRead.model_validate(row)
+        for row in JobRepository(session).list_for_submission(
+            principal.tenant_id, submission_id
+        )
+    ]
+
+
+@router.get("/workspaces/{workspace_id}/corrections", response_model=list[JobRead])
+def list_workspace_corrections(
+    workspace_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> list[JobRead]:
+    _workspace_read(principal, session, workspace_id)
+    return [
+        JobRead.model_validate(row)
+        for row in JobRepository(session).list(principal.tenant_id)
+    ]
 
 
 @router.post("/exams", response_model=ExamRead, status_code=status.HTTP_201_CREATED)

@@ -1,5 +1,11 @@
 # System Overview — Aetrix V5.5 (Checkpoints 1-2)
 
+> **Post-checkpoint note (2026-11-08):** the engine surface below is unchanged except for
+> provider-fleet and contribution routes and migrations through
+> `0009_verification_grants`. A deployed frontend now exists (marketing, role-aware shell,
+> live `/health` + `/ready`); it still has no authenticated data screens. Marking remains
+> unavailable.
+
 ## 1. Purpose and scope
 
 Checkpoint 1 built the tenant, persistence, job, audit and approval substrate.
@@ -13,13 +19,13 @@ Checkpoint 2 adds the first real processing path around that substrate:
 - versioned teacher overrides that cannot mutate an approved blueprint.
 
 It still does **not** implement marking, verification, selective review, results,
-cohort intelligence or a frontend. The correction worker's pipeline remains
+cohort intelligence or an authenticated data frontend. The correction worker's pipeline remains
 explicitly unavailable and parks jobs with `PIPELINE_UNAVAILABLE`. No mark is
 invented anywhere in this build.
 
 **Non-claims:** not production-ready; no marking-accuracy claim; no live
 structured-output or extraction claim (the bounded post-change probe was rejected
-at authentication); no frontend; the holdout still has zero certified papers.
+at authentication); no authenticated data frontend; the holdout still has zero certified papers.
 
 ---
 
@@ -27,7 +33,7 @@ at authentication); no frontend; the holdout still has zero certified papers.
 
 ```mermaid
 flowchart TB
-    subgraph Client["Client (not built)"]
+    subgraph Client["Client (marketing, shell, health)"]
         FE["Cloudflare-hosted frontend"]
     end
 
@@ -100,7 +106,7 @@ is still tied to the worker, not to an HTTP request.
 | `backend/app/api/v1/documents.py` | Ingestion, mapping, scheme, extraction, override routes |
 | `backend/app/api/v1/exams.py` | Exam and canonical blueprint draft/approval routes |
 | `backend/app/jobs/` | CP1 job state machine, runner and unavailable pipeline |
-| `backend/migrations/` | Alembic history through `0005_rls_lockdown` |
+| `backend/migrations/` | Alembic history through `0009_verification_grants` |
 | `backend/tests/` | Unit, PostgreSQL integration and API tests (84 passing) |
 | `backend/scripts/live_extraction.py` | One-request manual extraction probe; writes a draft only on success |
 
@@ -238,7 +244,8 @@ There is still no result endpoint: there are no correction results to return.
 - Malware scanning, decompression-bomb execution limits beyond the image-pixel
   cap, rate limiting and RLS.
 - Per-tenant provider billing; usage is tenant-scoped but billing is not.
-- Frontend code.
+- Authenticated data-frontend screens (marketing, the role-aware shell and the live
+  `/health` + `/ready` probe exist; no screen reads engine data).
 
 These are roadmap items, not hidden stubs. The only deliberately unavailable
 component is the correction pipeline, and it fails visibly.

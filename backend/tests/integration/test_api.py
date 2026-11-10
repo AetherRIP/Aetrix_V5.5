@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import uuid
 
+from app.core.config import get_settings
 from app.core.ids import utcnow
+from app.core.security import Principal
 from app.db.models import MarkScheme, MarkSchemeVersion
+from app.jobs.service import JobService
+from app.schemas.api import CorrectionCreate
 
 
 def _structure(marks: int = 10) -> dict:
@@ -195,3 +199,109 @@ def test_correction_api_end_to_end(client, identity, auth_headers, db_session) -
 
     retry = client.post(f"/api/v1/corrections/{job['id']}/retry", headers=headers)
     assert retry.status_code == 409
+
+
+def test_viewer_cannot_cancel_or_retry_a_job(
+    client, identity, auth_headers, paper, db_session
+) -> None:
+    actor = Principal(
+        user_id=identity.user_a.id,
+        tenant_id=identity.tenant_a.id,
+        subject=identity.user_a.subject,
+        role=identity.user_a.role,
+    )
+    job = JobService(db_session, get_settings()).create(
+        actor,
+        CorrectionCreate(
+            assignment_id=paper.assignment.id,
+            submission_id=paper.submission.id,
+            idempotency_key="viewer-role-0001",
+        ),
+    ).job
+
+    viewer_headers = auth_headers(identity.viewer)
+    assert (
+        client.post(f"/api/v1/corrections/{job.id}/cancel", headers=viewer_headers).status_code
+        == 403
+    )
+    assert (
+        client.post(f"/api/v1/corrections/{job.id}/retry", headers=viewer_headers).status_code
+        == 403
+    )
+
+
+def test_tenant_scoped_read_contracts(client, identity, auth_headers, paper) -> None:
+    alpha_headers = auth_headers(identity.user_a)
+    beta_headers = auth_headers(identity.user_b)
+
+    alpha_workspaces = client.get("/api/v1/workspaces", headers=alpha_headers)
+    assert alpha_workspaces.status_code == 200
+    assert [row["id"] for row in alpha_workspaces.json()] == [str(identity.tenant_a.id)]
+    assert alpha_workspaces.json()[0]["role"] == "OWNER"
+
+    beta_workspaces = client.get("/api/v1/workspaces", headers=beta_headers)
+    assert beta_workspaces.status_code == 200
+    assert [row["id"] for row in beta_workspaces.json()] == [str(identity.tenant_b.id)]
+
+    assert (
+        client.get(
+            f"/api/v1/workspaces/{identity.tenant_b.id}", headers=alpha_headers
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/api/v1/workspaces/{identity.tenant_b.id}/assignments",
+            headers=alpha_headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/api/v1/workspaces/{identity.tenant_b.id}/corrections",
+            headers=alpha_headers,
+        ).status_code
+        == 404
+    )
+
+    assignments = client.get(
+        f"/api/v1/workspaces/{identity.tenant_a.id}/assignments", headers=alpha_headers
+    )
+    assert assignments.status_code == 200
+    assert [row["id"] for row in assignments.json()] == [str(paper.assignment.id)]
+
+    assignment = client.get(
+        f"/api/v1/assignments/{paper.assignment.id}", headers=alpha_headers
+    )
+    assert assignment.status_code == 200
+    assert assignment.json()["name"] == "Fixture assignment"
+    assert (
+        client.get(
+            f"/api/v1/assignments/{paper.assignment.id}", headers=beta_headers
+        ).status_code
+        == 404
+    )
+
+    submissions = client.get(
+        f"/api/v1/assignments/{paper.assignment.id}/submissions", headers=alpha_headers
+    )
+    assert submissions.status_code == 200
+    assert [row["id"] for row in submissions.json()] == [str(paper.submission.id)]
+
+    submission = client.get(
+        f"/api/v1/submissions/{paper.submission.id}", headers=alpha_headers
+    )
+    assert submission.status_code == 200
+    assert submission.json()["student_ref"] == "student-1"
+    assert (
+        client.get(
+            f"/api/v1/submissions/{paper.submission.id}", headers=beta_headers
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/api/v1/submissions/{paper.submission.id}/corrections", headers=beta_headers
+        ).status_code
+        == 404
+    )

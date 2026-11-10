@@ -54,8 +54,8 @@ def test_provider_usage_cannot_be_rewritten(engine) -> None:
         connection.execute(
             text(
                 "INSERT INTO provider_usage "
-                "(id, provider, model, purpose, reported, created_at) "
-                "VALUES (:id, 'google', 'test-model', 'marking', true, now())"
+                "(id, project_id, provider, model, purpose, reported, created_at) "
+                "VALUES (:id, 'test-project', 'google', 'test-model', 'marking', true, now())"
             ),
             {"id": uuid.uuid4()},
         )

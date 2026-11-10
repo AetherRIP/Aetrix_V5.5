@@ -7,12 +7,14 @@ that adding a key does *not* add capacity.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.core.config import ModelQuota, get_settings
 from app.core.errors import AppError
 from app.db.models import (
+    AuditEvent,
     ProviderCredential,
     ProviderProjectCooldown,
     ProviderUsage,
@@ -190,10 +192,10 @@ def test_429_pauses_the_whole_project_not_only_the_key(db_session, identity) -> 
     )
     assert cooldown is not None
     assert cooldown.cooldown_until > _now()
-    # Only the leased key carries a credential-level cooldown; the project row is
-    # what stops a sibling key from producing the same 429.
-    cooling = [key for key in keys if key.health == "COOLDOWN"]
-    assert len(cooling) == 1
+    # A quota rejection is an operational condition, not proof the credential
+    # is invalid. Only the leased key is paused; the project row stops siblings.
+    assert {key.health for key in keys} == {"UNKNOWN"}
+    assert sum(key.cooldown_until is not None for key in keys) == 1
     assert len(provider.keys) == 1
 
 
@@ -296,7 +298,7 @@ def test_estimator_never_presents_a_policy_limit_as_google_confirmed(db_session)
     assert confirmed.requests_per_day.remaining == 1500
 
 
-def test_estimate_counts_reservations_per_project(db_session, identity) -> None:
+def test_estimate_counts_recorded_requests_per_project_model(db_session, identity) -> None:
     settings = _settings(rpm=10)
     keys = _register(db_session, settings, "count-proj", 4)
     service = _service(db_session, FakeProvider('{"questions": []}'), settings)
@@ -309,6 +311,12 @@ def test_estimate_counts_reservations_per_project(db_session, identity) -> None:
     )
     assert estimate.requests_per_minute.used == 3
     assert estimate.requests_per_minute.remaining == 7
+    # The same three calls did not consume the other model's independent pool.
+    other = QuotaEstimator(db_session, settings).estimate(
+        project_id="count-proj", model=get_settings().provider.model_review
+    )
+    assert other.requests_per_minute.used == 0
+    assert other.requests_per_minute.remaining == 10
     assert len(keys) == 4
 
 
@@ -442,3 +450,190 @@ def _now() -> datetime:
     from app.core.ids import utcnow
 
     return utcnow()
+
+
+def test_provider_management_workflow_covers_every_read_route(
+    client, identity, auth_headers, db_session
+) -> None:
+    """Exercise the operator surface end to end on isolated test state."""
+
+    tenant = Tenant(name="Fleet Platform", slug="fleet-platform")
+    db_session.add(tenant)
+    db_session.flush()
+    admin = User(tenant_id=tenant.id, subject="fleet-admin", role="ADMIN")
+    db_session.add(admin)
+    db_session.commit()
+    headers = auth_headers(admin)
+
+    for path in (
+        "/api/v1/admin/providers/overview",
+        "/api/v1/admin/providers/keys",
+        "/api/v1/admin/providers/contributions",
+        "/api/v1/admin/providers/projects",
+        "/api/v1/admin/providers/usage?days=14",
+        "/api/v1/admin/providers/alerts",
+    ):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, path
+
+    created = client.post(
+        "/api/v1/admin/providers/keys",
+        headers=headers,
+        json={
+            "project_id": "disposable-test-project",
+            "api_key": "AIza-disposable-test-key",
+            "label": "disposable test key",
+            "tier": "UNKNOWN",
+        },
+    )
+    assert created.status_code == 201
+    credential_id = created.json()["id"]
+    assert "AIza-disposable-test-key" not in created.text
+
+    disabled = client.post(
+        f"/api/v1/admin/providers/keys/{credential_id}/enabled",
+        headers=headers,
+        json={"enabled": False},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["health"] == "DISABLED"
+
+    enabled = client.post(
+        f"/api/v1/admin/providers/keys/{credential_id}/enabled",
+        headers=headers,
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["health"] == "UNKNOWN"
+
+    removed = client.delete(
+        f"/api/v1/admin/providers/keys/{credential_id}", headers=headers
+    )
+    assert removed.status_code == 204
+    assert removed.content == b""
+    assert client.get("/api/v1/admin/providers/keys", headers=headers).json()["total"] == 0
+
+    actions = set(db_session.scalars(select(AuditEvent.action)))
+    assert {
+        "provider.key.added",
+        "provider.key.disabled",
+        "provider.key.enabled",
+        "provider.key.removed",
+    }.issubset(actions)
+
+
+def test_validation_transient_failure_is_not_reported_as_invalid(
+    db_session, identity
+) -> None:
+    """A network or provider outage says nothing about the credential."""
+
+    from app.providers.errors import ProviderTransientError
+
+    settings = _settings()
+    credential = provider_fleet.add_credential(
+        db_session, settings, project_id="probe-proj", api_key=_key("probe-proj", 7)
+    )
+
+    result = provider_fleet.validate_credential(
+        db_session,
+        settings,
+        FakeProvider(error=ProviderTransientError("connect timed out")),
+        credential,
+    )
+
+    assert result["valid"] is False
+    assert result["health"] == "UNKNOWN"
+    assert result["operational_status"] == "NETWORK_FAILURE"
+    assert result["category"] == "network"
+    assert result["reached_provider"] is False
+    assert result["model"]
+    assert result["project_id"] == "probe-proj"
+    assert result["checked_at"] is not None
+    assert result["key_fingerprint"] == credential.key_fingerprint
+    # Connectivity is not a credential verdict; a retry can still succeed.
+    assert credential.health == "UNKNOWN"
+
+
+def test_concurrent_validation_probes_are_all_counted_in_project_quota(
+    db_session, identity, session_factory
+) -> None:
+    """Two probes must produce two usage rows and two counted requests."""
+
+    settings = _settings(rpd=50)
+    credential = provider_fleet.add_credential(
+        db_session,
+        settings,
+        project_id="probe-concurrent",
+        api_key=_key("probe-concurrent", 9),
+    )
+    credential_id = credential.id
+
+    def probe() -> bool:
+        with session_factory() as session:
+            row = session.get(ProviderCredential, credential_id)
+            assert row is not None
+            return bool(
+                provider_fleet.validate_credential(
+                    session,
+                    settings,
+                    FakeProvider('{"questions": []}'),
+                    row,
+                )["valid"]
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: probe(), range(2)))
+
+    assert results == [True, True]
+    rows = list(
+        db_session.scalars(
+            select(ProviderUsage).where(
+                ProviderUsage.credential_id == credential_id,
+                ProviderUsage.purpose == "validate",
+            )
+        )
+    )
+    assert len(rows) == 2
+    estimate = QuotaEstimator(db_session, settings).estimate(
+        project_id="probe-concurrent", model=get_settings().provider.model_primary
+    )
+    assert estimate.requests_per_day.used == 2
+    assert estimate.requests_per_day.remaining == 48
+
+
+def test_validation_failure_then_success_recovers_the_same_credential(
+    db_session, identity
+) -> None:
+    """A failure is not permanent, and the result never carries the secret."""
+
+    from app.providers.errors import ProviderAuthenticationError
+
+    settings = _settings()
+    credential = provider_fleet.add_credential(
+        db_session, settings, project_id="probe-proj", api_key=_key("probe-proj", 8)
+    )
+
+    failed = provider_fleet.validate_credential(
+        db_session,
+        settings,
+        FakeProvider(
+            error=ProviderAuthenticationError("key revoked", status_code=401)
+        ),
+        credential,
+    )
+    assert failed["valid"] is False
+    assert failed["health"] == "INVALID"
+    assert failed["category"] == "authentication"
+    assert failed["http_status"] == 401
+    assert failed["recommendation"]
+    assert "AIza" not in str(failed)
+
+    recovered = provider_fleet.validate_credential(
+        db_session, settings, FakeProvider("ok"), credential
+    )
+    assert recovered["valid"] is True
+    assert recovered["health"] == "HEALTHY"
+    assert recovered["category"] == "ok"
+    assert recovered["http_status"] == 200
+    assert credential.health == "HEALTHY"
+    assert credential.last_error is None

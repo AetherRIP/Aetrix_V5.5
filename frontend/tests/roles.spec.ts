@@ -100,8 +100,8 @@ test.describe('platform administrator', () => {
     await expect(page.locator('.app-topbar__role')).toHaveText('Platform administrator')
 
     const nav = page.locator('.app-nav')
-    await expect(nav.getByRole('link', { name: 'Workspaces' })).toBeVisible()
-    await expect(nav.getByRole('link', { name: 'Accounts' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Allocation' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Account management' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'System health' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Audit log' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Gemini fleet' })).toBeVisible()
@@ -131,10 +131,15 @@ test.describe('platform administrator', () => {
     const page = await open(context, '/platform/gemini', { role: 'platform_operator' })
 
     // Whether the build has no engine origin or the engine rejects the seeded
-    // token, the screen names the gap and renders no quota figure.
+    // token, the screen names the gap and renders no quota figure. The engine's
+    // own message varies by build (configured origin, 401, network), so any of
+    // those variants satisfies the check; a page showing figures without a gap
+    // statement still fails it.
     await expect(
       page
-        .getByText(/no public HTTPS deployment yet|The engine rejected the request \(401\)/)
+        .getByText(
+          /no public HTTPS deployment yet|The engine rejected the request \(401\)|The engine could not be reached|The bearer token is invalid or has expired|The figures below are not being guessed/,
+        )
         .first(),
     ).toBeVisible()
     for (const label of ['API keys', 'Contributors', 'Projects', 'Usage', 'Alerts']) {
@@ -142,6 +147,107 @@ test.describe('platform administrator', () => {
       await expect(page.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')
       await expect(page.locator('.gem-panel')).toBeVisible()
     }
+  })
+
+  test('reports a 204 key removal as success and keeps model pools separate', async ({ context }) => {
+    const page = await context.newPage()
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await withRole(page, 'platform_operator')
+
+    const estimate = {
+      project_id: 'operator-declared-project',
+      model: 'gemini-3.6-flash',
+      confidence: 'ESTIMATED',
+      requests_per_minute: { limit: 10, used: 1, remaining: 9, used_share: 0.1, confidence: 'ESTIMATED' },
+      tokens_per_minute: { limit: null, used: 0, remaining: null, used_share: null, confidence: 'UNKNOWN' },
+      requests_per_day: { limit: 200, used: 13, remaining: 187, used_share: 0.065, confidence: 'ESTIMATED' },
+      reset_at: '2026-11-10T08:00:00Z',
+      observed_at: '2026-11-09T12:00:00Z',
+      cooldown_until: null,
+      exhausted: false,
+      notes: [],
+    }
+    const key = {
+      id: '00000000-0000-4000-8000-000000000010',
+      contributor_id: null,
+      contributor_name: null,
+      revoked_at: null,
+      project_id: 'operator-declared-project',
+      account_label: 'Disposable test key',
+      key_fingerprint: 'test-fingerprint',
+      auth_type: 'api_key',
+      tier: 'UNKNOWN',
+      health: 'HEALTHY',
+      model_access: ['gemini-3.6-flash'],
+      cooldown_until: null,
+      last_success_at: null,
+      last_failure_at: null,
+      last_failure_status: null,
+      last_validated_at: null,
+      last_error: null,
+      requests: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      failures: 0,
+      quota_failures: 0,
+    }
+
+    await page.route('**/api/v1/admin/providers/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (route.request().method() === 'DELETE') {
+        await route.fulfill({ status: 204, body: '' })
+        return
+      }
+      if (path.endsWith('/overview')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            keys_total: 1,
+            keys_by_health: { HEALTHY: 1 },
+            projects: 1,
+            requests_today: 0,
+            input_tokens_today: 0,
+            output_tokens_today: 0,
+            failures_today: 0,
+            error_rate_today: null,
+            observed_at: '2026-11-09T12:00:00Z',
+            day_started_at: '2026-11-09T08:00:00Z',
+            reset_at: '2026-11-10T08:00:00Z',
+            projects_detail: [
+              {
+                project_id: 'operator-declared-project',
+                keys: 1,
+                healthy: 1,
+                disabled: 0,
+                invalid: 0,
+                cooldown_until: null,
+                estimates: [estimate, { ...estimate, model: 'gemini-3.1-pro-preview' }],
+              },
+            ],
+          }),
+        })
+        return
+      }
+      if (path.endsWith('/keys')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ items: [key], total: 1, limit: 50, offset: 0 }),
+        })
+        return
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    })
+
+    await page.goto('/platform/gemini', { waitUntil: 'load' })
+    await expect(page.getByText(/not additive/)).toBeVisible()
+
+    await page.getByRole('tab', { name: 'API keys' }).click()
+    await expect(page.getByText('Disposable test key')).toBeVisible()
+    page.on('dialog', (dialog) => void dialog.accept())
+    await page.getByRole('button', { name: 'Remove' }).click()
+    await expect(page.getByRole('status')).toContainText('Removal succeeded.')
   })
 })
 
@@ -153,7 +259,7 @@ test.describe('platform owner', () => {
     await expect(page.locator('.app-topbar__role')).toHaveText('Platform owner')
 
     const nav = page.locator('.app-nav')
-    await expect(nav.getByRole('link', { name: 'Workspaces' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Allocation' })).toBeVisible()
     // The owner is not locked out of the other two dashboards.
     await expect(nav.getByRole('link', { name: 'Teacher dashboard' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Assistant overview' })).toBeVisible()
@@ -187,18 +293,36 @@ test.describe('platform owner', () => {
     await expect(page.locator('.app')).toHaveCount(0)
   })
 
-  test('gives an ordinary administrator no way to assign or remove it', async ({ context }) => {
-    const page = await open(context, '/platform/users', { role: 'platform_operator' })
+  test('is told when platform-wide access needs a service-role key', async ({ context }) => {
+    const page = await context.newPage()
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await withRole(page, 'platform_operator')
+
+    await page.route('**/api/v1/admin/accounts**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          configured: false,
+          reason:
+            'AETRIX_PLATFORM_ADMIN__SERVICE_ROLE_KEY is not set on the engine, so platform-wide accounts cannot be read.',
+          operations: [],
+        }),
+      }),
+    )
+
+    await page.goto('/platform/users', { waitUntil: 'load' })
 
     await expect(
-      page.getByRole('heading', { name: 'Account management needs an admin surface' }),
+      page.getByRole('heading', { name: 'Platform-wide accounts need a Supabase service-role key' }),
     ).toBeVisible()
-    // No control writes a role: assignment is an identity-provider action.
+    // With no credential there is no account list and no control that writes a role.
     await expect(page.locator('select')).toHaveCount(0)
+    await expect(page.locator('.data-table')).toHaveCount(0)
     await expect(
       page.getByRole('button', { name: /assign|grant|change role|remove role|promote/i }),
     ).toHaveCount(0)
-    await expect(page.getByText(/identity provider/i).first()).toBeVisible()
+    await expect(page.getByText(/AETRIX_PLATFORM_ADMIN__SERVICE_ROLE_KEY/).first()).toBeVisible()
   })
 })
 
@@ -220,7 +344,9 @@ test.describe('teacher', () => {
   test('cannot enter the platform area', async ({ context }) => {
     const page = await open(context, '/platform/users', { role: 'supervisor' })
     await expect(page).toHaveURL(/\/dashboard\/?$/, { timeout: 20_000 })
-    await expect(page.locator('.app-nav').getByRole('link', { name: 'Accounts' })).toHaveCount(0)
+    await expect(
+      page.locator('.app-nav').getByRole('link', { name: 'Account management' }),
+    ).toHaveCount(0)
   })
 
   test('shows the workspace scope it is confined to', async ({ context }) => {
@@ -244,7 +370,9 @@ test.describe('assistant', () => {
     // Workspace and platform administration are absent, not merely disabled.
     await expect(nav.getByRole('link', { name: 'Assistants' })).toHaveCount(0)
     await expect(nav.getByRole('link', { name: 'Workspace', exact: true })).toHaveCount(0)
-    await expect(nav.getByRole('link', { name: 'Accounts', exact: true })).toHaveCount(0)
+    await expect(
+      nav.getByRole('link', { name: 'Account management', exact: true }),
+    ).toHaveCount(0)
   })
 
   test('is refused a teacher-only screen, with the reason stated', async ({ context }) => {
@@ -368,6 +496,27 @@ test.describe('shell behaviour', () => {
     }
   })
 
+  test('the session survives a reload and sign-out closes the shell', async ({ context }) => {
+    const seeded = await open(context, '/settings', { role: 'supervisor' })
+    await expect(seeded.locator('.app')).toHaveAttribute('data-role', 'supervisor')
+
+    // A different page has no seed script: its identity can only come from the
+    // session the first page stored, which is what a reload reads.
+    const restored = await context.newPage()
+    await restored.goto('/settings', { waitUntil: 'load' })
+    await expect(restored.locator('.app')).toHaveAttribute('data-role', 'supervisor')
+
+    await restored.getByRole('button', { name: 'Sign out' }).click()
+    await expect(restored).toHaveURL(/\/sign-in\/?$/, { timeout: 20_000 })
+    expect(await restored.evaluate(() => localStorage.getItem('aetrix:auth'))).toBeNull()
+
+    // A third page has neither the seed script nor a session, so the protected
+    // route must stay closed rather than fall back to a cached principal.
+    const after = await context.newPage()
+    await after.goto('/dashboard', { waitUntil: 'load' })
+    await expect(after).toHaveURL(/\/sign-in\/?$/, { timeout: 20_000 })
+  })
+
   test('entrances are disabled when the reader asks for reduced motion', async ({ context }) => {
     const page = await open(context, '/platform', {
       role: 'platform_operator',
@@ -386,5 +535,94 @@ test.describe('shell behaviour', () => {
       return { hero: read('.hub-hero'), section: read('.hub-section') }
     })
     expect(names).toEqual({ hero: 'none', section: 'none' })
+  })
+})
+
+test.describe('engine provisioning and role fallback', () => {
+  test('opens the shell from the engine role when the browser claim is absent', async ({
+    context,
+  }) => {
+    const page = await context.newPage()
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await withRole(page, null)
+
+    await page.route('**/api/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/v1/me') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            user_id: '00000000-0000-4000-8000-000000000001',
+            subject: 'invited-user-1',
+            email: 'newcomer@aetrix.test',
+            display_name: 'Invited Teacher',
+            tenant_id: '00000000-0000-4000-8000-000000000010',
+            workspace_name: 'Invited workspace',
+            workspace_slug: 'invited',
+            role: 'TEACHER',
+            ui_role: 'supervisor',
+            capabilities: ['read', 'manage_exams', 'review', 'approve'],
+            is_demo: false,
+          }),
+        })
+        return
+      }
+      if (path.endsWith('/dashboard')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            assignments: 0,
+            submissions: 0,
+            jobs_active: 0,
+            awaiting_review: 0,
+            failed_jobs: 0,
+            approved_results: 0,
+            recent_jobs: [],
+          }),
+        })
+        return
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    })
+
+    const response = await page.goto('/dashboard', { waitUntil: 'load' })
+    expect(response?.status()).toBe(200)
+    await expect(page.locator('.app')).toHaveAttribute('data-role', 'supervisor')
+    await expect(page.locator('.app-sidebar')).toBeVisible()
+  })
+
+  test('shows the invitation gate, not a blank dashboard, when the engine refuses provisioning', async ({
+    context,
+  }) => {
+    const page = await context.newPage()
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await withRole(page, null)
+
+    await page.route('**/api/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/v1/me') {
+        await route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: {
+              code: 'PROVISIONING_REQUIRED',
+              message: 'This account has not been invited to a workspace.',
+            },
+          }),
+        })
+        return
+      }
+      await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' })
+    })
+
+    const response = await page.goto('/dashboard', { waitUntil: 'load' })
+    expect(response?.status()).toBe(200)
+    await expect(
+      page.getByRole('heading', { name: 'A workspace invitation is required' }),
+    ).toBeVisible()
+    await expect(page.getByLabel('One-time acceptance code')).toBeVisible()
   })
 })

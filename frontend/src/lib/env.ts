@@ -33,6 +33,15 @@ export const isSupabaseConfigured = Boolean(env.supabaseUrl && env.supabaseAnonK
 /** The engine API is optional until it is deployed. */
 export const isApiConfigured = Boolean(env.apiBaseUrl)
 
+/**
+ * Returned when this build was compiled without an engine origin. It is a
+ * different fact from "the endpoint exists but is not deployed yet", and the
+ * two must not share one message: an operator reading the fleet screen needs to
+ * know whether the problem is the build or the engine.
+ */
+export const API_NOT_DEPLOYED_REASON =
+  'This build was compiled without an engine origin (VITE_AETRIX_API_URL), so there is no public HTTPS deployment yet.'
+
 /** Shown wherever a screen needs an engine endpoint this build does not have. */
 export const API_UNAVAILABLE_REASON =
   'The correction engine does not expose this screen’s data yet, so there is nothing to show.'

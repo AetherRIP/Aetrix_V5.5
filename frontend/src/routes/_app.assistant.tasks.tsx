@@ -13,7 +13,7 @@ function AssistantTasks() {
       <Panel title="Open tasks" note="Newest first" index={0}>
         <StatsStrip
           metrics={[
-            { label: 'Open', note: 'awaits the engine' },
+            { label: 'Open', note: 'no task records' },
             { label: 'Due today' },
             { label: 'Blocked' },
             { label: 'Done this week' },

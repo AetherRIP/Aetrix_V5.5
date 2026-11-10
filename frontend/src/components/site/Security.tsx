@@ -4,7 +4,7 @@ import { Icon } from '../ui/Icons'
 const PRINCIPLES = [
   {
     title: 'Workspace isolation',
-    text: 'Every query is scoped to a single workspace in the typed data layer, and the database rejects a cross-tenant reference rather than trusting the handler to remember.',
+    text: 'The workspace is read from the verified token claim, never from a request body, and every query is scoped to it in the data layer. Cross-tenant reads are enforced in application code today; a database-level constraint is still outstanding and is tracked publicly rather than claimed here.',
   },
   {
     title: 'Correction stays on the server',
@@ -12,7 +12,7 @@ const PRINCIPLES = [
   },
   {
     title: 'No provider credentials in the browser',
-    text: 'Provider keys are encrypted at rest and decrypted only inside the Worker for the duration of one outbound call.',
+    text: 'Provider keys are encrypted at rest in the Python engine and decrypted only for the duration of one outbound call. The browser never receives a key.',
   },
   {
     title: 'Overrides are auditable',
@@ -20,14 +20,15 @@ const PRINCIPLES = [
   },
   {
     title: 'Questionable results are reviewed explicitly',
-    text: 'A missing question becomes Needs review, never zero. A mark cannot exceed the blueprint maximum, and that limit is enforced by the database as well as the handler.',
+    text: 'A question the engine cannot mark with confidence becomes Needs review, never zero. A stored mark cannot exceed its question maximum: a database CHECK constraint enforces it as well as the handler.',
   },
 ] as const
 
 const NON_CLAIMS = [
   'No SOC 2, ISO 27001 or GDPR certification is claimed. None has been obtained.',
   'No pricing is published, because plans are not finalised.',
-  'No account can be created from this site yet.',
+  'No self-serve signup exists: accounts are created by invitation.',
+  'Marking itself is not implemented yet. The engine records a job as unavailable instead of producing a mark.',
 ] as const
 
 export function Security() {

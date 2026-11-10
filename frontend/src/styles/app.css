@@ -1,4 +1,6 @@
 @import './tokens.css';
+@import './app-forms.css';
+@import './legal.css';
 
 /* ══ 1. Base ═══════════════════════════════════════════════════════════ */
 
@@ -1862,8 +1864,14 @@ svg {
 
 @media (min-width: 760px) {
   .site-footer__top {
-    grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 0.62fr));
+    grid-template-columns: minmax(0, 1.4fr) repeat(4, minmax(0, 0.62fr));
     gap: var(--s-5);
+  }
+}
+
+@media (min-width: 1040px) {
+  .site-footer__top {
+    grid-template-columns: minmax(0, 1.4fr) repeat(4, minmax(0, 0.7fr));
   }
 }
 

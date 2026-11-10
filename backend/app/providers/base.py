@@ -37,6 +37,9 @@ class LLMRequest:
     response_schema: dict[str, Any] | None = None
     temperature: float = 0.0
     max_output_tokens: int = 16384
+    #: Per-call override, in seconds. A validation probe must not inherit the
+    #: long extraction timeout when Google is unresponsive.
+    timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

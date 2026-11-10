@@ -17,15 +17,20 @@ import { Route as AppAssistantsRouteImport } from './routes/_app.assistants'
 import { Route as AppClassroomRouteImport } from './routes/_app.classroom'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppGradebookRouteImport } from './routes/_app.gradebook'
+import { Route as AppHistoryRouteImport } from './routes/_app.history'
 import { Route as AppInboxRouteImport } from './routes/_app.inbox'
+import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
 import { Route as AppQueueRouteImport } from './routes/_app.queue'
 import { Route as AppReportsRouteImport } from './routes/_app.reports'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppStudentsRouteImport } from './routes/_app.students'
 import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
 import { Route as MarketingIndexRouteImport } from './routes/_marketing.index'
+import { Route as MarketingPrivacyRouteImport } from './routes/_marketing.privacy'
 import { Route as MarketingSignInRouteImport } from './routes/_marketing.sign-in'
+import { Route as MarketingTermsRouteImport } from './routes/_marketing.terms'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
+import { Route as AuthClassroomRouteImport } from './routes/auth.classroom'
 import { Route as AppAssignmentsAssignmentIdRouteImport } from './routes/_app.assignments.$assignmentId'
 import { Route as AppAssistantIndexRouteImport } from './routes/_app.assistant.index'
 import { Route as AppAssistantClassesRouteImport } from './routes/_app.assistant.classes'
@@ -80,9 +85,19 @@ const AppGradebookRoute = AppGradebookRouteImport.update({
   path: '/gradebook',
   getParentRoute: () => AppRoute,
 } as any)
+const AppHistoryRoute = AppHistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppInboxRoute = AppInboxRouteImport.update({
   id: '/inbox',
   path: '/inbox',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNotificationsRoute = AppNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => AppRoute,
 } as any)
 const AppQueueRoute = AppQueueRouteImport.update({
@@ -115,14 +130,29 @@ const MarketingIndexRoute = MarketingIndexRouteImport.update({
   path: '/',
   getParentRoute: () => MarketingRoute,
 } as any)
+const MarketingPrivacyRoute = MarketingPrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => MarketingRoute,
+} as any)
 const MarketingSignInRoute = MarketingSignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
   getParentRoute: () => MarketingRoute,
 } as any)
+const MarketingTermsRoute = MarketingTermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => MarketingRoute,
+} as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/auth/callback',
   path: '/auth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthClassroomRoute = AuthClassroomRouteImport.update({
+  id: '/auth/classroom',
+  path: '/auth/classroom',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppAssignmentsAssignmentIdRoute =
@@ -211,14 +241,19 @@ export interface FileRoutesByFullPath {
   '/classroom': typeof AppClassroomRoute
   '/dashboard': typeof AppDashboardRoute
   '/gradebook': typeof AppGradebookRoute
+  '/history': typeof AppHistoryRoute
   '/inbox': typeof AppInboxRoute
+  '/notifications': typeof AppNotificationsRoute
   '/queue': typeof AppQueueRoute
   '/reports': typeof AppReportsRoute
   '/settings': typeof AppSettingsRoute
   '/students': typeof AppStudentsRoute
   '/workspace': typeof AppWorkspaceRoute
+  '/privacy': typeof MarketingPrivacyRoute
   '/sign-in': typeof MarketingSignInRoute
+  '/terms': typeof MarketingTermsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/auth/classroom': typeof AuthClassroomRoute
   '/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
   '/assistant/classes': typeof AppAssistantClassesRoute
   '/assistant/progress': typeof AppAssistantProgressRoute
@@ -243,14 +278,19 @@ export interface FileRoutesByTo {
   '/classroom': typeof AppClassroomRoute
   '/dashboard': typeof AppDashboardRoute
   '/gradebook': typeof AppGradebookRoute
+  '/history': typeof AppHistoryRoute
   '/inbox': typeof AppInboxRoute
+  '/notifications': typeof AppNotificationsRoute
   '/queue': typeof AppQueueRoute
   '/reports': typeof AppReportsRoute
   '/settings': typeof AppSettingsRoute
   '/students': typeof AppStudentsRoute
   '/workspace': typeof AppWorkspaceRoute
+  '/privacy': typeof MarketingPrivacyRoute
   '/sign-in': typeof MarketingSignInRoute
+  '/terms': typeof MarketingTermsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/auth/classroom': typeof AuthClassroomRoute
   '/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
   '/assistant/classes': typeof AppAssistantClassesRoute
   '/assistant/progress': typeof AppAssistantProgressRoute
@@ -277,14 +317,19 @@ export interface FileRoutesById {
   '/_app/classroom': typeof AppClassroomRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/gradebook': typeof AppGradebookRoute
+  '/_app/history': typeof AppHistoryRoute
   '/_app/inbox': typeof AppInboxRoute
+  '/_app/notifications': typeof AppNotificationsRoute
   '/_app/queue': typeof AppQueueRoute
   '/_app/reports': typeof AppReportsRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/students': typeof AppStudentsRoute
   '/_app/workspace': typeof AppWorkspaceRoute
+  '/_marketing/privacy': typeof MarketingPrivacyRoute
   '/_marketing/sign-in': typeof MarketingSignInRoute
+  '/_marketing/terms': typeof MarketingTermsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/auth/classroom': typeof AuthClassroomRoute
   '/_marketing/': typeof MarketingIndexRoute
   '/_app/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
   '/_app/assistant/classes': typeof AppAssistantClassesRoute
@@ -312,14 +357,19 @@ export interface FileRouteTypes {
     | '/classroom'
     | '/dashboard'
     | '/gradebook'
+    | '/history'
     | '/inbox'
+    | '/notifications'
     | '/queue'
     | '/reports'
     | '/settings'
     | '/students'
     | '/workspace'
+    | '/privacy'
     | '/sign-in'
+    | '/terms'
     | '/auth/callback'
+    | '/auth/classroom'
     | '/assignments/$assignmentId'
     | '/assistant/classes'
     | '/assistant/progress'
@@ -344,14 +394,19 @@ export interface FileRouteTypes {
     | '/classroom'
     | '/dashboard'
     | '/gradebook'
+    | '/history'
     | '/inbox'
+    | '/notifications'
     | '/queue'
     | '/reports'
     | '/settings'
     | '/students'
     | '/workspace'
+    | '/privacy'
     | '/sign-in'
+    | '/terms'
     | '/auth/callback'
+    | '/auth/classroom'
     | '/assignments/$assignmentId'
     | '/assistant/classes'
     | '/assistant/progress'
@@ -377,14 +432,19 @@ export interface FileRouteTypes {
     | '/_app/classroom'
     | '/_app/dashboard'
     | '/_app/gradebook'
+    | '/_app/history'
     | '/_app/inbox'
+    | '/_app/notifications'
     | '/_app/queue'
     | '/_app/reports'
     | '/_app/settings'
     | '/_app/students'
     | '/_app/workspace'
+    | '/_marketing/privacy'
     | '/_marketing/sign-in'
+    | '/_marketing/terms'
     | '/auth/callback'
+    | '/auth/classroom'
     | '/_marketing/'
     | '/_app/assignments/$assignmentId'
     | '/_app/assistant/classes'
@@ -407,6 +467,7 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   MarketingRoute: typeof MarketingRouteWithChildren
   AuthCallbackRoute: typeof AuthCallbackRoute
+  AuthClassroomRoute: typeof AuthClassroomRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -467,11 +528,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppGradebookRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/history': {
+      id: '/_app/history'
+      path: '/history'
+      fullPath: '/history'
+      preLoaderRoute: typeof AppHistoryRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/inbox': {
       id: '/_app/inbox'
       path: '/inbox'
       fullPath: '/inbox'
       preLoaderRoute: typeof AppInboxRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/notifications': {
+      id: '/_app/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof AppNotificationsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/queue': {
@@ -516,6 +591,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MarketingIndexRouteImport
       parentRoute: typeof MarketingRoute
     }
+    '/_marketing/privacy': {
+      id: '/_marketing/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof MarketingPrivacyRouteImport
+      parentRoute: typeof MarketingRoute
+    }
     '/_marketing/sign-in': {
       id: '/_marketing/sign-in'
       path: '/sign-in'
@@ -523,11 +605,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MarketingSignInRouteImport
       parentRoute: typeof MarketingRoute
     }
+    '/_marketing/terms': {
+      id: '/_marketing/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof MarketingTermsRouteImport
+      parentRoute: typeof MarketingRoute
+    }
     '/auth/callback': {
       id: '/auth/callback'
       path: '/auth/callback'
       fullPath: '/auth/callback'
       preLoaderRoute: typeof AuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/classroom': {
+      id: '/auth/classroom'
+      path: '/auth/classroom'
+      fullPath: '/auth/classroom'
+      preLoaderRoute: typeof AuthClassroomRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/assignments/$assignmentId': {
@@ -657,7 +753,9 @@ interface AppRouteChildren {
   AppClassroomRoute: typeof AppClassroomRoute
   AppDashboardRoute: typeof AppDashboardRoute
   AppGradebookRoute: typeof AppGradebookRoute
+  AppHistoryRoute: typeof AppHistoryRoute
   AppInboxRoute: typeof AppInboxRoute
+  AppNotificationsRoute: typeof AppNotificationsRoute
   AppQueueRoute: typeof AppQueueRoute
   AppReportsRoute: typeof AppReportsRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -686,7 +784,9 @@ const AppRouteChildren: AppRouteChildren = {
   AppClassroomRoute: AppClassroomRoute,
   AppDashboardRoute: AppDashboardRoute,
   AppGradebookRoute: AppGradebookRoute,
+  AppHistoryRoute: AppHistoryRoute,
   AppInboxRoute: AppInboxRoute,
+  AppNotificationsRoute: AppNotificationsRoute,
   AppQueueRoute: AppQueueRoute,
   AppReportsRoute: AppReportsRoute,
   AppSettingsRoute: AppSettingsRoute,
@@ -711,12 +811,16 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface MarketingRouteChildren {
+  MarketingPrivacyRoute: typeof MarketingPrivacyRoute
   MarketingSignInRoute: typeof MarketingSignInRoute
+  MarketingTermsRoute: typeof MarketingTermsRoute
   MarketingIndexRoute: typeof MarketingIndexRoute
 }
 
 const MarketingRouteChildren: MarketingRouteChildren = {
+  MarketingPrivacyRoute: MarketingPrivacyRoute,
   MarketingSignInRoute: MarketingSignInRoute,
+  MarketingTermsRoute: MarketingTermsRoute,
   MarketingIndexRoute: MarketingIndexRoute,
 }
 
@@ -728,6 +832,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   MarketingRoute: MarketingRouteWithChildren,
   AuthCallbackRoute: AuthCallbackRoute,
+  AuthClassroomRoute: AuthClassroomRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

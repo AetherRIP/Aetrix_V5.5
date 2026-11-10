@@ -105,7 +105,12 @@ def summary(
     window_days: Annotated[int, Query(ge=1, le=90)] = 14,
 ) -> ContributionSummaryRead:
     payload = contribution_summary(session, settings, window_days=window_days)
-    return ContributionSummaryRead(**payload)
+    return ContributionSummaryRead(
+        **{
+            **payload,
+            "contributors": [_row_read(row) for row in payload["contributors"]],
+        }
+    )
 
 
 @router.post("", response_model=ContributorRead, status_code=status.HTTP_201_CREATED)

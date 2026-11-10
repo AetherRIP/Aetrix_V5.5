@@ -9,7 +9,7 @@ export const Route = createFileRoute('/_app/analytics')({
 function Analytics() {
   return (
     <div className="app-stack">
-      <Panel title="Cohort outline" note="Awaits the engine">
+      <Panel title="Cohort outline" note="Not implemented">
         <StatsStrip
           metrics={[
             { label: 'Mean mark' },

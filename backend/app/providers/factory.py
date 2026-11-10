@@ -33,4 +33,5 @@ def build_provider(settings: Settings) -> LLMProvider:
     return GeminiProvider(
         base_url=settings.provider.gemini_base_url,
         timeout_seconds=settings.provider.request_timeout_seconds,
+        thinking_budget=settings.provider.thinking_budget,
     )

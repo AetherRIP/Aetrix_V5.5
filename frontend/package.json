@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite dev --port 3000",
     "generate-routes": "tsr generate",
-    "build": "vite build",
+    "build": "vite build && node scripts/strip-dev-vars.mjs && node scripts/legal-clean-urls.mjs",
     "preview": "vite preview --port 3000",
     "deploy": "npm run build && wrangler deploy",
     "typecheck": "tsc --noEmit",

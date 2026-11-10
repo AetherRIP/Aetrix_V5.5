@@ -8,6 +8,7 @@ node_modules/
 # Secrets and local config
 .env
 .env.*
+aetrix-stack.env
 cloudflare.env
 CloudFlare.env
 !.env.example

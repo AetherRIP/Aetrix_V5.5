@@ -49,8 +49,10 @@ from ..providers.errors import (
     ProviderError,
     ProviderQuotaError,
     ProviderTransientError,
+    failure_category,
 )
 from ..providers.pricing import estimate_cost, rate_for
+from .quota import day_start
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,12 +110,19 @@ class CredentialPool:
             if limits and limits.requests_per_day is not None
             else self.settings.quota.requests_per_day
         )
+        minute_since = now - timedelta(minutes=1)
+        day_since = day_start(now, self.settings.quota.daily_reset_timezone)
         minute = self.reservations.count_since_project(
-            project_id, now - timedelta(minutes=1), now
-        )
+            project_id, minute_since, now, model=model
+        ) + self.usage.validation_count(project_id, model, minute_since)
+        # The daily allowance resets at local midnight in the configured quota
+        # zone (Pacific by default), not at a rolling UTC 24-hour boundary.
         day = self.reservations.count_since_project(
-            project_id, now - timedelta(days=1), now
-        )
+            project_id,
+            day_since,
+            now,
+            model=model,
+        ) + self.usage.validation_count(project_id, model, day_since)
         return minute < per_minute and day < per_day
 
     def _project_in_cooldown(self, project_id: str) -> bool:
@@ -148,6 +157,7 @@ class CredentialPool:
             reservation = self.reservations.reserve(
                 tenant_id=tenant_id,
                 credential_id=credential.id,
+                model=model,
                 purpose=purpose,
                 ttl_seconds=self.settings.quota.reservation_ttl_seconds,
             )
@@ -174,8 +184,9 @@ class CredentialPool:
         lease: CredentialLease,
         *,
         status: str,
-        health: str,
+        health: str | None,
         error: str | None = None,
+        status_code: int | None = None,
         cooldown_seconds: int | None = None,
     ) -> None:
         credential = self.session.get(ProviderCredential, lease.credential_id)
@@ -184,17 +195,24 @@ class CredentialPool:
         if reservation is not None:
             reservation.status = status
         if credential is not None:
-            credential.health = health
-            credential.last_error = error[:400] if error else None
+            # ``health`` is None for operational failures.  A timeout, 403 or
+            # 5xx does not erase the last authentication verdict.
+            if health is not None:
+                credential.health = health
             if health == "HEALTHY":
                 credential.last_success_at = now
                 credential.cooldown_until = None
             else:
                 credential.last_failure_at = now
-                if health == "COOLDOWN":
-                    credential.cooldown_until = now + timedelta(
-                        seconds=cooldown_seconds or self.settings.quota.cooldown_seconds
-                    )
+                credential.last_failure_status = status_code
+                # Keep the last failure even after a later success: the key may
+                # be healthy now, and the operator still needs to know what
+                # broke and when.
+                credential.last_error = error[:400] if error else None
+                if health is not None and health != "HEALTHY":
+                    credential.last_failure_at = now
+                if cooldown_seconds:
+                    credential.cooldown_until = now + timedelta(seconds=cooldown_seconds)
         self.session.commit()
 
     def success(self, lease: CredentialLease) -> None:
@@ -217,8 +235,9 @@ class CredentialPool:
         self,
         lease: CredentialLease,
         *,
-        health: str,
+        health: str | None = None,
         error: str,
+        status_code: int | None = None,
         count_toward_quota: bool = True,
         cooldown_seconds: int | None = None,
     ) -> None:
@@ -227,6 +246,7 @@ class CredentialPool:
             status="CONSUMED" if count_toward_quota else "RELEASED",
             health=health,
             error=error,
+            status_code=status_code,
             cooldown_seconds=cooldown_seconds,
         )
 
@@ -248,9 +268,15 @@ class ProviderCallService:
         self.prompt_versions = PromptVersionRepository(session)
 
     def _model_for(self, role: str) -> str:
-        if role == "review":
-            return self.settings.provider.model_review
-        return self.settings.provider.model_primary
+        # The saved selection is authoritative; the environment is only the
+        # fallback before an operator has chosen a model.
+        from .model_catalogue import selected_model
+
+        return selected_model(
+            self.session,
+            self.settings,
+            "review" if role == "review" else "primary",
+        )
 
     def _record(
         self,
@@ -267,6 +293,11 @@ class ProviderCallService:
         latency_ms: int | None,
         http_status: int | None,
         error_class: str | None,
+        error_category: str | None = None,
+        provider_code: str | None = None,
+        provider_message: str | None = None,
+        reached_provider: bool | None = None,
+        finish_reason: str | None = None,
         retry_count: int = 0,
     ) -> tuple[uuid.UUID, Decimal | None]:
         cost = estimate_cost(rate_for(self.settings, model), usage) if success else None
@@ -291,6 +322,11 @@ class ProviderCallService:
             latency_ms=latency_ms,
             http_status=http_status,
             error_class=error_class,
+            error_category=error_category,
+            provider_code=provider_code,
+            provider_message=provider_message,
+            reached_provider=reached_provider,
+            finish_reason=finish_reason,
         )
         return row.id, cost
 
@@ -337,10 +373,28 @@ class ProviderCallService:
             except ProviderNotConfigured as error:
                 self.pool.failure(
                     lease,
-                    health="UNKNOWN",
                     error=str(error),
                     count_toward_quota=False,
                 )
+                self._record(
+                    tenant_id=tenant_id,
+                    lease=lease,
+                    job_id=job_id,
+                    model=model,
+                    purpose=purpose,
+                    prompt_version_id=prompt_row.id,
+                    usage=TokenUsage(),
+                    success=False,
+                    request_id=None,
+                    latency_ms=None,
+                    http_status=None,
+                    error_class="ProviderNotConfigured",
+                    error_category="configuration",
+                    provider_message=str(error)[:300],
+                    reached_provider=False,
+                    retry_count=attempt,
+                )
+                self.session.commit()
                 raise AppError(
                     ErrorCode.PROVIDER_UNAVAILABLE,
                     str(error),
@@ -357,10 +411,13 @@ class ProviderCallService:
                     if is_quota and error.retry_after_seconds
                     else None
                 )
+                # Only a 401 proves the credential invalid.  Permission, quota,
+                # network and provider failures say nothing about validity.
                 self.pool.failure(
                     lease,
-                    health="INVALID" if is_auth else ("COOLDOWN" if is_quota else "UNKNOWN"),
+                    health="INVALID" if is_auth else None,
                     error=f"{type(error).__name__}: {error}",
+                    status_code=error.status_code,
                     count_toward_quota=not is_auth,
                     cooldown_seconds=cooldown_seconds,
                 )
@@ -373,6 +430,7 @@ class ProviderCallService:
                         seconds=cooldown_seconds or self.settings.quota.cooldown_seconds,
                         reason=f"Project quota exhausted: {error}",
                     )
+                error_usage = error.usage or TokenUsage()
                 self._record(
                     tenant_id=tenant_id,
                     lease=lease,
@@ -380,12 +438,17 @@ class ProviderCallService:
                     model=model,
                     purpose=purpose,
                     prompt_version_id=prompt_row.id,
-                    usage=TokenUsage(),
+                    usage=error_usage,
                     success=False,
-                    request_id=None,
-                    latency_ms=None,
+                    request_id=error.provider_request_id,
+                    latency_ms=error.latency_ms,
                     http_status=error.status_code,
                     error_class=type(error).__name__,
+                    error_category=failure_category(error),
+                    provider_code=error.provider_code,
+                    provider_message=error.provider_message,
+                    reached_provider=error.reached_provider,
+                    finish_reason=error.provider_code,
                     retry_count=attempt,
                 )
                 self.session.commit()
@@ -403,6 +466,34 @@ class ProviderCallService:
                     "The provider rejected the request; retrying it unchanged cannot help.",
                     details={"status_code": error.status_code},
                 ) from error
+            except Exception as error:
+                # An Aetrix-side defect is a failed attempt too.  It must not
+                # leave a reservation RESERVED or vanish from the ledger.
+                self.pool.failure(
+                    lease,
+                    error=f"Internal: {type(error).__name__}: {error}",
+                    count_toward_quota=False,
+                )
+                self._record(
+                    tenant_id=tenant_id,
+                    lease=lease,
+                    job_id=job_id,
+                    model=model,
+                    purpose=purpose,
+                    prompt_version_id=prompt_row.id,
+                    usage=TokenUsage(),
+                    success=False,
+                    request_id=None,
+                    latency_ms=None,
+                    http_status=None,
+                    error_class=type(error).__name__,
+                    error_category="internal",
+                    provider_message=str(error)[:300],
+                    reached_provider=False,
+                    retry_count=attempt,
+                )
+                self.session.commit()
+                raise
             else:
                 usage_id, cost = self._record(
                     tenant_id=tenant_id,
@@ -417,6 +508,8 @@ class ProviderCallService:
                     latency_ms=response.latency_ms,
                     http_status=200,
                     error_class=None,
+                    reached_provider=True,
+                    finish_reason=response.finish_reason,
                     retry_count=attempt,
                 )
                 self.pool.success(lease)

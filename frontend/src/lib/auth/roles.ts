@@ -11,7 +11,7 @@
  * that counts. See `docs/architecture/AETRIX_V5.5_SYSTEM.md`.
  */
 
-export type AccountRole = 'owner' | 'platform_operator' | 'supervisor' | 'assistant'
+export type AccountRole = 'owner' | 'platform_operator' | 'supervisor' | 'assistant' | 'viewer'
 
 export type Permission =
   | 'platform.users.read'
@@ -114,6 +114,14 @@ const PERMISSIONS: Record<AccountRole, readonly Permission[]> = {
     'own.progress.read',
     'own.submissions.read',
   ],
+  viewer: [
+    'students.read',
+    'assignments.read',
+    'submissions.read',
+    'gradebook.read',
+    'analytics.read',
+    'notifications.read',
+  ],
 }
 
 export type RoleMeta = {
@@ -135,12 +143,13 @@ export type RoleMeta = {
  */
 export const ENGINE_ROLE: Record<
   AccountRole,
-  'ADMIN' | 'OWNER' | 'REVIEWER' | 'PLATFORM_OWNER'
+  'ADMIN' | 'OWNER' | 'REVIEWER' | 'VIEWER' | 'PLATFORM_OWNER'
 > = {
   owner: 'PLATFORM_OWNER',
   platform_operator: 'ADMIN',
   supervisor: 'OWNER',
   assistant: 'REVIEWER',
+  viewer: 'VIEWER',
 }
 
 export const ROLE_META: Record<AccountRole, RoleMeta> = {
@@ -172,6 +181,13 @@ export const ROLE_META: Record<AccountRole, RoleMeta> = {
     scope: 'Assigned classes and submissions',
     home: '/assistant',
   },
+  viewer: {
+    role: 'viewer',
+    label: 'Viewer',
+    summary: 'Reads the workspace without changing marks or membership.',
+    scope: 'Read-only access to this workspace',
+    home: '/dashboard',
+  },
 }
 
 const ROLES: readonly AccountRole[] = [
@@ -179,6 +195,7 @@ const ROLES: readonly AccountRole[] = [
   'platform_operator',
   'supervisor',
   'assistant',
+  'viewer',
 ]
 
 function isRole(value: unknown): value is AccountRole {
@@ -207,6 +224,28 @@ export function readRole(user: ClaimSubject): AccountRole | null {
   return null
 }
 
+/**
+ * Which account type the interface should use.
+ *
+ * The engine resolves membership from the verified token and its own rows, so
+ * once it has answered, that answer is final. The identity provider's claim is
+ * only a provisional routing hint: it is used while `/me` is in flight, and when
+ * the engine cannot be reached at all. A stale or incorrect claim can therefore
+ * neither demote the platform owner nor promote an assistant.
+ *
+ * An engine answer with no recognised role is also final: the shell shows its
+ * "role required" state instead of falling back to a claim.
+ */
+export function resolveRole(input: {
+  /** True once /me has answered, successfully or not. */
+  engineResolved: boolean
+  engineRole: AccountRole | null
+  claimRole: AccountRole | null
+}): AccountRole | null {
+  if (input.engineResolved) return input.engineRole
+  return input.claimRole
+}
+
 export function can(role: AccountRole | null, permission: Permission): boolean {
   if (!role) return false
   return PERMISSIONS[role].includes(permission)
@@ -220,6 +259,8 @@ export type AppPath =
   | '/dashboard'
   | '/workspace'
   | '/inbox'
+  | '/notifications'
+  | '/history'
   | '/queue'
   | '/assignments'
   | '/reports'
@@ -318,11 +359,34 @@ const ASSISTANT_NAV: RoleNav = {
   ],
 }
 
+const VIEWER_NAV: RoleNav = {
+  primary: [
+    { to: '/dashboard', label: 'Dashboard', icon: 'chart' },
+    { to: '/inbox', label: 'Inbox', icon: 'records' },
+    { to: '/students', label: 'Classes & students', icon: 'classroom' },
+    { to: '/assignments', label: 'Assignments', icon: 'assignment' },
+    { to: '/reports', label: 'Reports', icon: 'blueprint' },
+    { to: '/gradebook', label: 'Gradebook', icon: 'checkDouble' },
+  ],
+  groupLabel: 'Workspace',
+  secondary: [
+    { to: '/notifications', label: 'Notifications', icon: 'records' },
+    { to: '/history', label: 'Marking history', icon: 'blueprint' },
+    { to: '/workspace', label: 'Workspace', icon: 'lock' },
+    { to: '/settings', label: 'Settings', icon: 'lock' },
+  ],
+  tabs: [
+    { to: '/dashboard', label: 'Dashboard', icon: 'chart' },
+    { to: '/assignments', label: 'Assignments', icon: 'assignment' },
+    { to: '/inbox', label: 'Inbox', icon: 'records' },
+  ],
+}
+
 const PLATFORM_NAV: RoleNav = {
   primary: [
     { to: '/platform', label: 'Platform overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
-    { to: '/platform/users', label: 'Accounts', icon: 'eye' },
+    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'System health', icon: 'server' },
     { to: '/platform/audit', label: 'Audit log', icon: 'records' },
   ],
@@ -334,8 +398,8 @@ const PLATFORM_NAV: RoleNav = {
   ],
   tabs: [
     { to: '/platform', label: 'Overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
-    { to: '/platform/users', label: 'Accounts', icon: 'eye' },
+    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'Health', icon: 'server' },
   ],
 }
@@ -348,8 +412,8 @@ const PLATFORM_NAV: RoleNav = {
 const OWNER_NAV: RoleNav = {
   primary: [
     { to: '/platform', label: 'Platform overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
-    { to: '/platform/users', label: 'Accounts', icon: 'eye' },
+    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'System health', icon: 'server' },
     { to: '/platform/audit', label: 'Audit log', icon: 'records' },
   ],
@@ -364,8 +428,8 @@ const OWNER_NAV: RoleNav = {
   ],
   tabs: [
     { to: '/platform', label: 'Overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
-    { to: '/platform/users', label: 'Accounts', icon: 'eye' },
+    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'Health', icon: 'server' },
   ],
 }
@@ -375,6 +439,7 @@ export const NAV_BY_ROLE: Record<AccountRole, RoleNav> = {
   platform_operator: PLATFORM_NAV,
   supervisor: TEACHER_NAV,
   assistant: ASSISTANT_NAV,
+  viewer: VIEWER_NAV,
 }
 
 /** Every route an account type may open, as path prefixes. */
@@ -395,6 +460,8 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/assistants',
     '/classroom',
     '/assistant',
+    '/notifications',
+    '/history',
     '/submissions',
   ],
   platform_operator: ['/platform', '/settings'],
@@ -402,6 +469,8 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/dashboard',
     '/workspace',
     '/inbox',
+    '/notifications',
+    '/history',
     '/queue',
     '/assignments',
     '/reports',
@@ -415,11 +484,26 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
   assistant: [
     '/assistant',
     '/queue',
+    '/history',
+    '/notifications',
     '/reports',
     '/inbox',
     '/settings',
     '/assignments',
     '/submissions',
+  ],
+  viewer: [
+    '/dashboard',
+    '/workspace',
+    '/inbox',
+    '/notifications',
+    '/history',
+    '/assignments',
+    '/reports',
+    '/settings',
+    '/students',
+    '/gradebook',
+    '/analytics',
   ],
 }
 

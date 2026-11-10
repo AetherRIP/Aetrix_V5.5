@@ -1,0 +1,212 @@
+/*
+ * Controls for the screens that write to the engine.
+ *
+ * These are the same surfaces and hairlines as the rest of the hub: no raised
+ * inputs, no accent fills except the one focus ring. A form only appears where
+ * the engine accepts that write, and its error text states the engine's reason.
+ */
+
+.app-form {
+  display: grid;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+}
+
+.app-form--inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.app-form__row {
+  display: grid;
+  gap: 6px;
+}
+
+.app-form__label {
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.app-input {
+  min-height: 38px;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
+.app-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.app-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.app-form--inline .app-input,
+.app-input--narrow {
+  width: auto;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.app-input--narrow {
+  flex: none;
+  width: 5.5rem;
+}
+
+input[type='file'].app-input {
+  padding: 6px 8px;
+  font-size: 0.75rem;
+}
+
+input[type='file'].app-input::file-selector-button {
+  margin-right: 10px;
+  padding: 5px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.app-form__error {
+  margin: 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.app-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.app-message {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.app-message code {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+/* review canvas */
+
+.app-page-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--bg);
+}
+
+.app-question {
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.app-question:first-child {
+  padding-top: 0;
+}
+
+.app-question:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.app-question__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.app-question__id {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.app-criteria {
+  display: grid;
+  gap: 4px;
+  margin-top: var(--s-2);
+}
+
+.app-criteria__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.app-concerns {
+  display: grid;
+  gap: 3px;
+  margin-top: var(--s-2);
+  padding-left: var(--s-3);
+  border-left: 1px dashed var(--line-strong);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* per-file upload outcomes */
+
+.app-upload-list {
+  display: grid;
+  gap: 6px;
+  margin-top: var(--s-3);
+}
+
+.app-upload-list__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 0.8125rem;
+}
+
+.app-upload-list__detail {
+  grid-column: 1 / -1;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-3);
+}

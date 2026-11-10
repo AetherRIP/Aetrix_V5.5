@@ -48,7 +48,9 @@ export function ProductPreview() {
           <span className="console__dot" aria-hidden="true" />
           workspace / assignments / homework 6
         </p>
-        <span className="demo-tag">Demonstration data</span>
+        <span className="demo-tag" title="Every figure in this preview is invented for illustration">
+          Synthetic demonstration data
+        </span>
       </div>
 
       <div className="console__head">

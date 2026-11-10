@@ -15,6 +15,14 @@
       "model_role": "primary",
       "description": "Map a rendered answer-script page to approved blueprint questions.",
       "content_hash": "c2d0acf6c6167ae99edb9dec58748dbe08312fffe24532933f96180b713aec72"
+    },
+    {
+      "id": "question_marking",
+      "version": 1,
+      "path": "question_marking/v1.md",
+      "model_role": "primary",
+      "description": "Mark one question against an approved blueprint and record evidence.",
+      "content_hash": "f39b417128bc766d80097ff0d3f81d33a2f79918300a81bf3f5a5297cf3e1dfd"
     }
   ]
 }

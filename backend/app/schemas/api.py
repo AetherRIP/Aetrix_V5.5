@@ -9,6 +9,14 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class WorkspaceRead(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    role: str
+    is_demo: bool
+
+
 class ExamCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     board: str | None = Field(default=None, max_length=80)
@@ -107,6 +115,7 @@ class JobRead(BaseModel):
     error_code: str | None
     error_message: str | None
     retryable: bool | None
+    resume_state: str | None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None
@@ -114,8 +123,71 @@ class JobRead(BaseModel):
     record_version: int
 
 
+class JobSubmissionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    assignment_id: UUID
+    student_ref: str
+    status: str
+    content_hash: str
+    created_at: datetime
+
+
+class JobDocumentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    kind: str
+    original_filename: str
+    sha256: str
+    mime_type: str
+    size_bytes: int
+    page_count: int
+    status: str
+    ordering_status: str
+    mapping_status: str
+    error_code: str | None
+    processed_at: datetime | None
+    created_at: datetime
+
+
+class JobProviderCallRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    model: str
+    purpose: str
+    success: bool
+    http_status: int | None
+    latency_ms: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    error_class: str | None
+    provider_message: str | None
+    created_at: datetime
+
+
+class JobReviewDecisionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    question_id: str
+    requested_reason: str
+    mode: str
+    outcome: str | None
+    decided_by: str | None
+    decided_at: datetime | None
+    created_at: datetime
+
+
 class JobDetailRead(JobRead):
     events: list[JobEventRead] = Field(default_factory=list)
+    submission: JobSubmissionRead | None = None
+    assignment_name: str | None = None
+    documents: list[JobDocumentRead] = Field(default_factory=list)
+    provider_call: JobProviderCallRead | None = None
+    review_decisions: list[JobReviewDecisionRead] = Field(default_factory=list)
+    review_reasons: list[str] = Field(default_factory=list)
 
 
 class ProviderHealthRead(BaseModel):

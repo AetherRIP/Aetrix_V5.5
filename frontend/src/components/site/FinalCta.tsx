@@ -25,7 +25,8 @@ export function FinalCta() {
             Sign in
           </Link>
           <p className="final-cta__note">
-            Pilot access is by invitation. Sign-in is not enabled in this build.
+            Pilot access is by invitation. Sign in with an invited Google account, or
+            with the credentials a workspace owner issued.
           </p>
         </div>
       </div>

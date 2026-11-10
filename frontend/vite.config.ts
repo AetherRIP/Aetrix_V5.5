@@ -35,6 +35,8 @@ export default defineConfig({
         { path: '/reports' },
         { path: '/settings' },
         { path: '/auth/callback' },
+        { path: '/privacy' },
+        { path: '/terms' },
       ],
       prerender: {
         enabled: true,

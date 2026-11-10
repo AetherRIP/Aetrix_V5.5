@@ -14,7 +14,6 @@ from ...jobs.service import JobService
 from ...schemas.api import (
     CorrectionCreate,
     JobDetailRead,
-    JobEventRead,
     JobRead,
 )
 from ..deps import get_principal
@@ -59,12 +58,7 @@ def get_correction(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> JobDetailRead:
-    job, events = _service(session, settings).get_with_events(principal.tenant_id, job_id)
-    base = JobRead.model_validate(job)
-    return JobDetailRead(
-        **base.model_dump(),
-        events=[JobEventRead.model_validate(event) for event in events],
-    )
+    return _service(session, settings).detail(principal.tenant_id, job_id)
 
 
 @router.post("/{job_id}/cancel", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)

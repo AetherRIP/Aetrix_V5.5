@@ -28,6 +28,12 @@ export function SiteFooter() {
             <Link to="/sign-in" hash="access">Pilot access</Link>
           </nav>
 
+          <nav className="site-footer__col" aria-label="Legal">
+            <h2 className="site-footer__heading">Legal</h2>
+            <Link to="/privacy">Privacy Policy</Link>
+            <Link to="/terms">Terms of Service</Link>
+          </nav>
+
           <div className="site-footer__col">
             <h2 className="site-footer__heading">Build</h2>
             <p>TanStack Start 1.0 · React SSR</p>

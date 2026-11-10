@@ -29,19 +29,40 @@ class QuotaEstimateRead(BaseModel):
     tokens_per_minute: QuotaWindowRead
     requests_per_day: QuotaWindowRead
     reset_at: datetime
+    reset_timezone: str
     observed_at: datetime
     cooldown_until: datetime | None
+    accounting: str
     exhausted: bool
     notes: list[str]
 
 
 class ProjectRead(BaseModel):
     project_id: str
+    #: The operator-declared id is preserved; Google verification is reported
+    #: beside it.  ``UNVERIFIED`` means no verification has run, never that the
+    #: project is believed valid.
+    verification: Literal[
+        "VERIFIED",
+        "NOT_FOUND",
+        "PERMISSION_DENIED",
+        "ERROR",
+        "UNVERIFIABLE",
+        "UNVERIFIED",
+        "OPERATOR_DECLARED",
+    ]
+    verified: bool
+    project_number: str | None = None
+    google_last_attempt_at: datetime | None = None
+    google_quota_last_synced_at: datetime | None = None
+    google_quota_stale: bool | None = None
     keys: int
     healthy: int
+    unknown: int
     disabled: int
     invalid: int
     cooldown_until: datetime | None
+    operational_status: str
     estimates: list[QuotaEstimateRead]
 
 
@@ -57,11 +78,18 @@ class KeyRead(BaseModel):
     auth_type: str
     tier: str
     health: str
+    operational_status: str
+    project_verification: Literal["OPERATOR_DECLARED"]
     model_access: list[str]
     cooldown_until: datetime | None
     last_success_at: datetime | None
     last_failure_at: datetime | None
     last_failure_status: int | None
+    last_failure_category: str | None
+    last_failure_provider_code: str | None
+    last_failure_message: str | None
+    last_failure_reached_provider: bool | None
+    last_usage_at: datetime | None
     last_validated_at: datetime | None
     last_error: str | None
     requests: int
@@ -110,10 +138,44 @@ class ImportOutcomeRead(BaseModel):
 
 
 class ValidationRead(BaseModel):
+    """What the probe actually did, not just whether it passed.
+
+    ``credential_id`` and ``key_fingerprint`` name the key that was tested, so a
+    caller can never mistake a sibling's result for this one.  No field can
+    carry the secret: the fingerprint is a truncated hash and every message is
+    produced by the adapter, not by echoing the request.
+    """
+
     credential_id: UUID
     health: str
+    operational_status: str
     valid: bool
     detail: str | None
+    #: A failure category, never a merged health verdict.
+    category: Literal[
+        "ok",
+        "authentication",
+        "permission",
+        "quota",
+        "configuration",
+        "network",
+        "provider_server",
+        "provider_response",
+        "invalid_request",
+        "unsupported_model",
+        "internal",
+    ]
+    http_status: int | None = None
+    model: str
+    checked_at: datetime
+    provider_code: str | None = None
+    provider_message: str | None = None
+    reached_provider: bool | None = None
+    recommendation: str | None = None
+    latency_ms: int | None = None
+    key_fingerprint: str
+    project_id: str
+    account_label: str
 
 
 class EnabledRequest(BaseModel):
@@ -124,14 +186,27 @@ class FleetOverviewRead(BaseModel):
     keys_total: int
     keys_by_health: dict[str, int]
     projects: int
+    declared_projects: int
+    verified_projects: int
+    project_verification: Literal["OPERATOR_DECLARED", "GOOGLE_CLOUD"]
+    attempted_today: int
     requests_today: int
+    successful_today: int
     input_tokens_today: int
     output_tokens_today: int
     failures_today: int
+    reported_requests_today: int
     error_rate_today: float | None
+    operational_status: str
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    last_failure_category: str | None
+    last_failure_message: str | None
     observed_at: datetime
     day_started_at: datetime
     reset_at: datetime
+    reset_timezone: str
+    quota_accounting: str
     projects_detail: list[ProjectRead]
 
 
@@ -160,11 +235,34 @@ class DailyUsageRead(BaseModel):
     failures: int
 
 
+class RecentProviderCallRead(BaseModel):
+    id: UUID
+    created_at: datetime
+    credential_id: UUID | None
+    credential_label: str | None
+    project_id: str
+    model: str
+    purpose: str
+    success: bool
+    http_status: int | None
+    error_class: str | None
+    error_category: str | None
+    provider_code: str | None
+    provider_message: str | None
+    reached_provider: bool | None
+    input_tokens: int | None
+    output_tokens: int | None
+    request_id: str | None
+    latency_ms: int | None
+
+
 class UsageReportRead(BaseModel):
     since: datetime
+    timezone: str
     daily: list[DailyUsageRead]
     by_model: list[ModelUsageRead]
     by_project: list[ProjectUsageRead]
+    recent_calls: list[RecentProviderCallRead]
 
 
 class AlertRead(BaseModel):

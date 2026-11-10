@@ -149,6 +149,22 @@ async def upload_scheme(
     )
 
 
+@router.get(
+    "/exams/{exam_id}/scheme-versions", response_model=list[SchemeVersionRead]
+)
+def list_scheme_versions(
+    exam_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    storage: Storage = Depends(get_storage),
+) -> list[SchemeVersionRead]:
+    versions = SchemeService(session, settings, storage).list_versions(
+        principal.tenant_id, exam_id
+    )
+    return [SchemeVersionRead.model_validate(version) for version in versions]
+
+
 @router.get("/schemes/{version_id}", response_model=SchemeVersionRead)
 def get_scheme_version(
     version_id: uuid.UUID,

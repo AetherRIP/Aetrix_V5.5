@@ -90,7 +90,10 @@ BLUEPRINT_STRUCTURE = {
 }
 
 
-@pytest.fixture(scope="session", autouse=True)
+#: Only fixtures that actually need PostgreSQL request ``engine``, which in turn
+#: requests this. Pure unit tests therefore never run migrations or open a
+#: connection, while every integration test still migrates to head first.
+@pytest.fixture(scope="session")
 def migrated_database() -> None:
     config = Config(str(BACKEND / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND / "migrations"))
@@ -106,7 +109,25 @@ def engine(migrated_database):
 
 
 @pytest.fixture(autouse=True)
-def clean_tables(engine):
+def clean_tables(request):
+    # Unit tests are pure logic: they never open a connection, so they must not
+    # be blocked by a database fixture. Only tests under tests/integration get
+    # the truncating fixture, and their isolation is unchanged.
+    if "integration" not in Path(str(request.node.path)).parts:
+        yield
+        return
+    engine = request.getfixturevalue("engine")
+    # These tests delete every row in every table.  Without an explicit
+    # disposable database they must not run against a shared or reachable
+    # Supabase project, because that would destroy real workspace data.
+    if not os.environ.get("AETRIX_TEST_DATABASE_URL"):
+        dsn = get_settings().database.dsn()
+        if "localhost" not in dsn and "127.0.0.1" not in dsn:
+            raise RuntimeError(
+                "Refusing to TRUNCATE a non-loopback database: set "
+                "AETRIX_TEST_DATABASE_URL to a disposable test database. "
+                "The integration suite deletes every row."
+            )
     names = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
     statement = text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE")
     with engine.begin() as connection:

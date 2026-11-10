@@ -23,12 +23,15 @@ from .models import (
     AuditEvent,
     BlueprintOverride,
     CorrectionJob,
+    CriterionResult,
     Document,
     DocumentPage,
     Exam,
     ExamBlueprintVersion,
+    Invitation,
     JobEvent,
     MarkingCriterion,
+    MarkingEvidence,
     MarkScheme,
     MarkSchemeVersion,
     PageQuestionMapping,
@@ -38,9 +41,14 @@ from .models import (
     ProviderProjectCooldown,
     ProviderQuotaReservation,
     ProviderUsage,
+    QuestionResult,
+    ReviewDecision,
+    SchoolClass,
+    Student,
     Submission,
     Tenant,
     User,
+    VerificationResult,
 )
 
 
@@ -78,6 +86,23 @@ class UserRepository:
     def find_by_subject_any_tenant(self, subject: str) -> list[User]:
         return list(self.session.scalars(select(User).where(User.subject == subject).limit(2)))
 
+    def get_by_email(self, tenant_id: uuid.UUID, email: str) -> User | None:
+        return self.session.scalar(
+            select(User).where(
+                User.tenant_id == tenant_id,
+                func.lower(User.email) == email.strip().lower(),
+            )
+        )
+
+    def list_for_tenant(self, tenant_id: uuid.UUID) -> list[User]:
+        return list(
+            self.session.scalars(
+                select(User)
+                .where(User.tenant_id == tenant_id)
+                .order_by(User.created_at.asc(), User.id.asc())
+            )
+        )
+
     def create(
         self,
         *,
@@ -97,6 +122,74 @@ class UserRepository:
         self.session.add(user)
         self.session.flush()
         return user
+
+
+class InvitationRepository:
+    """Membership invitations, always addressed to one tenant and one email."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, tenant_id: uuid.UUID, invitation_id: uuid.UUID) -> Invitation | None:
+        return self.session.scalar(
+            select(Invitation).where(
+                Invitation.id == invitation_id, Invitation.tenant_id == tenant_id
+            )
+        )
+
+    def get_by_token_hash(self, token_hash: str) -> Invitation | None:
+        return self.session.scalar(
+            select(Invitation).where(Invitation.token_hash == token_hash)
+        )
+
+    def find_pending_for_email(
+        self, email: str, tenant_id: uuid.UUID | None = None
+    ) -> list[Invitation]:
+        statement = select(Invitation).where(
+            Invitation.email == email.strip().lower(),
+            Invitation.status == "PENDING",
+            Invitation.expires_at > utcnow(),
+        )
+        if tenant_id is not None:
+            statement = statement.where(Invitation.tenant_id == tenant_id)
+        return list(self.session.scalars(statement.order_by(Invitation.created_at.asc()).limit(2)))
+
+    def list_for_tenant(
+        self, tenant_id: uuid.UUID, *, status: str | None = None, limit: int = 100
+    ) -> list[Invitation]:
+        statement = select(Invitation).where(Invitation.tenant_id == tenant_id)
+        if status is not None:
+            statement = statement.where(Invitation.status == status)
+        return list(
+            self.session.scalars(
+                statement.order_by(Invitation.created_at.desc()).limit(limit)
+            )
+        )
+
+    def create(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        email: str,
+        role: str,
+        token_hash: str,
+        invited_by: uuid.UUID | None,
+        expires_at: Any,
+        note: str | None = None,
+    ) -> Invitation:
+        invitation = Invitation(
+            tenant_id=tenant_id,
+            email=email.strip().lower(),
+            role=role,
+            status="PENDING",
+            token_hash=token_hash,
+            invited_by=invited_by,
+            expires_at=expires_at,
+            note=note,
+        )
+        self.session.add(invitation)
+        self.session.flush()
+        return invitation
 
 
 class ExamRepository:
@@ -432,6 +525,20 @@ class SubmissionRepository:
             )
         )
 
+    def list_for_assignment(
+        self, tenant_id: uuid.UUID, assignment_id: uuid.UUID
+    ) -> list[Submission]:
+        return list(
+            self.session.scalars(
+                select(Submission)
+                .where(
+                    Submission.tenant_id == tenant_id,
+                    Submission.assignment_id == assignment_id,
+                )
+                .order_by(Submission.created_at.desc())
+            )
+        )
+
     def create(
         self,
         *,
@@ -494,6 +601,21 @@ class JobRepository:
             )
         )
 
+    def list_for_submission(
+        self, tenant_id: uuid.UUID, submission_id: uuid.UUID, *, limit: int = 50
+    ) -> list[CorrectionJob]:
+        return list(
+            self.session.scalars(
+                select(CorrectionJob)
+                .where(
+                    CorrectionJob.tenant_id == tenant_id,
+                    CorrectionJob.submission_id == submission_id,
+                )
+                .order_by(CorrectionJob.created_at.desc())
+                .limit(limit)
+            )
+        )
+
     def create(
         self,
         *,
@@ -529,6 +651,31 @@ class JobRepository:
                 select(JobEvent)
                 .where(JobEvent.tenant_id == tenant_id, JobEvent.job_id == job_id)
                 .order_by(JobEvent.event_seq)
+            )
+        )
+
+    def latest_provider_usage(
+        self, tenant_id: uuid.UUID, job_id: uuid.UUID
+    ) -> ProviderUsage | None:
+        return self.session.scalar(
+            select(ProviderUsage)
+            .where(ProviderUsage.tenant_id == tenant_id, ProviderUsage.job_id == job_id)
+            .order_by(ProviderUsage.created_at.desc())
+            .limit(1)
+        )
+
+    def review_decisions(
+        self, tenant_id: uuid.UUID, job_id: uuid.UUID, *, limit: int = 50
+    ) -> list[ReviewDecision]:
+        return list(
+            self.session.scalars(
+                select(ReviewDecision)
+                .where(
+                    ReviewDecision.tenant_id == tenant_id,
+                    ReviewDecision.job_id == job_id,
+                )
+                .order_by(ReviewDecision.created_at.desc())
+                .limit(limit)
             )
         )
 
@@ -737,6 +884,105 @@ class JobRepository:
         job.error_message = message[:2000]
         job.retryable = retryable
         self.session.flush()
+
+
+class ResultRepository:
+    """Question results, their evidence and the decisions made about them."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(
+        self, tenant_id: uuid.UUID, question_result_id: uuid.UUID
+    ) -> QuestionResult | None:
+        return self.session.scalar(
+            select(QuestionResult).where(
+                QuestionResult.id == question_result_id,
+                QuestionResult.tenant_id == tenant_id,
+            )
+        )
+
+    def get_question(
+        self, job_id: uuid.UUID, question_id: str
+    ) -> QuestionResult | None:
+        return self.session.scalar(
+            select(QuestionResult).where(
+                QuestionResult.job_id == job_id,
+                QuestionResult.question_id == question_id,
+            )
+        )
+
+    def list_for_job(
+        self, tenant_id: uuid.UUID, job_id: uuid.UUID
+    ) -> list[QuestionResult]:
+        return list(
+            self.session.scalars(
+                select(QuestionResult)
+                .where(
+                    QuestionResult.tenant_id == tenant_id,
+                    QuestionResult.job_id == job_id,
+                )
+                .order_by(QuestionResult.question_id.asc())
+            )
+        )
+
+    def list_for_jobs(
+        self, tenant_id: uuid.UUID, job_ids: list[uuid.UUID]
+    ) -> list[QuestionResult]:
+        if not job_ids:
+            return []
+        return list(
+            self.session.scalars(
+                select(QuestionResult)
+                .where(
+                    QuestionResult.tenant_id == tenant_id,
+                    QuestionResult.job_id.in_(job_ids),
+                )
+                .order_by(QuestionResult.question_id.asc())
+            )
+        )
+
+    def criteria(
+        self, question_result_ids: list[uuid.UUID]
+    ) -> list[CriterionResult]:
+        if not question_result_ids:
+            return []
+        return list(
+            self.session.scalars(
+                select(CriterionResult)
+                .where(CriterionResult.question_result_id.in_(question_result_ids))
+                .order_by(CriterionResult.code.asc())
+            )
+        )
+
+    def evidence(self, question_result_ids: list[uuid.UUID]) -> list[MarkingEvidence]:
+        if not question_result_ids:
+            return []
+        return list(
+            self.session.scalars(
+                select(MarkingEvidence).where(
+                    MarkingEvidence.question_result_id.in_(question_result_ids)
+                )
+            )
+        )
+
+    def verifications(self, job_id: uuid.UUID) -> list[VerificationResult]:
+        return list(
+            self.session.scalars(
+                select(VerificationResult)
+                .where(VerificationResult.job_id == job_id)
+                .order_by(VerificationResult.question_id.asc(), VerificationResult.kind.asc())
+            )
+        )
+
+    def reviews(self, job_id: uuid.UUID) -> list[ReviewDecision]:
+        return list(
+            self.session.scalars(
+                select(ReviewDecision)
+                .where(ReviewDecision.job_id == job_id)
+                .order_by(ReviewDecision.created_at.asc())
+            )
+        )
 
 
 class DocumentRepository:
@@ -1064,12 +1310,19 @@ class CredentialRepository:
         Platform-owned keys (``contributor_id IS NULL``) are always eligible.
         """
 
+        # PostgreSQL refuses ``FOR UPDATE`` on the nullable side of an outer
+        # join.  An EXISTS predicate enforces the same contributor rule without
+        # making the locked credential row part of an outer join.
+        active_contributor = (
+            select(ProviderContributor.id)
+            .where(
+                ProviderContributor.id == ProviderCredential.contributor_id,
+                ProviderContributor.status == "ACTIVE",
+            )
+            .exists()
+        )
         statement = (
             select(ProviderCredential)
-            .outerjoin(
-                ProviderContributor,
-                ProviderContributor.id == ProviderCredential.contributor_id,
-            )
             .where(
                 or_(
                     ProviderCredential.tenant_id == tenant_id,
@@ -1079,7 +1332,7 @@ class CredentialRepository:
                 ProviderCredential.revoked_at.is_(None),
                 or_(
                     ProviderCredential.contributor_id.is_(None),
-                    ProviderContributor.status == "ACTIVE",
+                    active_contributor,
                 ),
                 or_(
                     ProviderCredential.cooldown_until.is_(None),
@@ -1149,29 +1402,58 @@ class QuotaReservationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def count_since(self, credential_id: uuid.UUID, since: Any, now: Any) -> int:
+    def count_since(
+        self,
+        credential_id: uuid.UUID,
+        since: Any,
+        now: Any,
+        *,
+        model: str | None = None,
+    ) -> int:
+        conditions = [
+            ProviderQuotaReservation.credential_id == credential_id,
+            ProviderQuotaReservation.created_at >= since,
+            or_(
+                ProviderQuotaReservation.status == "CONSUMED",
+                (ProviderQuotaReservation.status == "RESERVED")
+                & (ProviderQuotaReservation.expires_at > now),
+            ),
+        ]
+        if model is not None:
+            conditions.append(ProviderQuotaReservation.model == model)
         return int(
             self.session.scalar(
-                select(func.count(ProviderQuotaReservation.id)).where(
-                    ProviderQuotaReservation.credential_id == credential_id,
-                    ProviderQuotaReservation.created_at >= since,
-                    or_(
-                        ProviderQuotaReservation.status == "CONSUMED",
-                        (ProviderQuotaReservation.status == "RESERVED")
-                        & (ProviderQuotaReservation.expires_at > now),
-                    ),
-                )
+                select(func.count(ProviderQuotaReservation.id)).where(*conditions)
             )
             or 0
         )
 
-    def count_since_project(self, project_id: str, since: Any, now: Any) -> int:
-        """Reservations for every credential in one Google Cloud project.
+    def count_since_project(
+        self,
+        project_id: str,
+        since: Any,
+        now: Any,
+        *,
+        model: str | None = None,
+    ) -> int:
+        """Reservations for one Google Cloud project and one model.
 
-        This is the number that matters: quota is shared per project, so adding
-        keys must not add capacity.
+        This is the number that matters: quota is shared per project, and Gemini
+        meters each model separately, so adding keys must not add capacity and a
+        flash call must not consume the review model's allowance.
         """
 
+        conditions = [
+            ProviderCredential.project_id == project_id,
+            ProviderQuotaReservation.created_at >= since,
+            or_(
+                ProviderQuotaReservation.status == "CONSUMED",
+                (ProviderQuotaReservation.status == "RESERVED")
+                & (ProviderQuotaReservation.expires_at > now),
+            ),
+        ]
+        if model is not None:
+            conditions.append(ProviderQuotaReservation.model == model)
         return int(
             self.session.scalar(
                 select(func.count(ProviderQuotaReservation.id))
@@ -1179,15 +1461,7 @@ class QuotaReservationRepository:
                     ProviderCredential,
                     ProviderCredential.id == ProviderQuotaReservation.credential_id,
                 )
-                .where(
-                    ProviderCredential.project_id == project_id,
-                    ProviderQuotaReservation.created_at >= since,
-                    or_(
-                        ProviderQuotaReservation.status == "CONSUMED",
-                        (ProviderQuotaReservation.status == "RESERVED")
-                        & (ProviderQuotaReservation.expires_at > now),
-                    ),
-                )
+                .where(*conditions)
             )
             or 0
         )
@@ -1230,12 +1504,19 @@ class QuotaReservationRepository:
         )
 
     def reserve(
-        self, *, tenant_id: uuid.UUID, credential_id: uuid.UUID, purpose: str, ttl_seconds: int
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        credential_id: uuid.UUID,
+        model: str,
+        purpose: str,
+        ttl_seconds: int,
     ) -> ProviderQuotaReservation:
         now = utcnow()
         row = ProviderQuotaReservation(
             tenant_id=tenant_id,
             credential_id=credential_id,
+            model=model,
             purpose=purpose,
             status="RESERVED",
             expires_at=now + timedelta(seconds=ttl_seconds),
@@ -1276,6 +1557,11 @@ class UsageRepository:
         project_id: str = "",
         retry_count: int = 0,
         contributor_id: uuid.UUID | None = None,
+        error_category: str | None = None,
+        provider_code: str | None = None,
+        provider_message: str | None = None,
+        reached_provider: bool | None = None,
+        finish_reason: str | None = None,
     ) -> ProviderUsage:
         row = ProviderUsage(
             tenant_id=tenant_id,
@@ -1298,6 +1584,11 @@ class UsageRepository:
             latency_ms=latency_ms,
             http_status=http_status,
             error_class=error_class,
+            error_category=error_category,
+            provider_code=provider_code,
+            provider_message=provider_message,
+            reached_provider=reached_provider,
+            finish_reason=finish_reason,
         )
         self.session.add(row)
         self.session.flush()
@@ -1341,16 +1632,52 @@ class UsageRepository:
 
     # ── fleet aggregation ───────────────────────────────────────────────────
 
-    def window_stats(self, since: Any, *, project_id: str | None = None) -> dict[str, Any]:
+    def validation_count(
+        self,
+        project_id: str,
+        model: str,
+        since: Any,
+    ) -> int:
+        """Real validation probes charged to one project/model allowance.
+
+        Probes call Google directly and therefore have no generation
+        reservation.  They still consume the same Google quota, so the quota
+        estimate and the call gate must count them separately rather than
+        pretending the allowance is untouched.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(ProviderUsage.id)).where(
+                    ProviderUsage.project_id == project_id,
+                    ProviderUsage.model == model,
+                    ProviderUsage.purpose == "validate",
+                    ProviderUsage.created_at >= since,
+                )
+            )
+            or 0
+        )
+
+    def window_stats(
+        self,
+        since: Any,
+        *,
+        project_id: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         """Requests, tokens and failures since ``since``.
 
         Failures are split by class so a 429 (quota) cannot be confused with a
-        500 (provider outage) in an alert or a rate calculation.
+        500 (provider outage) in an alert or a rate calculation.  Both
+        ``project_id`` and ``model`` narrow the same ledger, because Google's
+        allowance is one pool per project-model pair.
         """
 
         conditions = [ProviderUsage.created_at >= since]
         if project_id is not None:
             conditions.append(ProviderUsage.project_id == project_id)
+        if model is not None:
+            conditions.append(ProviderUsage.model == model)
 
         row = self.session.execute(
             select(
@@ -1364,16 +1691,30 @@ class UsageRepository:
                 func.count(ProviderUsage.id).filter(
                     ProviderUsage.error_class == "ProviderAuthenticationError"
                 ),
+                func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(True)),
+                func.count(ProviderUsage.id).filter(ProviderUsage.reported.is_(True)),
             ).where(*conditions)
         ).one()
-        requests, input_tokens, output_tokens, failures, quota_failures, auth_failures = row
+        (
+            requests,
+            input_tokens,
+            output_tokens,
+            failures,
+            quota_failures,
+            auth_failures,
+            successes,
+            reported_requests,
+        ) = row
         return {
+            "attempted": int(requests or 0),
             "requests": int(requests or 0),
+            "successes": int(successes or 0),
             "input_tokens": int(input_tokens or 0),
             "output_tokens": int(output_tokens or 0),
             "failures": int(failures or 0),
             "quota_failures": int(quota_failures or 0),
             "auth_failures": int(auth_failures or 0),
+            "reported_requests": int(reported_requests or 0),
         }
 
     def model_window_stats(self, since: Any) -> list[dict[str, Any]]:
@@ -1517,8 +1858,89 @@ class UsageRepository:
             if credential_id is not None
         }
 
-    def daily(self, since: Any) -> list[dict[str, Any]]:
-        day = func.date_trunc("day", ProviderUsage.created_at).label("day")
+    def latest_by_credential(
+        self, credential_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, ProviderUsage]:
+        """Most recent ledger row for each requested credential."""
+
+        if not credential_ids:
+            return {}
+        rows = self.session.scalars(
+            select(ProviderUsage)
+            .where(ProviderUsage.credential_id.in_(credential_ids))
+            .distinct(ProviderUsage.credential_id)
+            .order_by(ProviderUsage.credential_id, ProviderUsage.created_at.desc())
+        ).all()
+        return {row.credential_id: row for row in rows if row.credential_id is not None}
+
+    def latest_by_project(
+        self, project_ids: list[str]
+    ) -> dict[str, ProviderUsage]:
+        """Most recent ledger row for each requested declared project."""
+
+        if not project_ids:
+            return {}
+        rows = self.session.scalars(
+            select(ProviderUsage)
+            .where(ProviderUsage.project_id.in_(project_ids))
+            .distinct(ProviderUsage.project_id)
+            .order_by(ProviderUsage.project_id, ProviderUsage.created_at.desc())
+        ).all()
+        return {row.project_id: row for row in rows}
+
+    def latest_failures(self, limit: int = 20) -> list[ProviderUsage]:
+        return list(
+            self.session.scalars(
+                select(ProviderUsage)
+                .where(ProviderUsage.success.is_(False))
+                .order_by(ProviderUsage.created_at.desc())
+                .limit(limit)
+            )
+        )
+
+    def latest_failures_by_credential(
+        self, credential_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, ProviderUsage]:
+        if not credential_ids:
+            return {}
+        rows = self.session.scalars(
+            select(ProviderUsage)
+            .where(
+                ProviderUsage.credential_id.in_(credential_ids),
+                ProviderUsage.success.is_(False),
+            )
+            .distinct(ProviderUsage.credential_id)
+            .order_by(ProviderUsage.credential_id, ProviderUsage.created_at.desc())
+        ).all()
+        return {row.credential_id: row for row in rows if row.credential_id is not None}
+
+    def latest_success(self) -> ProviderUsage | None:
+        return self.session.scalar(
+            select(ProviderUsage)
+            .where(ProviderUsage.success.is_(True))
+            .order_by(ProviderUsage.created_at.desc())
+            .limit(1)
+        )
+
+    def recent_calls(self, limit: int = 25) -> list[ProviderUsage]:
+        return list(
+            self.session.scalars(
+                select(ProviderUsage)
+                .order_by(ProviderUsage.created_at.desc())
+                .limit(limit)
+            )
+        )
+
+    def daily(self, since: Any, timezone: str = "UTC") -> list[dict[str, Any]]:
+        """Aggregate on the configured quota zone's calendar days.
+
+        ``created_at`` is stored with a timezone.  Converting it to the quota
+        zone before truncating is what keeps a 23- or 25-hour daylight-saving
+        day from being split or merged with its neighbour.
+        """
+
+        local = func.timezone(timezone, ProviderUsage.created_at)
+        day = func.timezone(timezone, func.date_trunc("day", local)).label("day")
         rows = self.session.execute(
             select(
                 day,
@@ -1543,14 +1965,9 @@ class UsageRepository:
         ]
 
     def recent_failures(self, limit: int = 20) -> list[ProviderUsage]:
-        return list(
-            self.session.scalars(
-                select(ProviderUsage)
-                .where(ProviderUsage.success.is_(False))
-                .order_by(ProviderUsage.created_at.desc())
-                .limit(limit)
-            )
-        )
+        """Backward-compatible alias for the failure query."""
+
+        return self.latest_failures(limit)
 
 
 class AuditRepository:
@@ -1586,3 +2003,115 @@ class AuditRepository:
         self.session.add(event)
         self.session.flush()
         return event
+
+
+class ClassRepository:
+    """Teaching groups, always read and written through one tenant."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, tenant_id: uuid.UUID, class_id: uuid.UUID) -> SchoolClass | None:
+        return self.session.scalar(
+            select(SchoolClass).where(
+                SchoolClass.id == class_id, SchoolClass.tenant_id == tenant_id
+            )
+        )
+
+    def get_by_name(self, tenant_id: uuid.UUID, name: str) -> SchoolClass | None:
+        return self.session.scalar(
+            select(SchoolClass).where(
+                SchoolClass.tenant_id == tenant_id, SchoolClass.name == name
+            )
+        )
+
+    def list(self, tenant_id: uuid.UUID) -> list[SchoolClass]:
+        return list(
+            self.session.scalars(
+                select(SchoolClass)
+                .where(SchoolClass.tenant_id == tenant_id)
+                .order_by(SchoolClass.name.asc(), SchoolClass.id.asc())
+            )
+        )
+
+    def create(
+        self, *, tenant_id: uuid.UUID, name: str, year_group: str | None
+    ) -> SchoolClass:
+        row = SchoolClass(tenant_id=tenant_id, name=name, year_group=year_group)
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def delete(self, row: SchoolClass) -> None:
+        self.session.delete(row)
+        self.session.flush()
+
+
+class StudentRepository:
+    """Roster entries, scoped by tenant and optionally by class."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, tenant_id: uuid.UUID, student_id: uuid.UUID) -> Student | None:
+        return self.session.scalar(
+            select(Student).where(
+                Student.id == student_id, Student.tenant_id == tenant_id
+            )
+        )
+
+    def get_by_ref(self, tenant_id: uuid.UUID, student_ref: str) -> Student | None:
+        return self.session.scalar(
+            select(Student).where(
+                Student.tenant_id == tenant_id, Student.student_ref == student_ref
+            )
+        )
+
+    def list(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        class_id: uuid.UUID | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[Student]:
+        statement = select(Student).where(Student.tenant_id == tenant_id)
+        if class_id is not None:
+            statement = statement.where(Student.class_id == class_id)
+        return list(
+            self.session.scalars(
+                statement.order_by(Student.student_ref.asc(), Student.id.asc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+
+    def count_for_class(self, tenant_id: uuid.UUID, class_id: uuid.UUID) -> int:
+        value = self.session.scalar(
+            select(func.count())
+            .select_from(Student)
+            .where(Student.tenant_id == tenant_id, Student.class_id == class_id)
+        )
+        return int(value or 0)
+
+    def create(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        student_ref: str,
+        display_name: str | None,
+        class_id: uuid.UUID | None,
+    ) -> Student:
+        row = Student(
+            tenant_id=tenant_id,
+            student_ref=student_ref,
+            display_name=display_name,
+            class_id=class_id,
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def delete(self, row: Student) -> None:
+        self.session.delete(row)
+        self.session.flush()

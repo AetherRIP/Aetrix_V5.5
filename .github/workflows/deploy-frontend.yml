@@ -17,6 +17,9 @@ name: Deploy frontend to Cloudflare Pages
 # Required repository variables (public browser configuration, not secrets):
 #   VITE_SUPABASE_URL
 #   VITE_SUPABASE_ANON_KEY
+#   VITE_AETRIX_API_URL    - the stable public HTTPS engine origin. Required:
+#                            a Pages bundle compiled without it can never reach
+#                            the backend, so this workflow refuses to publish.
 
 on:
   push:
@@ -50,18 +53,42 @@ jobs:
           ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          API_URL: ${{ vars.VITE_AETRIX_API_URL }}
         run: |
           missing=""
           if [ -z "$API_TOKEN" ]; then missing="$missing CLOUDFLARE_API_TOKEN"; fi
           if [ -z "$ACCOUNT_ID" ]; then missing="$missing CLOUDFLARE_ACCOUNT_ID"; fi
           if [ -z "$SUPABASE_URL" ]; then missing="$missing VITE_SUPABASE_URL"; fi
           if [ -z "$SUPABASE_ANON_KEY" ]; then missing="$missing VITE_SUPABASE_ANON_KEY"; fi
+          if [ -z "$API_URL" ]; then missing="$missing VITE_AETRIX_API_URL"; fi
           if [ -n "$missing" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Skipping Pages deployment; missing configuration:$missing"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Validate the public engine origin
+        if: steps.config.outputs.ready == 'true'
+        env:
+          API_URL: ${{ vars.VITE_AETRIX_API_URL }}
+        run: |
+          # The deployed page calls this origin from the browser, so a loopback
+          # or temporary address can never work from Cloudflare Pages.
+          case "$API_URL" in
+            https://*) ;;
+            *)
+              echo "::error::VITE_AETRIX_API_URL must be an absolute https:// origin; got '$API_URL'"
+              exit 1 ;;
+          esac
+          case "$API_URL" in
+            https://localhost*|https://127.*|https://0.0.0.0*)
+              echo "::error::VITE_AETRIX_API_URL must not be a loopback address"
+              exit 1 ;;
+            *.trycloudflare.com*)
+              echo "::error::VITE_AETRIX_API_URL must be a stable host, not a quick tunnel"
+              exit 1 ;;
+          esac
 
       - uses: actions/setup-node@v4
         if: steps.config.outputs.ready == 'true'
@@ -74,6 +101,10 @@ jobs:
         if: steps.config.outputs.ready == 'true'
         run: npm ci
 
+      - name: Typecheck
+        if: steps.config.outputs.ready == 'true'
+        run: npm run typecheck
+
       - name: Build
         if: steps.config.outputs.ready == 'true'
         env:
@@ -83,6 +114,23 @@ jobs:
           # when absent, every engine-backed screen renders its no-data state.
           VITE_AETRIX_API_URL: ${{ vars.VITE_AETRIX_API_URL }}
         run: npm run build
+
+      - name: Verify the bundled engine origin
+        if: steps.config.outputs.ready == 'true'
+        env:
+          API_URL: ${{ vars.VITE_AETRIX_API_URL }}
+        run: |
+          host="${API_URL#https://}"
+          host="${host%%/*}"
+          if grep -rqE "127\.0\.0\.1:8000|localhost:8000" dist/client; then
+            echo "::error::the production bundle contains a loopback engine address"
+            exit 1
+          fi
+          if ! grep -rq "$host" dist/client; then
+            echo "::error::the built bundle does not contain $host; the deployed page would have no engine"
+            exit 1
+          fi
+          echo "bundle targets $host"
 
       - name: Deploy to the existing `aetrix` Pages project
         if: steps.config.outputs.ready == 'true'

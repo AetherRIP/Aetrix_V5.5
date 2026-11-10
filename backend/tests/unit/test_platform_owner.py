@@ -13,6 +13,7 @@ import pytest
 from app.api.v1.admin_providers import FLEET_ADMIN_ROLES, require_fleet_admin
 from app.core.errors import AppError, ErrorCode
 from app.core.security import Principal
+from app.services.identity import UI_ROLE
 
 
 def _principal(role: str) -> Principal:
@@ -49,3 +50,34 @@ def test_the_other_roles_are_unchanged() -> None:
     assert _principal("REVIEWER").can_manage_exams is False
     assert _principal("VIEWER").is_reviewer is False
     assert _principal("TEACHER").can_manage_exams is True
+
+
+# -- presentation ---------------------------------------------------------
+# The engine role decides authorization; the product vocabulary decides what the
+# shell opens. The two used to disagree for the two roles that matter most.
+
+
+def test_the_platform_owner_is_presented_as_the_product_owner() -> None:
+    assert UI_ROLE["PLATFORM_OWNER"] == "owner"
+
+
+def test_a_workspace_owner_is_presented_as_a_teacher() -> None:
+    assert UI_ROLE["OWNER"] == "supervisor"
+
+
+def test_an_administrator_is_presented_as_the_platform_administrator() -> None:
+    assert UI_ROLE["ADMIN"] == "platform_operator"
+
+
+def test_the_presentation_mapping_is_exhaustive() -> None:
+    # Pinned in full: a new engine role must be given a presentation role
+    # deliberately, and no role may silently fall through to another account
+    # type (which is how the owner was shown as an administrator/assistant).
+    assert UI_ROLE == {
+        "PLATFORM_OWNER": "owner",
+        "ADMIN": "platform_operator",
+        "OWNER": "supervisor",
+        "TEACHER": "supervisor",
+        "REVIEWER": "assistant",
+        "VIEWER": "viewer",
+    }

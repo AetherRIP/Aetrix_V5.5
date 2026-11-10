@@ -23,16 +23,26 @@ from ..audit.service import AuditService
 from ..core.config import Settings
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import content_hash, utcnow
-from ..core.security import Principal
+from ..core.security import Principal, ensure_reviewer
 from ..db.models import CorrectionJob, ExamBlueprintVersion, MarkSchemeVersion
 from ..db.repositories import (
     AssignmentRepository,
     BlueprintRepository,
+    DocumentRepository,
     JobRepository,
     MarkSchemeRepository,
     SubmissionRepository,
 )
-from ..schemas.api import CorrectionCreate
+from ..schemas.api import (
+    CorrectionCreate,
+    JobDetailRead,
+    JobDocumentRead,
+    JobEventRead,
+    JobProviderCallRead,
+    JobRead,
+    JobReviewDecisionRead,
+    JobSubmissionRead,
+)
 from .states import JobState
 
 
@@ -49,6 +59,7 @@ class JobService:
         self.jobs = JobRepository(session)
         self.assignments = AssignmentRepository(session)
         self.submissions = SubmissionRepository(session)
+        self.documents = DocumentRepository(session)
         self.blueprints = BlueprintRepository(session)
         self.schemes = MarkSchemeRepository(session)
         self.audit = AuditService(session)
@@ -191,7 +202,57 @@ class JobService:
         job = self.get(tenant_id, job_id)
         return job, self.jobs.events(tenant_id, job_id)
 
+    def detail(self, tenant_id: uuid.UUID, job_id: uuid.UUID) -> JobDetailRead:
+        """Everything the queue's detail view may show, scoped to one tenant.
+
+        Context rows are fetched through tenant-scoped repositories as well, so
+        a job UUID from another workspace cannot be used to read its submission,
+        documents, provider calls or review decisions.
+        """
+        job, events = self.get_with_events(tenant_id, job_id)
+        submission = self.submissions.get(tenant_id, job.submission_id)
+        assignment = self.assignments.get(tenant_id, job.assignment_id)
+        documents = (
+            self.documents.list_for_submission(tenant_id, submission.id)
+            if submission is not None
+            else []
+        )
+        usage = self.jobs.latest_provider_usage(tenant_id, job.id)
+        decisions = self.jobs.review_decisions(tenant_id, job.id)
+        base = JobRead.model_validate(job)
+        return JobDetailRead(
+            **base.model_dump(),
+            events=[JobEventRead.model_validate(event) for event in events],
+            submission=JobSubmissionRead.model_validate(submission) if submission else None,
+            assignment_name=assignment.name if assignment else None,
+            documents=[JobDocumentRead.model_validate(document) for document in documents],
+            provider_call=JobProviderCallRead.model_validate(usage) if usage else None,
+            review_decisions=[
+                JobReviewDecisionRead.model_validate(decision) for decision in decisions
+            ],
+            review_reasons=self._review_reasons(events),
+        )
+
+    @staticmethod
+    def _review_reasons(events: list) -> list[str]:
+        """The reasons recorded on the most recent REVIEW_REQUIRED transition."""
+        for event in reversed(events):
+            if event.to_state != JobState.REVIEW_REQUIRED.value:
+                continue
+            raw = event.detail.get("review_reasons")
+            if isinstance(raw, list):
+                reasons = [str(item).strip() for item in raw if str(item).strip()]
+                if reasons:
+                    return reasons
+            for key in ("reason", "message"):
+                value = event.detail.get(key)
+                if isinstance(value, str) and value.strip():
+                    return [value.strip()]
+            return []
+        return []
+
     def cancel(self, principal: Principal, job_id: uuid.UUID) -> CorrectionJob:
+        ensure_reviewer(principal)
         job = self.jobs.get(principal.tenant_id, job_id, for_update=True)
         if job is None:
             raise AppError(ErrorCode.NOT_FOUND, "Correction job not found.")
@@ -200,19 +261,28 @@ class JobService:
             self.session.commit()
             return job
         if state in {JobState.COMPLETED, JobState.FAILED}:
-            raise AppError(ErrorCode.JOB_NOT_CANCELLABLE, "A finished job cannot be cancelled.")
+            raise AppError(
+                ErrorCode.JOB_NOT_CANCELLABLE,
+                "A completed or failed job cannot be cancelled; retry a failed job instead.",
+            )
 
         # Cancellation is terminal.  The lease is cleared so the job cannot be
         # reclaimed; a worker already inside the pipeline may finish its current
         # call, but it must observe ``cancel_requested`` before persisting any
-        # result.  Phase 5's pipeline checks that flag at every checkpoint.
+        # result.  The row lock above serialises two cancels, and the worker's
+        # checkpoint is what prevents an unsafe mid-call interruption.
+        had_worker_lease = job.lease_owner is not None
         job.cancel_requested = True
         job.lease_owner = None
         job.lease_expires_at = None
         self.jobs.transition(
             job,
             JobState.CANCELLED,
-            detail={"reason": "cancelled by user"},
+            detail={
+                "reason": "cancelled by user",
+                "previous_state": state.value,
+                "had_worker_lease": had_worker_lease,
+            },
             actor=f"user:{principal.user_id}",
         )
         self.audit.record(
@@ -222,22 +292,38 @@ class JobService:
             entity_id=job.id,
             actor_type="USER",
             actor_id=principal.user_id,
-            detail={"state": job.state},
+            detail={
+                "previous_state": state.value,
+                "had_worker_lease": had_worker_lease,
+            },
         )
         self.session.commit()
         return job
 
     def retry(self, principal: Principal, job_id: uuid.UUID) -> CorrectionJob:
+        ensure_reviewer(principal)
         job = self.jobs.get(principal.tenant_id, job_id, for_update=True)
         if job is None:
             raise AppError(ErrorCode.NOT_FOUND, "Correction job not found.")
         state = JobState(job.state)
+        if state is JobState.REVIEW_REQUIRED:
+            raise AppError(
+                ErrorCode.JOB_NOT_RETRYABLE,
+                "Teacher review is required first; retry applies to failed or suspended jobs.",
+            )
         if state not in {JobState.FAILED, JobState.RETRY_SUSPENDED}:
             raise AppError(
                 ErrorCode.JOB_NOT_RETRYABLE,
                 "Only a failed or suspended job can be retried.",
             )
+        if job.retryable is False:
+            raise AppError(
+                ErrorCode.JOB_NOT_RETRYABLE,
+                "This job exhausted its attempt budget; create a new correction job.",
+            )
 
+        previous_attempts = job.attempts
+        previous_error = job.error_code
         job.attempts = 0
         job.cancel_requested = False
         job.error_code = None
@@ -249,7 +335,12 @@ class JobService:
         self.jobs.transition(
             job,
             JobState.VALIDATING,
-            detail={"reason": "manual retry", "previous_state": state.value},
+            detail={
+                "reason": "manual retry",
+                "previous_state": state.value,
+                "previous_attempts": previous_attempts,
+                "previous_error_code": previous_error,
+            },
             actor=f"user:{principal.user_id}",
         )
         self.audit.record(
@@ -259,7 +350,11 @@ class JobService:
             entity_id=job.id,
             actor_type="USER",
             actor_id=principal.user_id,
-            detail={"previous_state": state.value},
+            detail={
+                "previous_state": state.value,
+                "previous_attempts": previous_attempts,
+                "previous_error_code": previous_error,
+            },
         )
         self.session.commit()
         return job

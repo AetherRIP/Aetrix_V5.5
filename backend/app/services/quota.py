@@ -35,15 +35,24 @@ from ..db.repositories import QuotaReservationRepository, UsageRepository
 Confidence = Literal["CONFIRMED", "ESTIMATED", "UNKNOWN"]
 
 
-def _midnight(now: datetime, zone: str) -> datetime:
+def quota_timezone(zone: str) -> tuple[ZoneInfo, str]:
+    """The effective quota zone, falling back to UTC explicitly.
+
+    A bad zone name must not crash a dashboard.  Returning the effective name
+    keeps the screen from continuing to claim "Pacific" after it has silently
+    started aggregating in UTC.
+    """
+
     try:
-        tz = ZoneInfo(zone)
+        return ZoneInfo(zone), zone
     except (ZoneInfoNotFoundError, ValueError):
-        # A misconfigured zone must not crash a dashboard; it degrades to UTC
-        # and the reset time it reports is the UTC midnight it actually used.
-        tz = UTC
+        return ZoneInfo("UTC"), "UTC"
+
+
+def _midnight(now: datetime, zone: str) -> datetime:
+    tz, _ = quota_timezone(zone)
     local = now.astimezone(tz)
-    tomorrow = (local.date() + timedelta(days=1))
+    tomorrow = local.date() + timedelta(days=1)
     return datetime.combine(tomorrow, time(0, 0), tzinfo=tz).astimezone(UTC)
 
 
@@ -54,10 +63,7 @@ def next_reset(now: datetime, zone: str) -> datetime:
 
 
 def day_start(now: datetime, zone: str) -> datetime:
-    try:
-        tz = ZoneInfo(zone)
-    except (ZoneInfoNotFoundError, ValueError):
-        tz = UTC
+    tz, _ = quota_timezone(zone)
     local = now.astimezone(tz)
     return datetime.combine(local.date(), time(0, 0), tzinfo=tz).astimezone(UTC)
 
@@ -106,8 +112,13 @@ class QuotaEstimate:
     tokens_per_minute: QuotaWindow
     requests_per_day: QuotaWindow
     reset_at: datetime
+    reset_timezone: str
     observed_at: datetime
     cooldown_until: datetime | None
+    #: Request counters come from Aetrix reservations, not from Google.  The
+    #: ledger can report whether the limit is confirmed, but never the remaining
+    #: allowance Google itself would report.
+    accounting: str
     notes: tuple[str, ...]
 
     @property
@@ -145,8 +156,10 @@ class QuotaEstimate:
             "tokens_per_minute": self.tokens_per_minute.as_dict(),
             "requests_per_day": self.requests_per_day.as_dict(),
             "reset_at": self.reset_at,
+            "reset_timezone": self.reset_timezone,
             "observed_at": self.observed_at,
             "cooldown_until": self.cooldown_until,
+            "accounting": self.accounting,
             "exhausted": self.exhausted,
             "notes": list(self.notes),
         }
@@ -182,18 +195,28 @@ class QuotaEstimator:
     ) -> QuotaEstimate:
         moment = now or utcnow()
         limits = self.limits_for(model)
+        zone = self.settings.quota.daily_reset_timezone
+        _, effective_zone = quota_timezone(zone)
+        # Quota is project *and model* scoped.  Reservations are the same rows
+        # the call path enforces, so the estimate cannot disagree with the gate.
+        minute_since = moment - timedelta(minutes=1)
+        day_since = day_start(moment, zone)
         minute_used = self.reservations.count_since_project(
-            project_id, moment - timedelta(minutes=1), moment
-        )
+            project_id,
+            minute_since,
+            moment,
+            model=model,
+        ) + self.usage.validation_count(project_id, model, minute_since)
         day_used = self.reservations.count_since_project(
             project_id,
-            day_start(moment, self.settings.quota.daily_reset_timezone),
+            day_since,
             moment,
+            model=model,
+        ) + self.usage.validation_count(project_id, model, day_since)
+        tokens = self.usage.window_stats(
+            moment - timedelta(minutes=1), project_id=project_id, model=model
         )
-        # Reservations carry no token count, so TPM is measured from the usage
-        # ledger — the only place Aetrix records what Gemini reported.
-        token_rows = self.usage.window_stats(moment - timedelta(minutes=1), project_id=project_id)
-        tokens_used = token_rows["input_tokens"] + token_rows["output_tokens"]
+        tokens_used = tokens["input_tokens"] + tokens["output_tokens"]
 
         cooldown = self.reservations.project_cooldown(project_id)
         active_cooldown = (
@@ -201,7 +224,9 @@ class QuotaEstimator:
         )
 
         notes: list[str] = [
-            "Usage is recorded by Aetrix; Google's console remains the authoritative source.",
+            "Request counts are Aetrix generation reservations plus recorded "
+            "validation probes, not Google-metered usage; Google's console "
+            "remains authoritative.",
         ]
         if any(
             _confidence(limit, limits.source) == "ESTIMATED"
@@ -216,6 +241,10 @@ class QuotaEstimator:
             )
         if limits.tokens_per_minute is None:
             notes.append("No tokens-per-minute limit is known for this model.")
+        if effective_zone != zone:
+            notes.append(
+                f"The configured quota zone {zone!r} is invalid; UTC midnight is in use."
+            )
 
         return QuotaEstimate(
             project_id=project_id,
@@ -235,9 +264,11 @@ class QuotaEstimator:
                 used=day_used,
                 confidence=_confidence(limits.requests_per_day, limits.source),
             ),
-            reset_at=_midnight(moment, self.settings.quota.daily_reset_timezone),
+            reset_at=_midnight(moment, zone),
+            reset_timezone=effective_zone,
             observed_at=moment,
             cooldown_until=active_cooldown,
+            accounting="AETRIX_RESERVATIONS_PLUS_VALIDATION",
             notes=tuple(notes),
         )
 
@@ -254,4 +285,5 @@ __all__ = [
     "QuotaWindow",
     "day_start",
     "next_reset",
+    "quota_timezone",
 ]

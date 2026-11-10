@@ -69,7 +69,7 @@ test.describe('sign-in page', () => {
     // The status panel lists only methods that are actually enabled.
     await expect(page.locator('#access')).toContainText('Google OAuth · enabled')
     await expect(page.locator('#access')).toContainText('Workspace provisioning')
-    await expect(page.locator('#access')).toContainText('Work in progress')
+    await expect(page.locator('#access')).toContainText('Invitation required')
 
     // Nothing is signed in at this point.
     expect(await storedSession(page)).toBeNull()
@@ -102,6 +102,44 @@ test.describe('sign-in page', () => {
     // Proof it is a real PKCE handshake rather than a hand-built URL.
     expect(url.searchParams.get('code_challenge_method')).toBe('s256')
     expect(url.searchParams.get('code_challenge')?.length ?? 0).toBeGreaterThan(20)
+  })
+
+  test('email form uses POST so a pre-hydration submit cannot leak credentials in the URL', async ({
+    browser,
+    baseURL,
+  }) => {
+    // Simulate the brief window before React hydrates. The browser's native form
+    // submission must not turn the credentials into query parameters.
+    const jsless = await browser.newContext({ javaScriptEnabled: false, baseURL })
+    const page = await jsless.newPage()
+    await page.goto('/sign-in/')
+    await page.getByText('Use an email and password instead').click()
+
+    const form = page.locator('form.auth__form')
+    await expect(form).toHaveAttribute('method', 'post')
+    await expect(form).toHaveAttribute('action', '/sign-in')
+
+    await page.locator('input[name="email"]').fill('security-probe@example.test')
+    await page.locator('input[name="password"]').fill('not-in-url')
+
+    let posted: { method: string; url: string } | null = null
+    await jsless.route('**/sign-in', async (route) => {
+      const request = route.request()
+      if (request.method() === 'POST') {
+        posted = { method: request.method(), url: request.url() }
+        await route.fulfill({ status: 200, contentType: 'text/html', body: 'ok' })
+        return
+      }
+      await route.continue()
+    })
+
+    await page.locator('form.auth__form button[type="submit"]').click()
+    await expect.poll(() => posted?.method ?? '').toBe('POST')
+    const url = new URL(posted!.url)
+    expect(url.search).toBe('')
+    expect(posted!.url).not.toContain('security-probe@example.test')
+    expect(posted!.url).not.toContain('not-in-url')
+    await jsless.close()
   })
 
   test('theme choice persists on the sign-in page', async ({ context }) => {

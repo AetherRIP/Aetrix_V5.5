@@ -84,6 +84,73 @@ class AuthSettings(BaseModel):
         return value
 
 
+class PlatformAdminSettings(BaseModel):
+    """Supabase Auth administration for platform account management.
+
+    Absent configuration is a normal, reported state: the account routes answer
+    ``ADMIN_NOT_CONFIGURED`` rather than pretending to list accounts.  The key is
+    a ``SecretStr`` and is only read at the point of use; it is never logged,
+    returned in a response or compiled into the browser bundle.
+    """
+
+    supabase_url: str | None = None
+    service_role_key: SecretStr | None = None
+    timeout_seconds: int = Field(default=15, ge=5, le=60)
+    #: A hard ceiling on accounts read per request.  The response says when the
+    #: ceiling was reached instead of silently showing a partial list.
+    max_accounts: int = Field(default=5000, ge=1, le=50_000)
+    page_size: int = Field(default=200, ge=1, le=1000)
+    #: How long the platform overview reuses its Supabase role census.  Reading
+    #: every account pages the admin API, so a dashboard refresh must not do it
+    #: each time; a manual refresh bypasses this cache.
+    census_ttl_seconds: int = Field(default=60, ge=0, le=3600)
+
+    @field_validator("supabase_url", "service_role_key", mode="before")
+    @classmethod
+    def _empty_string_is_none(cls, value: Any) -> Any:
+        if value == "" or value is None:
+            return None
+        return value
+
+    def configured(self) -> bool:
+        return bool(self.supabase_url and self.service_role_key)
+
+
+class ClassroomSettings(BaseModel):
+    """Google Classroom OAuth client and discovery bounds.
+
+    Absent configuration is a reported state: the Classroom screens say OAuth
+    is not configured and never fabricate a connected account.  The client
+    secret is a ``SecretStr``; tokens are encrypted separately with the
+    credential-encryption key before they touch the database.
+    """
+
+    client_id: str | None = None
+    client_secret: SecretStr | None = None
+    #: The frontend route Google redirects to.  It must be registered byte for
+    #: byte on the Google OAuth client; it is never derived from a request Host.
+    redirect_uri: str | None = None
+    auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    token_url: str = "https://oauth2.googleapis.com/token"
+    revoke_url: str = "https://oauth2.googleapis.com/revoke"
+    api_base_url: str = "https://classroom.googleapis.com/v1"
+    timeout_seconds: int = Field(default=20, ge=5, le=60)
+    #: A short window for the signed OAuth state.  The code exchange also
+    #: verifies that the state belongs to the authenticated workspace account.
+    state_ttl_seconds: int = Field(default=600, ge=60, le=1800)
+    max_courses: int = Field(default=2000, ge=1, le=10_000)
+
+    @field_validator("client_id", "client_secret", "redirect_uri", mode="before")
+    @classmethod
+    def _empty_string_is_none(cls, value: Any) -> Any:
+        if value == "" or value is None:
+            return None
+        return value
+
+    def configured(self) -> bool:
+        return bool(self.client_id and self.client_secret and self.redirect_uri)
+
+
 class SecuritySettings(BaseModel):
     encryption_key: SecretStr | None = None
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
@@ -102,6 +169,10 @@ class ProviderSettings(BaseModel):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     model_primary: str = "gemini-3.6-flash"
     model_review: str = "gemini-3.1-pro-preview"
+    model_lightweight: str = "gemini-3.1-flash-lite"
+    #: How long a project's models.list result is reused before it is fetched
+    #: again. Discovery is cached per project and key fingerprint.
+    model_catalogue_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
     request_timeout_seconds: int = Field(default=300, ge=10, le=900)
     max_attempts: int = Field(default=4, ge=1, le=8)
     thinking_budget: int = Field(default=0, ge=0)
@@ -158,6 +229,61 @@ class QuotaSettings(BaseModel):
     monitoring_interval_seconds: int = Field(default=300, ge=30, le=3600)
 
 
+class GoogleCloudSettings(BaseModel):
+    """Read-only Google Cloud quota/usage synchronisation.
+
+    Credentials are deliberately *not* Gemini API keys.  A service-account JSON
+    file outside the repository is the supported production mechanism; inline
+    JSON exists for secret managers and the metadata server for GCE/Cloud Run.
+    The OAuth scope is broad because Cloud Quotas only accepts ``cloud-platform``;
+    least privilege is enforced by the IAM roles granted to the account, not by
+    the scope string.
+    """
+
+    enabled: bool = True
+    service_account_file: Path | None = None
+    #: Inline service-account JSON.  Prefer a mounted file; this exists so a
+    #: secret manager can inject the document without writing it to disk.
+    service_account_json: SecretStr | None = None
+    use_metadata: bool = False
+    service: str = "generativelanguage.googleapis.com"
+    sync_interval_seconds: int = Field(default=900, ge=60, le=86400)
+    stale_after_seconds: int = Field(default=3600, ge=60, le=604800)
+    request_timeout_seconds: float = Field(default=20.0, ge=1.0, le=120.0)
+    max_attempts: int = Field(default=3, ge=1, le=6)
+    backoff_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    max_quota_infos: int = Field(default=2000, ge=1, le=10000)
+    usage_window_minutes: int = Field(default=15, ge=1, le=1440)
+
+    @field_validator("service_account_file", mode="before")
+    @classmethod
+    def _blank_file_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("service_account_json", mode="before")
+    @classmethod
+    def _blank_json_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("service")
+    @classmethod
+    def _service_shape(cls, value: str) -> str:
+        candidate = value.strip()
+        if not candidate.endswith(".googleapis.com") or "/" in candidate:
+            raise ValueError("service must be a Google API service name")
+        return candidate
+
+    @property
+    def configured(self) -> bool:
+        return self.use_metadata or bool(
+            self.service_account_file or self.service_account_json
+        )
+
+
 class MarkingSettings(BaseModel):
     review_mode: ReviewMode = ReviewMode.BALANCED
     blueprint_approval_required: bool = True
@@ -201,7 +327,8 @@ class IngestionSettings(BaseModel):
 
 class FeatureFlags(BaseModel):
     live_provider: bool = False
-    selective_review: bool = True
+    #: Selective review is not implemented; the flag must not imply otherwise.
+    selective_review: bool = False
     cohort_intelligence: bool = False
     automatic_second_pass: bool = False
 
@@ -222,9 +349,12 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     database: DatabaseSettings
     auth: AuthSettings = Field(default_factory=AuthSettings)
+    platform_admin: PlatformAdminSettings = Field(default_factory=PlatformAdminSettings)
+    classroom: ClassroomSettings = Field(default_factory=ClassroomSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     provider: ProviderSettings = Field(default_factory=ProviderSettings)
     quota: QuotaSettings = Field(default_factory=QuotaSettings)
+    google_cloud: GoogleCloudSettings = Field(default_factory=GoogleCloudSettings)
     marking: MarkingSettings = Field(default_factory=MarkingSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)

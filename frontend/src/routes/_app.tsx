@@ -1,8 +1,17 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, Outlet, createFileRoute, useRouter, useRouterState } from '@tanstack/react-router'
 import { AppShell, HubBoot } from '../components/app/AppShell'
 import { storeNextPath, useAuth } from '../lib/auth/AuthProvider'
-import { allowsPath, homeFor, readRole, ROLE_META } from '../lib/auth/roles'
+import {
+  allowsPath,
+  homeFor,
+  readRole,
+  resolveRole,
+  ROLE_META,
+  type AccountRole,
+} from '../lib/auth/roles'
+import { useEngineSession } from '../lib/api/session'
+import { identityService } from '../lib/services'
 import { Icon } from '../components/ui/Icons'
 import { StatePanel } from '../components/app/StatePanel'
 
@@ -95,14 +104,17 @@ function pageMeta(pathname: string): PageMeta {
       description: 'The operator view of the platform: workspaces, accounts and health.',
     },
     '/platform/workspaces': {
-      title: 'Workspaces',
+      title: 'Workspace allocation',
       eyebrow: 'Platform',
-      description: 'Every teacher workspace, its allocation and its state.',
+      description:
+        'Every teacher workspace, the Classroom courses it owns, and the allocation history.',
     },
     '/platform/users': {
-      title: 'Accounts',
-      eyebrow: 'Platform',
-      description: 'Teachers, assistants and operators, with the role each holds.',
+      // This screen renders its own page header beside the directory controls.
+      title: '',
+      eyebrow: 'Platform administration',
+      description:
+        'Every Supabase account on the platform, its role, status and workspace memberships.',
     },
     '/platform/health': {
       title: 'System health',
@@ -174,12 +186,128 @@ function SessionGate({ message, detail }: { message: string; detail?: string }) 
   )
 }
 
+/** The engine's presentation role is the fallback when the browser claim is absent. */
+function roleFromEngine(uiRole: string | null | undefined): AccountRole | null {
+  switch (uiRole) {
+    case 'owner':
+    case 'platform_operator':
+    case 'supervisor':
+    case 'assistant':
+    case 'viewer':
+      return uiRole
+    default:
+      return null
+  }
+}
+
+/**
+ * A verified identity with no engine membership. The owner can invite the exact
+ * address and the invitee can redeem the one-time code here; the engine decides
+ * the workspace and role, never this screen.
+ */
+function AccessGate({
+  email,
+  reason,
+  errorCode,
+  token,
+  onAccepted,
+  onSignOut,
+}: {
+  email: string | null
+  reason: string | null
+  errorCode: string | null
+  token: string | null
+  onAccepted: () => void
+  onSignOut: () => void
+}) {
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const canRedeem = errorCode === 'PROVISIONING_REQUIRED'
+
+  async function accept(event: React.FormEvent) {
+    event.preventDefault()
+    if (!token || !code.trim()) return
+    setBusy(true)
+    setMessage(null)
+    const result = await identityService.accept(code.trim(), { token })
+    setBusy(false)
+    if (result.status === 'ok') {
+      onAccepted()
+    } else {
+      setMessage(result.reason)
+    }
+  }
+
+  return (
+    <main className="app-boot">
+      <div className="app-boot__card" role="status" aria-live="polite">
+        <p className="app-boot__badge mono">
+          <Icon name="lock" size={14} /> Workspace access
+        </p>
+        <h1 className="app-boot__title">{canRedeem ? 'A workspace invitation is required' : 'The engine could not open this account'}</h1>
+        <p className="app-boot__body">
+          {email ?? 'This account'} is signed in, but no workspace membership has been resolved.
+        </p>
+        {reason ? <p className="app-boot__body">{reason}</p> : null}
+        {canRedeem ? (
+          <form className="app-form" onSubmit={accept}>
+            <div className="app-form__row">
+              <label className="app-form__label" htmlFor="acceptance-code">
+                One-time acceptance code
+              </label>
+              <input
+                id="acceptance-code"
+                className="app-input mono"
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                minLength={16}
+                maxLength={200}
+                autoComplete="one-time-code"
+                required
+              />
+            </div>
+            <p className="app-hint">
+              Ask the workspace owner for the code shown when your invitation was recorded. If
+              your verified email was invited directly, sign out and sign in again after the
+              owner records it.
+            </p>
+            {message ? <p className="app-form__error">{message}</p> : null}
+            <div className="app-inline-actions">
+              <button type="submit" className="btn btn--primary btn--small" disabled={busy || !code.trim()}>
+                {busy ? 'Checking…' : 'Redeem invitation'}
+              </button>
+              <button type="button" className="btn btn--outline btn--small" onClick={onSignOut}>
+                Sign out
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="app-inline-actions">
+            <button type="button" className="btn btn--outline btn--small" onClick={onSignOut}>
+              Sign out
+            </button>
+          </div>
+        )}
+      </div>
+    </main>
+  )
+}
+
 /**
  * A verified session without an account role. The interface refuses to guess:
  * no dashboard opens until an operator assigns the role in the identity
  * provider, which is the only place it can be written.
  */
-function NoRole({ email, onSignOut }: { email: string | null; onSignOut: () => void }) {
+function NoRole({
+  email,
+  detail,
+  onSignOut,
+}: {
+  email: string | null
+  detail?: string | null
+  onSignOut: () => void
+}) {
   return (
     <main className="app-boot">
       <div className="app-boot__card" role="status" aria-live="polite">
@@ -188,11 +316,12 @@ function NoRole({ email, onSignOut }: { email: string | null; onSignOut: () => v
         </p>
         <h1 className="app-boot__title">No account role assigned</h1>
         <p className="app-boot__body">
-          {email ?? 'This account'} is signed in, but its verified claims carry no Aetrix
-          role. The identity provider assigns <code>owner</code>,{' '}
-          <code>platform_operator</code>, <code>supervisor</code> or <code>assistant</code> in{' '}
-          the account's app metadata; this screen cannot grant it, and no dashboard is opened
-          without it.
+          {detail ??
+            `${email ?? 'This account'} is signed in, but neither its verified claims nor the engine returned a recognised workspace role. This screen cannot grant one.`}
+        </p>
+        <p className="app-hint">
+          Assignable roles are issued by the identity provider: <code>owner</code>,{' '}
+          <code>platform_operator</code>, <code>supervisor</code> and <code>assistant</code>.
         </p>
         <button type="button" className="btn btn--outline" onClick={onSignOut}>
           Sign out
@@ -209,7 +338,18 @@ function AppLayout() {
   // Static hosting serves directory URLs with a trailing slash; the metadata
   // table is keyed without one, so `/dashboard/` must resolve to the same page.
   const routePath = pathname.replace(/\/+$/, '') || '/'
-  const role = readRole(user)
+  const engine = useEngineSession()
+  // The engine answers from the verified token and its own membership rows, so
+  // its role is final once it has answered. The identity-provider claim is only
+  // the provisional hint used while /me is in flight, or when the engine is
+  // unreachable: a stale claim must not demote the platform owner to an
+  // assistant, and it must not promote an assistant either.
+  const engineResolved = engine.status === 'ready'
+  const role = resolveRole({
+    engineResolved,
+    engineRole: engineResolved ? roleFromEngine(engine.me?.ui_role) : null,
+    claimRole: readRole(user),
+  })
 
   useEffect(() => {
     if (status !== 'anonymous') return
@@ -257,15 +397,32 @@ function AppLayout() {
   }
 
   if (!role) {
+    if (engine.status === 'loading') {
+      return <HubBoot label="Resolving workspace access" />
+    }
+    const signOutAndLeave = () => {
+      void (async () => {
+        await signOut()
+        await router.navigate({ to: '/sign-in', replace: true })
+      })()
+    }
+    if (engine.status === 'error' && engine.errorCode === 'PROVISIONING_REQUIRED') {
+      return (
+        <AccessGate
+          email={user?.email ?? null}
+          reason={engine.reason}
+          errorCode={engine.errorCode}
+          token={engine.token}
+          onAccepted={engine.reload}
+          onSignOut={signOutAndLeave}
+        />
+      )
+    }
     return (
       <NoRole
         email={user?.email ?? null}
-        onSignOut={() => {
-          void (async () => {
-            await signOut()
-            await router.navigate({ to: '/sign-in', replace: true })
-          })()
-        }}
+        detail={engine.reason}
+        onSignOut={signOutAndLeave}
       />
     )
   }

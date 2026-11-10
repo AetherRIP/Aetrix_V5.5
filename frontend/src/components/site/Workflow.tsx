@@ -5,13 +5,13 @@ import { SectionHead } from './SectionHead'
 const STEPS = [
   {
     title: 'Create the assignment',
-    text: 'Name the paper, choose the class, attach the mark scheme. The scheme is read into a fixed question list with its official maximum marks.',
-    output: 'Assignment · scheme blueprint',
+    text: 'Name the paper, choose the class, attach the mark scheme. The scheme is read into a fixed question list with its official maximum marks, and a teacher approves that structure before anything is marked.',
+    output: 'Assignment · approved blueprint',
   },
   {
     title: 'Upload the submissions',
-    text: 'Add a class set of scans, or pull them from Google Classroom. Each file is validated, then bound to one student and one assignment.',
-    output: 'Submissions in R2',
+    text: 'Add a class set of scans. Each file is validated, rendered to pages and bound to one student and one assignment by the engine that stores it. Google Classroom roster sync is not integrated yet.',
+    output: 'Submissions stored by the engine',
   },
   {
     title: 'Let the pipeline mark',
@@ -30,8 +30,8 @@ const STEPS = [
   },
   {
     title: 'Report, then publish',
-    text: 'Generate the class report, then optionally attach it and publish draft grades to Classroom as an independent step.',
-    output: 'Report · Classroom',
+    text: 'Generate the class report from approved results. Attaching it to Google Classroom and publishing grades are separate steps that are not integrated yet.',
+    output: 'Report · planned Classroom step',
   },
 ] as const
 

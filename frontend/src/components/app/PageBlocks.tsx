@@ -54,7 +54,12 @@ export function StatsStrip({ metrics, source = 'engine' }: { metrics: readonly M
           <dd className="hub-stat__value mono" aria-label={`${metric.label}: not available`}>
             —
           </dd>
-          <dd className="hub-stat__note">{metric.note ?? `awaits ${source}`}</dd>
+          <dd className="hub-stat__note">
+            {metric.note ??
+              (source === 'engine'
+                ? 'not reported by the engine'
+                : `not reported by ${source}`)}
+          </dd>
         </div>
       ))}
     </dl>
@@ -99,7 +104,11 @@ export function EmptyTable({
 export type LineItem = {
   label: string
   detail: string
-  state: 'available' | 'pending' | 'blocked'
+  /**
+   * `unimplemented` is distinct from `pending`: the capability does not exist in
+   * this build, so waiting for a deployment will not deliver it.
+   */
+  state: 'available' | 'pending' | 'blocked' | 'unimplemented'
   icon?: IconName
 }
 
@@ -107,6 +116,7 @@ const STATE_CHIP: Record<LineItem['state'], { tone: 'ok' | 'attention' | 'neutra
   available: { tone: 'ok', text: 'Available' },
   pending: { tone: 'attention', text: 'Not deployed' },
   blocked: { tone: 'neutral', text: 'Blocked' },
+  unimplemented: { tone: 'neutral', text: 'Not implemented' },
 }
 
 /** A capability ledger: what exists, what is waiting for the engine. */

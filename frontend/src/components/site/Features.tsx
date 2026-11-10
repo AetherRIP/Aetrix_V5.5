@@ -48,7 +48,7 @@ const FEATURES: { icon: IconName; title: string; text: string; detail: string }[
   {
     icon: 'classroom',
     title: 'Google Classroom',
-    text: 'Courses, coursework and submissions can be read in; reports and draft grades can be written back, each as its own operation.',
+    text: 'A workspace can connect Google Classroom and list its active courses. Coursework, rosters and grade write-back are separate steps that are not implemented.',
     detail: 'Integration · optional',
   },
 ]

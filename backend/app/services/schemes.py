@@ -88,6 +88,25 @@ class SchemeService:
             raise AppError(ErrorCode.NOT_FOUND, "Mark-scheme version not found.")
         return version
 
+    def list_versions(
+        self, tenant_id: uuid.UUID, exam_id: uuid.UUID
+    ) -> list[MarkSchemeVersion]:
+        if self.exams.get(tenant_id, exam_id) is None:
+            raise AppError(ErrorCode.NOT_FOUND, "Exam not found.")
+        from sqlalchemy import select
+
+        return list(
+            self.session.scalars(
+                select(MarkSchemeVersion)
+                .join(MarkScheme, MarkScheme.id == MarkSchemeVersion.mark_scheme_id)
+                .where(
+                    MarkSchemeVersion.tenant_id == tenant_id,
+                    MarkScheme.exam_id == exam_id,
+                )
+                .order_by(MarkSchemeVersion.created_at.desc())
+            )
+        )
+
     def approve(
         self, principal: Principal, version_id: uuid.UUID, reason: str
     ) -> MarkSchemeVersion:

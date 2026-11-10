@@ -20,8 +20,8 @@ current engine implementation.
 
 ```text
 Browser
-  └── frontend/  (TanStack Start + React; marketing surface only today)
-          │  HTTPS + Bearer JWT (future authenticated app)
+  └── frontend/  (TanStack Start + React; marketing, role-aware shell, live health screen)
+          │  HTTPS (live /health + /ready now; Bearer JWT for future data calls)
           ▼
 backend/ FastAPI API  ──────────────┐
   │  SQLAlchemy 2.0                 │
@@ -41,7 +41,7 @@ The benchmark is a separate, frozen harness; production code does not import it.
 
 | Component | Responsibility | Boundary |
 |---|---|---|
-| `frontend/` | Public marketing and sign-in-status pages | No engine calls, no student data, no Cloudflare bindings beyond the marketing Worker |
+| `frontend/` | Marketing, sign-in, role-aware app shell, live engine health | Calls only `/health` and `/ready`; no student data; no Cloudflare bindings beyond the static Worker |
 | `backend/app/api/` | HTTP routes, authentication dependency, typed errors | Tenant resolved from verified identity, never request body |
 | `backend/app/db/` | SQLAlchemy models, tenant-scoped repositories, PostgreSQL leases | No SQLite production path |
 | `backend/app/documents/` | Validation, rendering, quality, ordering, mapping, extraction | Uploads are untrusted; every page persisted with reasons |
@@ -70,9 +70,13 @@ The benchmark is a separate, frozen harness; production code does not import it.
 - **Implemented:** tenancy/auth verification, canonical blueprint approval and overrides,
   persistent jobs/leases/audit, provider quota/usage, document ingestion/rendering, page
   mapping, draft extraction, safe provider errors, Alembic migrations, tests.
+- **Frontend:** the marketing site, Google sign-in, a role-aware shell for owner, platform
+  operator, teacher and assistant, and a live `/health` + `/ready` screen are deployed at
+  `https://aetrix.pages.dev`. Every data screen states that the engine does not expose its
+  data yet; no student data is fetched or rendered.
 - **Not implemented:** marking, SymPy verification, results, selective review, cohort
-  intelligence, Supabase Storage, malware scanning/rate limiting, authenticated frontend,
-  Cloudflare data bindings, production deployment.
+  intelligence, Supabase Storage, malware scanning/rate limiting, authenticated data
+  frontend, Cloudflare data bindings, production deployment.
 - **Live provider:** `UNVERIFIED`; post-change requests returned 503/503/403 and 403. No live
   `DRAFT` exists. The pre-change prose response is evidence of transport only.
 - **Benchmark:** 207 tests pass; the holdout has zero certified papers, so no accuracy or
