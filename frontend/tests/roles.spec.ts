@@ -367,6 +367,11 @@ test.describe('assistant', () => {
     await expect(nav.getByRole('link', { name: 'My overview' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Submission queue' })).toBeVisible()
 
+    // The manual upload path is reachable from the assistant's own rail.
+    const uploads = nav.getByRole('link', { name: 'Uploads' })
+    await expect(uploads).toBeVisible()
+    await expect(uploads).toHaveAttribute('href', '/assignments')
+
     // Workspace and platform administration are absent, not merely disabled.
     await expect(nav.getByRole('link', { name: 'Assistants' })).toHaveCount(0)
     await expect(nav.getByRole('link', { name: 'Workspace', exact: true })).toHaveCount(0)

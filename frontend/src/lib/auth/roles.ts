@@ -341,6 +341,10 @@ const ASSISTANT_NAV: RoleNav = {
     { to: '/assistant', label: 'My overview', icon: 'chart' },
     { to: '/assistant/tasks', label: 'Tasks', icon: 'checkDouble' },
     { to: '/queue', label: 'Submission queue', icon: 'pulse' },
+    // The manual upload path (register a script, upload a script or scheme)
+    // lives on the assignment record; without this entry a reviewer had no way
+    // to reach it from their own rail.
+    { to: '/assignments', label: 'Uploads', icon: 'assignment' },
     { to: '/assistant/work', label: 'Marking workspace', icon: 'pen' },
     { to: '/reports', label: 'Results', icon: 'blueprint' },
     { to: '/assistant/classes', label: 'Assigned classes', icon: 'classroom' },
