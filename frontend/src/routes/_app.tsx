@@ -246,9 +246,23 @@ function AccessGate({
           <Icon name="lock" size={14} /> Workspace access
         </p>
         <h1 className="app-boot__title">{canRedeem ? 'A workspace invitation is required' : 'The engine could not open this account'}</h1>
-        <p className="app-boot__body">
-          {email ?? 'This account'} is signed in, but no workspace membership has been resolved.
-        </p>
+        {canRedeem ? (
+          <>
+            <p className="app-boot__body">
+              {email ?? 'This account'} is signed in, but this address has no workspace
+              membership because it has not been invited to one.
+            </p>
+            <p className="app-boot__body">
+              This is not a connection or outage problem. The engine answered this account’s
+              request and found no membership for this address; only a workspace invitation
+              can create one.
+            </p>
+          </>
+        ) : (
+          <p className="app-boot__body">
+            {email ?? 'This account'} is signed in, but no workspace membership has been resolved.
+          </p>
+        )}
         {reason ? <p className="app-boot__body">{reason}</p> : null}
         {canRedeem ? (
           <form className="app-form" onSubmit={accept}>
