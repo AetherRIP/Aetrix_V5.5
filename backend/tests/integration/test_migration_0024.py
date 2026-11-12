@@ -55,7 +55,15 @@ def _snapshot(engine) -> tuple[str, str, int, int, str]:
 
 def test_0024_round_trip_leaves_history_untouched(db_session, engine, paper, identity) -> None:
     config = _config()
-    assert ScriptDirectory.from_config(config).get_heads() == [REV_0024]
+    script = ScriptDirectory.from_config(config)
+    heads = script.get_heads()
+    # This test exercises the 0024 step of the round trip, not "0024 happens to
+    # be the newest revision". A later revision on top of it must not make the
+    # history assertion stale.
+    assert len(heads) == 1
+    reachable = {revision.revision for revision in script.walk_revisions()}
+    assert REV_0024 in reachable
+    head = heads[0]
 
     job = CorrectionJob(
         tenant_id=identity.tenant_a.id,
@@ -110,7 +118,7 @@ def test_0024_round_trip_leaves_history_untouched(db_session, engine, paper, ide
 
         command.upgrade(config, "head")
         after_upgrade = _snapshot(engine)
-        assert after_upgrade == (before[0], before[1], 1, 1, REV_0024)
+        assert after_upgrade == (before[0], before[1], 1, 1, head)
 
         command.downgrade(config, REV_0023)
         after_downgrade = _snapshot(engine)

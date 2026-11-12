@@ -250,7 +250,11 @@ def test_dashboard_counts_real_rows_and_names_the_latest_eight_jobs(
     assert [row["id"] for row in recent] == [str(job.id) for job in newest_first]
     assert all(row["student_ref"] == "student-1" for row in recent)
     assert recent[0]["state"] == "CREATED"
-    assert recent[0]["updated_at"].startswith("2026-01-01T09:11")
+    # Compared as an instant, not as a string prefix: the API preserves the
+    # server's UTC offset, so a literal "09:11" prefix only matches a UTC host.
+    updated_at = datetime.fromisoformat(recent[0]["updated_at"])
+    assert updated_at.tzinfo is not None
+    assert updated_at == _at(11)
 
     beta = client.get(
         f"/api/v1/workspaces/{identity.tenant_b.id}/dashboard",

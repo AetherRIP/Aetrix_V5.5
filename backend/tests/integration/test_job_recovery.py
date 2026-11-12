@@ -354,6 +354,12 @@ def test_a_half_marked_legacy_job_is_not_relabelled(
     )
     job.engine_version = "legacy"
 
+    # ``FAILED`` is deliberately not claimable, so a retry must first reach the
+    # documented VALIDATING state. Running the worker against the FAILED row
+    # would prove nothing about the engine guard; this uses the real operator path.
+    retried = service(db_session).retry(principal_for(identity.user_a), job.id)
+    assert retried.state == JobState.VALIDATING.value
+
     runner = JobRunner(
         session_factory=session_factory,
         pipeline=_OtherEnginePipeline(),  # type: ignore[arg-type]
@@ -370,7 +376,15 @@ def test_a_half_marked_legacy_job_is_not_relabelled(
     assert reloaded.engine_version == "legacy"
 
 
-@pytest.mark.parametrize("reason", ["short", "    "])
+@pytest.mark.parametrize("reason", ["shrt", "    "])
 def test_a_reason_is_required(reason: str) -> None:
+    """A reason shorter than the documented five characters is refused."""
+
     with pytest.raises(ValidationError):
         RecoveryRequest(reason=reason)
+
+
+def test_a_reason_at_the_documented_minimum_is_accepted() -> None:
+    """The contract is five characters after stripping, and that is the boundary."""
+
+    assert RecoveryRequest(reason="short").reason == "short"
