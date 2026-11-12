@@ -159,6 +159,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     let active = true
 
+    // The callback screen is the only document that can finish a round-trip;
+    // the router serves it with a trailing slash, so compare without one.
+    const onAuthCallback = () =>
+      window.location.pathname.replace(/\/+$/, '') ===
+      AUTH_CALLBACK_PATH.replace(/\/+$/, '')
+
     // A cancelled or failed OAuth round-trip comes back as URL parameters.
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
     const query = new URLSearchParams(window.location.search)
@@ -174,8 +180,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAddingAccount(false)
       setError(humanise(urlError))
     } else if (readAddIntent()) {
-      setAddingAccount(true)
+      // Anywhere else the tab came back from the provider without a result, so
+      // the marker is stale: honouring it would make a later visit to the
+      // callback wait for an account that is no longer being added.
+      if (onAuthCallback()) setAddingAccount(true)
+      else clearAddingAccount()
     }
+
+    // Back from the consent screen restores this page from the back/forward
+    // cache, which re-runs no effect at all.
+    const onPageShow = () => {
+      if (onAuthCallback() || !readAddIntent()) return
+      clearAddingAccount()
+      setAddingAccount(false)
+    }
+    window.addEventListener('pageshow', onPageShow)
 
     supabase.auth
       .getSession()
@@ -204,6 +223,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       active = false
+      window.removeEventListener('pageshow', onPageShow)
       data.subscription.unsubscribe()
     }
   }, [supabase, remember])

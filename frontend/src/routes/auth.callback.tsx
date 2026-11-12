@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { takeNextPath, useAuth } from '../lib/auth/AuthProvider'
+import { clearAddingAccount } from '../lib/auth/accounts'
 import { Icon } from '../components/ui/Icons'
 
 export const Route = createFileRoute('/auth/callback')({
@@ -25,10 +26,14 @@ function AuthCallback() {
   // When the round-trip is adding a second account, the previous session is
   // still stored, so the first `authenticated` is not the new account. Wait for
   // the exchange to finish — but never indefinitely: a round-trip that produces
-  // no new session returns the user to where they were.
+  // no new session returns the user to where they were, and drops the intent so
+  // a later landing on this screen is not read as an add still pending.
   useEffect(() => {
     if (status !== 'authenticated' || !addingAccount) return
-    const timer = window.setTimeout(() => setWaited(true), 15_000)
+    const timer = window.setTimeout(() => {
+      clearAddingAccount()
+      setWaited(true)
+    }, 15_000)
     return () => window.clearTimeout(timer)
   }, [status, addingAccount])
 
