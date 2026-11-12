@@ -43,6 +43,10 @@ function Assignments() {
       : null,
   )
 
+  // Reviewers may upload schemes and scripts but hold no exam authority, so
+  // they get the upload paths without forms the engine would refuse.
+  const canManageExams = session.capabilities.includes('manage_exams')
+
   const approvedScheme =
     schemes.state === 'ok' ? schemes.data.find((version) => version.status === 'APPROVED') : undefined
   const approvedBlueprint = blueprint.state === 'ok' && blueprint.data.status === 'APPROVED'
@@ -92,6 +96,7 @@ function Assignments() {
 
   return (
     <div className="app-stack">
+      {canManageExams ? (
       <Panel title="New assignment" note="Needs an approved blueprint and scheme">
         <form className="app-form" onSubmit={createAssignment}>
           <div className="app-form__row">
@@ -194,6 +199,20 @@ function Assignments() {
           </button>
         </form>
       </Panel>
+      ) : (
+        <Panel title="Uploads only" note="Set by the engine, not this page">
+          <p className="panel-copy">
+            Your account may upload mark schemes and student scripts so marking keeps moving
+            when Google Classroom is unavailable. Creating an exam, creating an assignment and
+            approving a scheme stay with a teacher or administrator.
+          </p>
+          <div className="app-inline-actions">
+            <button type="button" className="btn btn--small btn--outline" onClick={reloadList}>
+              Refresh list
+            </button>
+          </div>
+        </Panel>
+      )}
 
       <DataState state={list} capability="GET /api/v1/workspaces/{id}/assignments">
         <Panel title="Assignment list" note="One row per cohort assignment">

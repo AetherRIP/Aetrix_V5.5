@@ -14,7 +14,10 @@ import {
   submissionService,
 } from '../lib/services'
 
-export const Route = createFileRoute('/_app/assignments/$assignmentId')({
+// The trailing underscore in the filename keeps this route out of the
+// assignments list route, which renders no outlet: without it the list painted
+// over every assignment record and the upload controls were unreachable.
+export const Route = createFileRoute('/_app/assignments_/$assignmentId')({
   component: AssignmentDetail,
 })
 

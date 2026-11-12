@@ -31,7 +31,7 @@ import { Route as MarketingSignInRouteImport } from './routes/_marketing.sign-in
 import { Route as MarketingTermsRouteImport } from './routes/_marketing.terms'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AuthClassroomRouteImport } from './routes/auth.classroom'
-import { Route as AppAssignmentsAssignmentIdRouteImport } from './routes/_app.assignments.$assignmentId'
+import { Route as AppAssignmentsAssignmentIdRouteImport } from './routes/_app.assignments_.$assignmentId'
 import { Route as AppAssistantIndexRouteImport } from './routes/_app.assistant.index'
 import { Route as AppAssistantClassesRouteImport } from './routes/_app.assistant.classes'
 import { Route as AppAssistantProgressRouteImport } from './routes/_app.assistant.progress'
@@ -157,9 +157,9 @@ const AuthClassroomRoute = AuthClassroomRouteImport.update({
 } as any)
 const AppAssignmentsAssignmentIdRoute =
   AppAssignmentsAssignmentIdRouteImport.update({
-    id: '/$assignmentId',
-    path: '/$assignmentId',
-    getParentRoute: () => AppAssignmentsRoute,
+    id: '/assignments_/$assignmentId',
+    path: '/assignments/$assignmentId',
+    getParentRoute: () => AppRoute,
   } as any)
 const AppAssistantIndexRoute = AppAssistantIndexRouteImport.update({
   id: '/assistant/',
@@ -236,7 +236,7 @@ const AppSubmissionsSubmissionIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof MarketingIndexRoute
   '/analytics': typeof AppAnalyticsRoute
-  '/assignments': typeof AppAssignmentsRouteWithChildren
+  '/assignments': typeof AppAssignmentsRoute
   '/assistants': typeof AppAssistantsRoute
   '/classroom': typeof AppClassroomRoute
   '/dashboard': typeof AppDashboardRoute
@@ -273,7 +273,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof MarketingIndexRoute
   '/analytics': typeof AppAnalyticsRoute
-  '/assignments': typeof AppAssignmentsRouteWithChildren
+  '/assignments': typeof AppAssignmentsRoute
   '/assistants': typeof AppAssistantsRoute
   '/classroom': typeof AppClassroomRoute
   '/dashboard': typeof AppDashboardRoute
@@ -312,7 +312,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_marketing': typeof MarketingRouteWithChildren
   '/_app/analytics': typeof AppAnalyticsRoute
-  '/_app/assignments': typeof AppAssignmentsRouteWithChildren
+  '/_app/assignments': typeof AppAssignmentsRoute
   '/_app/assistants': typeof AppAssistantsRoute
   '/_app/classroom': typeof AppClassroomRoute
   '/_app/dashboard': typeof AppDashboardRoute
@@ -331,7 +331,7 @@ export interface FileRoutesById {
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/classroom': typeof AuthClassroomRoute
   '/_marketing/': typeof MarketingIndexRoute
-  '/_app/assignments/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
+  '/_app/assignments_/$assignmentId': typeof AppAssignmentsAssignmentIdRoute
   '/_app/assistant/classes': typeof AppAssistantClassesRoute
   '/_app/assistant/progress': typeof AppAssistantProgressRoute
   '/_app/assistant/tasks': typeof AppAssistantTasksRoute
@@ -446,7 +446,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/auth/classroom'
     | '/_marketing/'
-    | '/_app/assignments/$assignmentId'
+    | '/_app/assignments_/$assignmentId'
     | '/_app/assistant/classes'
     | '/_app/assistant/progress'
     | '/_app/assistant/tasks'
@@ -626,12 +626,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthClassroomRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/assignments/$assignmentId': {
-      id: '/_app/assignments/$assignmentId'
-      path: '/$assignmentId'
+    '/_app/assignments_/$assignmentId': {
+      id: '/_app/assignments_/$assignmentId'
+      path: '/assignments/$assignmentId'
       fullPath: '/assignments/$assignmentId'
       preLoaderRoute: typeof AppAssignmentsAssignmentIdRouteImport
-      parentRoute: typeof AppAssignmentsRoute
+      parentRoute: typeof AppRoute
     }
     '/_app/assistant/': {
       id: '/_app/assistant/'
@@ -734,21 +734,9 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface AppAssignmentsRouteChildren {
-  AppAssignmentsAssignmentIdRoute: typeof AppAssignmentsAssignmentIdRoute
-}
-
-const AppAssignmentsRouteChildren: AppAssignmentsRouteChildren = {
-  AppAssignmentsAssignmentIdRoute: AppAssignmentsAssignmentIdRoute,
-}
-
-const AppAssignmentsRouteWithChildren = AppAssignmentsRoute._addFileChildren(
-  AppAssignmentsRouteChildren,
-)
-
 interface AppRouteChildren {
   AppAnalyticsRoute: typeof AppAnalyticsRoute
-  AppAssignmentsRoute: typeof AppAssignmentsRouteWithChildren
+  AppAssignmentsRoute: typeof AppAssignmentsRoute
   AppAssistantsRoute: typeof AppAssistantsRoute
   AppClassroomRoute: typeof AppClassroomRoute
   AppDashboardRoute: typeof AppDashboardRoute
@@ -761,6 +749,7 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppStudentsRoute: typeof AppStudentsRoute
   AppWorkspaceRoute: typeof AppWorkspaceRoute
+  AppAssignmentsAssignmentIdRoute: typeof AppAssignmentsAssignmentIdRoute
   AppAssistantClassesRoute: typeof AppAssistantClassesRoute
   AppAssistantProgressRoute: typeof AppAssistantProgressRoute
   AppAssistantTasksRoute: typeof AppAssistantTasksRoute
@@ -779,7 +768,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppAnalyticsRoute: AppAnalyticsRoute,
-  AppAssignmentsRoute: AppAssignmentsRouteWithChildren,
+  AppAssignmentsRoute: AppAssignmentsRoute,
   AppAssistantsRoute: AppAssistantsRoute,
   AppClassroomRoute: AppClassroomRoute,
   AppDashboardRoute: AppDashboardRoute,
@@ -792,6 +781,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppStudentsRoute: AppStudentsRoute,
   AppWorkspaceRoute: AppWorkspaceRoute,
+  AppAssignmentsAssignmentIdRoute: AppAssignmentsAssignmentIdRoute,
   AppAssistantClassesRoute: AppAssistantClassesRoute,
   AppAssistantProgressRoute: AppAssistantProgressRoute,
   AppAssistantTasksRoute: AppAssistantTasksRoute,

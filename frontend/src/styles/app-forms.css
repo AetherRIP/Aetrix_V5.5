@@ -121,51 +121,368 @@ input[type='file'].app-input::file-selector-button {
   font-size: 0.75rem;
 }
 
-/* review canvas */
+/* review desk — the examiner's surface
+ *
+ * The scanned script is the object of attention: it sits on a translucent pane
+ * over a faint measure grid, and the evidence reads as a ruled ledger beside
+ * it. Transparency comes from the glass tokens; nothing here introduces hue,
+ * because status is still carried by word, weight and rule.
+ */
 
-.app-page-image {
+.rd-desk {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  gap: var(--s-5);
+}
+
+.rd-desk::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: calc(var(--s-6) * -1) 0 auto;
+  height: 440px;
+  background:
+    radial-gradient(58% 78% at 16% 0%, var(--glow), transparent 74%),
+    repeating-linear-gradient(90deg, transparent 0 79px, var(--grid-line) 79px 80px);
+  pointer-events: none;
+}
+
+.rd-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--glass-line);
+  animation: rd-rise 520ms var(--ease-out) both;
+}
+
+.rd-hero__copy {
+  min-width: 0;
+}
+
+.rd-hero__kicker {
+  font-size: var(--fs-micro);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-hero__ref {
+  margin-top: 6px;
+  font-size: clamp(1.55rem, 3vw, 2.25rem);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1.04;
+  word-break: break-word;
+}
+
+.rd-hero__sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-3);
+  margin-top: 10px;
+  font-size: var(--fs-small);
+  color: var(--text-2);
+}
+
+.rd-hero__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* glass panes */
+
+.rd-pane {
+  position: relative;
+  padding: var(--s-5);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, var(--glass-sheen) 0%, transparent 42%),
+    var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  box-shadow: var(--shadow-1), var(--shadow-2);
+  animation: rd-rise 560ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+.rd-pane__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.rd-pane__title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.rd-pane__note {
+  font-size: 0.6875rem;
+  color: var(--text-3);
+  text-align: right;
+}
+
+/* the tally: one bar that draws itself once */
+
+.rd-tally {
+  display: grid;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+}
+
+.rd-tally__figures {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rd-tally__awarded {
+  font-size: clamp(2.5rem, 5.4vw, 3.5rem);
+  font-weight: 600;
+  letter-spacing: -0.055em;
+  line-height: 0.92;
+}
+
+.rd-tally__of {
+  font-size: clamp(1rem, 1.6vw, 1.25rem);
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.rd-tally__caption {
+  margin: 8px 0 0;
+  max-width: 46ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.rd-tally__track {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--tally-track);
+}
+
+.rd-tally__fill {
   display: block;
-  width: 100%;
-  height: auto;
-  margin-top: var(--s-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-xs);
+  width: calc(var(--fill, 0) * 100%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text);
+  transform-origin: left center;
+  animation: rd-draw 900ms var(--ease-out) 160ms both;
+}
+
+.rd-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--s-3);
+  margin: var(--s-4) 0 0;
+}
+
+.rd-facts > div {
+  display: grid;
+  gap: 4px;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.rd-facts dt {
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-facts dd {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+/* two columns: script on the left, evidence on the right */
+
+.rd-body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+
+.rd-viewer {
+  position: sticky;
+  top: var(--s-4);
+}
+
+.rd-stage {
+  position: relative;
+  margin-top: var(--s-4);
+  overflow: hidden;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-md);
   background: var(--bg);
 }
 
-.app-question {
-  padding: var(--s-3) 0;
-  border-bottom: 1px solid var(--line-soft);
+.rd-stage__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  animation: rd-flip-next 340ms var(--ease-out) both;
 }
 
-.app-question:first-child {
-  padding-top: 0;
+.rd-stage__image[data-flip='prev'] {
+  animation-name: rd-flip-prev;
 }
 
-.app-question:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
+.rd-stage__placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 3 / 4;
+  padding: var(--s-4);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-3);
 }
 
-.app-question__head {
+.rd-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.rd-pager__count {
+  font-size: 0.75rem;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* evidence ledger */
+
+.rd-list {
+  display: grid;
+  margin-top: var(--s-3);
+}
+
+.rd-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-3);
+  border-radius: var(--r-md);
+  border-top: 1px solid var(--line-soft);
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.rd-row:first-child {
+  border-top: 0;
+}
+
+.rd-row:hover {
+  background: var(--glass-2);
+}
+
+.rd-row[data-review='true'] {
+  border-left: 2px solid var(--text);
+  padding-left: calc(var(--s-3) - 1px);
+}
+
+.rd-row__gutter {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.rd-row__id {
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.rd-row__marks {
+  font-size: 0.75rem;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.rd-row__meter {
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--tally-track);
+}
+
+.rd-row__meter > span {
+  display: block;
+  width: calc(var(--fill, 0) * 100%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text-2);
+}
+
+.rd-row__body {
+  min-width: 0;
+}
+
+.rd-row__head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2);
 }
 
-.app-question__id {
+.rd-row__answer {
+  margin: var(--s-2) 0 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.rd-row__label {
+  margin-right: 8px;
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-row__empty {
+  margin: var(--s-2) 0 0;
   font-size: 0.8125rem;
-  font-weight: 600;
+  color: var(--text-3);
 }
 
-.app-criteria {
+.rd-criteria {
   display: grid;
-  gap: 4px;
-  margin-top: var(--s-2);
+  gap: 6px;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.app-criteria__row {
+.rd-criteria__row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
@@ -175,15 +492,414 @@ input[type='file'].app-input::file-selector-button {
   color: var(--text-2);
 }
 
-.app-concerns {
+.rd-concerns {
   display: grid;
-  gap: 3px;
-  margin-top: var(--s-2);
-  padding-left: var(--s-3);
-  border-left: 1px dashed var(--line-strong);
+  gap: 4px;
+  margin: var(--s-3) 0 0;
+  padding: 8px 0 8px var(--s-3);
+  border-left: 2px dashed var(--line-strong);
+  list-style: none;
   font-size: 0.75rem;
   line-height: 1.5;
   color: var(--text-2);
+}
+
+/* what the independent checks actually found, beside the award they classify */
+
+.rd-verifications {
+  display: grid;
+  gap: 6px;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rd-verifications__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* an undecided question states its state, never a numeral */
+.rd-row__state {
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-row__marks[data-undecided='true'] {
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.rd-row__raw {
+  margin: var(--s-2) 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* the override form opens only where someone is about to change a mark */
+
+.rd-override {
+  margin-top: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.rd-override__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0 2px;
+  font-size: 0.75rem;
+  color: var(--text-3);
+  cursor: pointer;
+  list-style: none;
+}
+
+.rd-override__summary::-webkit-details-marker {
+  display: none;
+}
+
+.rd-override__summary::after {
+  content: '⌄';
+  font-size: 0.75rem;
+  transition: transform var(--dur) var(--ease);
+}
+
+.rd-override[open] .rd-override__summary {
+  color: var(--text);
+}
+
+.rd-override[open] .rd-override__summary::after {
+  transform: rotate(180deg);
+}
+
+.rd-override__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+@media (max-width: 1080px) {
+  .rd-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rd-viewer {
+    position: static;
+  }
+}
+
+@media (max-width: 640px) {
+  .rd-pane {
+    padding: var(--s-4);
+  }
+
+  .rd-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-2);
+  }
+
+  .rd-row__gutter {
+    grid-auto-flow: column;
+    align-items: center;
+    justify-content: start;
+    gap: var(--s-2);
+  }
+
+  .rd-row__meter {
+    width: 64px;
+  }
+}
+
+@keyframes rd-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes rd-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes rd-flip-next {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes rd-flip-prev {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-hero,
+  .rd-pane,
+  .rd-tally__fill,
+  .rd-stage__image {
+    animation: none !important;
+  }
+
+  .rd-row,
+  .rd-override__summary::after {
+    transition: none !important;
+  }
+}
+
+/* the marking queue, on the same desk
+ *
+ * A job is one glass row: identity, state with its tally, and the actions an
+ * examiner can take. The segmented filter is the only raised control, so the
+ * eye lands on state rather than chrome.
+ */
+
+.rd-queue {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.rd-seg {
+  display: inline-flex;
+  gap: 2px;
+  justify-self: start;
+  padding: 3px;
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+}
+
+.rd-seg__btn {
+  padding: 7px 15px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+
+.rd-seg__btn:hover {
+  color: var(--text);
+}
+
+.rd-seg__btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.rd-seg__btn[aria-pressed='true'] {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.rd-queue__list {
+  display: grid;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rd-queue__row {
+  display: grid;
+  /* Fixed tracks so every row lines up; an auto column would widen on the
+     rows that carry a longer disabled-reason. */
+  grid-template-columns: 200px minmax(0, 1fr) 96px 246px;
+  grid-template-areas:
+    'id state meter actions'
+    'note note note note';
+  align-items: center;
+  gap: 10px var(--s-4);
+  padding: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  transition: background-color var(--dur) var(--ease);
+}
+
+.rd-queue__row:first-child {
+  border-top: 0;
+}
+
+.rd-queue__row:hover {
+  background: var(--glass-2);
+}
+
+.rd-queue__row[data-attention='true'] {
+  border-left: 2px solid var(--text);
+  padding-left: calc(var(--s-3) - 1px);
+}
+
+.rd-queue__id {
+  grid-area: id;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rd-queue__id > .mono:first-child {
+  font-size: 0.875rem;
+  letter-spacing: 0.01em;
+}
+
+.rd-queue__ref {
+  font-size: 0.6875rem;
+  color: var(--text-3);
+  word-break: break-all;
+}
+
+.rd-queue__state {
+  grid-area: state;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--s-2);
+  min-width: 0;
+}
+
+.rd-queue__hint {
+  font-size: 0.6875rem;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A recorded engine is evidence, so it reads above the other row hints. */
+.rd-queue__engine[data-recorded='true'] {
+  color: var(--text-2);
+}
+
+.rd-meter {
+  grid-area: meter;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--tally-track);
+}
+
+.rd-meter > span {
+  display: block;
+  width: calc(var(--fill, 0) * 100%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text-2);
+}
+
+.rd-queue__actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+}
+
+.rd-queue__note {
+  grid-area: note;
+  justify-self: end;
+  max-width: 78ch;
+  margin: 0;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  text-align: right;
+  color: var(--text-3);
+}
+
+.rd-queue__empty {
+  margin: var(--s-4) 0 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+/* the job detail keeps its tables, on a translucent panel */
+
+.app-modal__panel.rd-modal {
+  border-color: var(--glass-line);
+  background:
+    linear-gradient(180deg, var(--glass-sheen) 0%, transparent 42%),
+    var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+}
+
+@media (max-width: 1100px) {
+  .rd-queue__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'id actions'
+      'state state'
+      'meter meter'
+      'note note';
+    align-items: start;
+    gap: var(--s-2) var(--s-3);
+  }
+
+  .rd-queue__actions {
+    justify-content: flex-end;
+  }
+
+  .rd-queue__note {
+    justify-self: start;
+    text-align: left;
+  }
+}
+
+/* Three actions plus an id cannot share a phone row without crushing the id. */
+@media (max-width: 760px) {
+  .rd-queue__row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'id'
+      'state'
+      'meter'
+      'actions'
+      'note';
+  }
+
+  .rd-queue__actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-seg__btn,
+  .rd-queue__row {
+    transition: none !important;
+  }
 }
 
 /* per-file upload outcomes */
@@ -209,4 +925,494 @@ input[type='file'].app-input::file-selector-button {
   font-size: 0.75rem;
   line-height: 1.5;
   color: var(--text-3);
+}
+
+/* ── Correction job record ──────────────────────────────────────────────────
+ *
+ * The dialog is a record sheet, not another card. It opens with the run's
+ * stamp — short id, state, the engine that produced it and a progress rail —
+ * because those four facts decide whether the rest is worth reading. Groups
+ * below are separated by hairlines and read label/value like a ledger. The run
+ * history is the only numbered sequence on the sheet, because it is one.
+ */
+
+.rd-job__panel {
+  width: min(1040px, 100%);
+  /* A flex item defaults to its min-content width; the record must be able to
+     shrink to the phone viewport instead of pushing the sheet off-screen. */
+  min-width: 0;
+}
+
+.rd-job {
+  display: grid;
+  /* One capped track, so a long identifier wraps inside the sheet instead of
+     widening the whole record past the viewport. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: var(--s-5);
+}
+
+.rd-job__note {
+  max-width: 62ch;
+}
+
+.rd-job__strip {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'stamp verdict'
+    'rail rail';
+  gap: var(--s-4) var(--s-5);
+  padding: var(--s-4) var(--s-5);
+  overflow: hidden;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, var(--glass-2), color-mix(in srgb, var(--surface) 30%, transparent));
+}
+
+.rd-job__strip::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-sheen), transparent);
+}
+
+.rd-job__strip[data-attention='true'] {
+  border-left: 2px solid var(--text);
+}
+
+.rd-job__stamp {
+  grid-area: stamp;
+  min-width: 0;
+}
+
+.rd-job__id {
+  margin: 0;
+  font-size: clamp(1.5rem, 3vw, 2.125rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.055em;
+  color: var(--text);
+}
+
+.rd-job__sid {
+  margin: 8px 0 0;
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.rd-job__verdict {
+  grid-area: verdict;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.rd-job__engine {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  font-size: 0.6875rem;
+  color: var(--text-3);
+}
+
+.rd-job__engine[data-recorded='true'] {
+  border-color: var(--line-strong);
+  color: var(--text-2);
+}
+
+/* An absent engine is a gap in the record, so its badge is dashed. */
+.rd-job__engine[data-recorded='false'] {
+  border-style: dashed;
+}
+
+.rd-job__rail {
+  grid-area: rail;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.rd-job__rail-value {
+  font-size: 0.875rem;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.rd-job__track {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--tally-track);
+}
+
+.rd-job__track-fill {
+  display: block;
+  width: calc(var(--fill, 0) * 100%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--text-2), var(--text));
+}
+
+/* Five stage ticks: the rail is a pipeline, so it shows its stages. */
+.rd-job__track::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent calc(20% - 1px),
+    var(--bg) calc(20% - 1px),
+    var(--bg) 20%
+  );
+  opacity: 0.55;
+}
+
+.rd-job__rail-meta {
+  font-size: 0.6875rem;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.rd-job__alert {
+  display: grid;
+  gap: 6px;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--text);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.rd-job__alert-code {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.rd-job__alert-text {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.rd-job__alert-meta {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--text-3);
+}
+
+.rd-job__notice {
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line);
+}
+
+.rd-job__notice-title {
+  margin: 0 0 var(--s-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.rd-job__reasons {
+  display: grid;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rd-job__reasons li {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.rd-job__reasons li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rd-job__reason-key {
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.rd-job__reason-text {
+  max-width: 66ch;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.rd-job__reasons li > * {
+  min-width: 0;
+}
+
+.rd-job__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--s-6);
+}
+
+.rd-job__group {
+  min-width: 0;
+  padding: var(--s-3) 0 var(--s-2);
+  border-top: 1px solid var(--line);
+}
+
+.rd-job__group--wide {
+  grid-column: 1 / -1;
+}
+
+.rd-job__group-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-3);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.rd-job__group-note {
+  margin-left: auto;
+  font-size: 0.625rem;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.rd-job__facts {
+  display: grid;
+  margin: 0;
+}
+
+.rd-job__fact {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: baseline;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.rd-job__fact:first-child {
+  padding-top: 0;
+}
+
+.rd-job__fact:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.rd-job__fact dt {
+  padding-top: 2px;
+  font-size: 0.625rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-job__fact dd {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.rd-job__facts--row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--s-5);
+}
+
+.rd-job__fact--wide {
+  grid-column: 1 / -1;
+}
+
+.rd-job__facts--row .rd-job__fact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+  border-bottom: 0;
+  padding: 0;
+}
+
+.rd-job__identifier {
+  font-size: 0.75rem;
+  letter-spacing: 0.005em;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.rd-job__aside {
+  font-size: 0.75rem;
+  color: var(--text-3);
+}
+
+.rd-job__delta {
+  display: inline-block;
+  margin-left: var(--s-2);
+  padding-left: var(--s-2);
+  border-left: 1px solid var(--line);
+  font-size: 0.625rem;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.rd-job__block {
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line);
+}
+
+.rd-job__events {
+  position: relative;
+  display: grid;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rd-job__events::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 16px;
+  bottom: 16px;
+  width: 1px;
+  background: var(--line);
+}
+
+.rd-job__event {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: var(--s-3);
+  align-items: start;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.rd-job__event:last-child {
+  border-bottom: 0;
+}
+
+.rd-job__event-node {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--bg);
+  font-size: 0.5625rem;
+  color: var(--text-2);
+}
+
+.rd-job__event-states {
+  display: block;
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.rd-job__event-from {
+  color: var(--text-3);
+}
+
+.rd-job__event-to {
+  color: var(--text);
+}
+
+.rd-job__event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: 2px;
+  font-size: 0.6875rem;
+  color: var(--text-3);
+}
+
+.rd-job__event-time {
+  font-size: 0.6875rem;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.rd-job__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-5);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 760px) {
+  .rd-job__strip {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'stamp'
+      'verdict'
+      'rail';
+  }
+
+  .rd-job__verdict {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .rd-job__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rd-job__group--wide {
+    grid-column: auto;
+  }
+
+  .rd-job__facts--row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-3);
+    padding-bottom: var(--s-3);
+  }
+}
+
+@media (max-width: 520px) {
+  .rd-job__fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .rd-job__reasons li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .rd-job__fact dt {
+    padding-top: 0;
+  }
 }

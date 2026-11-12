@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { DataState } from '../components/app/DataState'
-import { Panel } from '../components/app/PageBlocks'
+import { JobDetailRecord } from '../components/app/JobDetailRecord'
 import { StatePanel } from '../components/app/StatePanel'
 import { useEngineSession } from '../lib/api/session'
 import { useResource, type Loaded } from '../lib/api/useResource'
 import type { Job, JobDetail, JobState } from '../lib/api/types'
+import { engineProvenance, jobTone } from '../lib/jobs/presentation'
 import { queueService } from '../lib/services'
 
 export const Route = createFileRoute('/_app/queue')({
@@ -34,18 +36,6 @@ const FILTERS: { id: string; label: string; match: (job: Job) => boolean }[] = [
 
 type Notice = { tone: 'ok' | 'error'; text: string }
 
-function tone(state: JobState): 'ok' | 'attention' | 'neutral' {
-  if (state === 'COMPLETED') return 'ok'
-  if (state === 'FAILED' || state === 'REVIEW_REQUIRED' || state === 'RETRY_SUSPENDED') {
-    return 'attention'
-  }
-  return 'neutral'
-}
-
-function formatTime(value: string | null): string {
-  return value ? new Date(value).toLocaleString() : 'Not recorded'
-}
-
 function cancelBlockedReason(job: Job | JobDetail, canReview: boolean): string | null {
   if (!canReview) return 'Your role can view this job but cannot cancel it.'
   if (job.state === 'COMPLETED') return 'Completed jobs cannot be cancelled.'
@@ -69,7 +59,27 @@ function retryBlockedReason(job: Job | JobDetail, canReview: boolean): string | 
   return null
 }
 
-function actionNote(job: Job | JobDetail, canReview: boolean): string | null {
+function recoverBlockedReason(job: Job | JobDetail, canApprove: boolean): string | null {
+  if (!canApprove) return 'Your role can view this job but cannot re-mark a refused paper.'
+  if (job.state !== 'REVIEW_REQUIRED') {
+    return `Only a refused run waiting for review can be re-marked (this job is ${job.state}).`
+  }
+  if (job.result_source !== 'AUTOMATED_REFUSED') {
+    return 'This run was not refused by the result guard, so there is nothing to re-mark.'
+  }
+  return null
+}
+
+function actionNote(
+  job: Job | JobDetail,
+  canReview: boolean,
+  canApprove: boolean,
+): string | null {
+  // A refused run has exactly one way forward: a fresh, linked job. Showing the
+  // retry note beside it would name the wrong action.
+  if (job.result_source === 'AUTOMATED_REFUSED') {
+    return recoverBlockedReason(job, canApprove)
+  }
   const cancelReason = cancelBlockedReason(job, canReview)
   const retryReason = retryBlockedReason(job, canReview)
   if (cancelReason && retryReason) return `${cancelReason} ${retryReason}`
@@ -81,6 +91,7 @@ function Queue() {
   const [filter, setFilter] = useState('all')
   const [openId, setOpenId] = useState<string | null>(null)
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null)
+  const [confirmRecoverId, setConfirmRecoverId] = useState<string | null>(null)
   const [busyJobId, setBusyJobId] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
 
@@ -98,30 +109,40 @@ function Queue() {
   )
 
   const active = FILTERS.find((entry) => entry.id === filter) ?? FILTERS[0]
-  const jobs = jobsState.state === 'ok' ? jobsState.data.filter(active.match) : []
+  const allJobs = jobsState.state === 'ok' ? jobsState.data : []
+  const jobs = allJobs.filter(active.match)
+  const activeCount = allJobs.filter((job) => !TERMINAL.includes(job.state)).length
+  const reviewCount = allJobs.filter((job) => job.state === 'REVIEW_REQUIRED').length
   const canReview = session.capabilities.includes('review')
+  const canApprove = session.capabilities.includes('approve')
   const actionsBusy = busyJobId !== null
 
-  async function act(jobId: string, action: 'cancel' | 'retry') {
+  async function act(jobId: string, action: 'cancel' | 'retry' | 'recover', reason?: string) {
     if (!session.token || actionsBusy) return
     setBusyJobId(jobId)
     setNotice(null)
     const result =
       action === 'cancel'
         ? await queueService.cancel(jobId, { token: session.token })
-        : await queueService.retry(jobId, { token: session.token })
+        : action === 'retry'
+          ? await queueService.retry(jobId, { token: session.token })
+          : await queueService.recover(jobId, { reason: reason ?? '' }, { token: session.token })
     setBusyJobId(null)
     setConfirmCancelId(null)
+    setConfirmRecoverId(null)
     if (result.status === 'ok') {
       setNotice({
         tone: 'ok',
         text:
           action === 'cancel'
             ? `Job ${jobId.slice(0, 8)} is ${result.data.state}. The queue was refreshed from the engine.`
-            : `Job ${jobId.slice(0, 8)} is ${result.data.state}. It was returned to the worker queue.`,
+            : action === 'retry'
+              ? `Job ${jobId.slice(0, 8)} is ${result.data.state}. It was returned to the worker queue.`
+              : `Job ${jobId.slice(0, 8)} was refused. Job ${result.data.id.slice(0, 8)} is ${result.data.state} and will mark the paper again; the refused run stays as evidence.`,
       })
       reloadJobs()
       if (openId === jobId) reloadDetail()
+      if (action === 'recover') setOpenId(result.data.id)
     } else {
       setNotice({
         tone: 'error',
@@ -133,22 +154,23 @@ function Queue() {
   }
 
   return (
-    <div className="app-stack">
-      <div className="app-toolbar" aria-label="Queue filters">
-        <div className="app-toolbar__tabs" role="group" aria-label="Filter jobs">
-          {FILTERS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              className={entry.id === filter ? 'app-tab is-active' : 'app-tab'}
-              aria-pressed={entry.id === filter}
-              onClick={() => setFilter(entry.id)}
-            >
-              {entry.label}
-            </button>
-          ))}
+    <div className="rd-desk rd-queue">
+      <header className="rd-hero">
+        <div className="rd-hero__copy">
+          {/* The shell renders the route h1; this is the record line. */}
+          <p className="rd-hero__kicker mono">Queue</p>
+          <p className="rd-hero__ref">
+            {jobs.length} job{jobs.length === 1 ? '' : 's'} shown
+          </p>
+          <p className="rd-hero__sub">
+            <span>{active.label}</span>
+            <span aria-hidden="true">·</span>
+            <span className="mono">{activeCount} active</span>
+            <span aria-hidden="true">·</span>
+            <span className="mono">{reviewCount} awaiting review</span>
+          </p>
         </div>
-        <div className="app-inline-actions">
+        <div className="rd-hero__actions">
           <Link className="btn btn--small btn--outline" to="/history">
             Marking history
           </Link>
@@ -156,6 +178,20 @@ function Queue() {
             Refresh
           </button>
         </div>
+      </header>
+
+      <div className="rd-seg" role="group" aria-label="Filter jobs">
+        {FILTERS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            className="rd-seg__btn"
+            aria-pressed={entry.id === filter}
+            onClick={() => setFilter(entry.id)}
+          >
+            {entry.label}
+          </button>
+        ))}
       </div>
 
       {notice ? (
@@ -170,89 +206,129 @@ function Queue() {
       ) : null}
 
       <DataState state={jobsState} capability="GET /api/v1/workspaces/{id}/corrections">
-        <Panel title="Correction jobs" note={`${jobs.length} shown`}>
-          <div className="table-scroll">
-            <table className="data-table">
-              <caption className="visually-hidden">Correction jobs in this workspace</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Job</th>
-                  <th scope="col">Submission</th>
-                  <th scope="col">State</th>
-                  <th scope="col">Progress</th>
-                  <th scope="col">Attempts</th>
-                  <th scope="col">Error</th>
-                  <th scope="col">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.length > 0 ? (
-                  jobs.map((job) => {
-                    const cancelReason = cancelBlockedReason(job, canReview)
-                    const retryReason = retryBlockedReason(job, canReview)
-                    const note = actionNote(job, canReview)
-                    return (
-                      <tr key={job.id}>
-                        <td className="mono">{job.id.slice(0, 8)}</td>
-                        <td className="mono">{job.submission_id.slice(0, 8)}</td>
-                        <td>
-                          <span className="chip app-chip" data-tone={tone(job.state)}>
-                            {job.state}
-                          </span>
-                        </td>
-                        <td className="mono">{Math.round(job.progress * 100)}%</td>
-                        <td className="mono">
-                          {job.attempts}/{job.max_attempts}
-                        </td>
-                        <td className="mono">{job.error_code ?? '—'}</td>
-                        <td>
-                          <div className="app-inline-actions">
-                            <button
-                              type="button"
-                              className="btn btn--small btn--outline"
-                              onClick={() => {
-                                setConfirmCancelId(null)
-                                setOpenId(job.id)
-                              }}
-                            >
-                              Detail
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn--small btn--outline"
-                              disabled={actionsBusy || Boolean(cancelReason)}
-                              title={cancelReason ?? undefined}
-                              onClick={() => setConfirmCancelId(job.id)}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn--small btn--outline"
-                              disabled={actionsBusy || Boolean(retryReason)}
-                              title={retryReason ?? undefined}
-                              onClick={() => void act(job.id, 'retry')}
-                            >
-                              {busyJobId === job.id ? 'Retrying…' : 'Retry'}
-                            </button>
-                          </div>
-                          {note ? <span className="app-action-note">{note}</span> : null}
-                        </td>
-                      </tr>
-                    )
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="data-table__empty">
-                      No jobs match this filter. Jobs appear here once a submission is uploaded
-                      and queued.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+        <section
+          className="rd-pane"
+          style={{ '--i': 0 } as CSSProperties}
+          aria-label="Correction jobs"
+        >
+          <div className="rd-pane__head">
+            <h2 className="rd-pane__title">Jobs</h2>
+            <span className="rd-pane__note mono">{jobs.length} shown</span>
           </div>
-        </Panel>
+
+          {jobs.length > 0 ? (
+            <ul className="rd-queue__list">
+              {jobs.map((job) => {
+                const engine = engineProvenance(job)
+                const cancelReason = cancelBlockedReason(job, canReview)
+                const retryReason = retryBlockedReason(job, canReview)
+                const recoverReason = recoverBlockedReason(job, canApprove)
+                const note = actionNote(job, canReview, canApprove)
+                return (
+                  <li
+                    key={job.id}
+                    className="rd-queue__row"
+                    data-attention={jobTone(job.state) === 'attention' ? 'true' : undefined}
+                  >
+                    <div className="rd-queue__id">
+                      <span className="mono">{job.id.slice(0, 8)}</span>
+                      <span className="rd-queue__ref mono">
+                        submission {job.submission_id.slice(0, 8)}
+                      </span>
+                    </div>
+
+                    <div className="rd-queue__state">
+                      <span className="chip app-chip" data-tone={jobTone(job.state)}>
+                        {job.state}
+                      </span>
+                      <span className="rd-queue__hint mono">
+                        {Math.round(job.progress * 100)}% · {job.attempts}/{job.max_attempts}{' '}
+                        attempts
+                      </span>
+                      {job.error_code ? (
+                        <span className="rd-queue__hint mono">{job.error_code}</span>
+                      ) : null}
+                      <span
+                        className="rd-queue__hint mono rd-queue__engine"
+                        data-recorded={engine.recorded ? 'true' : 'false'}
+                        title={
+                          engine.recorded
+                            ? 'The correction engine that produced this run'
+                            : 'This job carries no recorded engine'
+                        }
+                      >
+                        {engine.label}
+                      </span>
+                    </div>
+
+                    <div
+                      className="rd-meter"
+                      style={
+                        { '--fill': Math.min(1, Math.max(0, job.progress)) } as CSSProperties
+                      }
+                      role="img"
+                      aria-label={`${Math.round(job.progress * 100)}% progress`}
+                    >
+                      <span />
+                    </div>
+
+                    <div className="rd-queue__actions">
+                      <button
+                        type="button"
+                        className="btn btn--small btn--outline"
+                        onClick={() => {
+                          setConfirmCancelId(null)
+                          setOpenId(job.id)
+                        }}
+                      >
+                        Detail
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--small btn--outline"
+                        disabled={actionsBusy || Boolean(cancelReason)}
+                        title={cancelReason ?? undefined}
+                        onClick={() => setConfirmCancelId(job.id)}
+                      >
+                        Cancel
+                      </button>
+                      {job.result_source === 'AUTOMATED_REFUSED' ? (
+                        <button
+                          type="button"
+                          className="btn btn--small btn--outline"
+                          disabled={actionsBusy || Boolean(recoverReason)}
+                          title={recoverReason ?? undefined}
+                          onClick={() => setConfirmRecoverId(job.id)}
+                        >
+                          Re-mark
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn--small btn--outline"
+                          disabled={actionsBusy || Boolean(retryReason)}
+                          title={retryReason ?? undefined}
+                          onClick={() => void act(job.id, 'retry')}
+                        >
+                          {busyJobId === job.id ? 'Retrying…' : 'Retry'}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Why an action is disabled belongs on its own line, not
+                        inside the action cell where it widens the column. */}
+                    {note ? <p className="rd-queue__note">{note}</p> : null}
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="rd-queue__empty">
+              No jobs match this filter. Jobs appear here once a submission is uploaded and
+              queued.
+            </p>
+          )}
+        </section>
       </DataState>
 
       {confirmCancelId ? (
@@ -262,20 +338,28 @@ function Queue() {
           onConfirm={() => void act(confirmCancelId, 'cancel')}
           onClose={() => setConfirmCancelId(null)}
         />
+      ) : confirmRecoverId ? (
+        <RecoverDialog
+          jobId={confirmRecoverId}
+          busy={busyJobId === confirmRecoverId}
+          onConfirm={(reason) => void act(confirmRecoverId, 'recover', reason)}
+          onClose={() => setConfirmRecoverId(null)}
+        />
       ) : openId ? (
         <JobDetailDialog
-          jobId={openId}
           state={detailState}
           canReview={canReview}
+          canApprove={canApprove}
           busy={actionsBusy}
           onClose={() => setOpenId(null)}
           onRefresh={reloadDetail}
           onCancel={() => setConfirmCancelId(openId)}
           onRetry={() => void act(openId, 'retry')}
+          onRecover={() => setConfirmRecoverId(openId)}
         />
       ) : null}
 
-      {jobsState.state === 'ok' && jobsState.data.length === 0 ? (
+      {jobsState.state === 'ok' && allJobs.length === 0 ? (
         <StatePanel tone="empty" title="The queue is empty" capability="POST /api/v1/corrections">
           <p>
             Queueing happens automatically after a submission's document is accepted, or from an
@@ -355,7 +439,7 @@ function CancelDialog({
       }}
     >
       <div
-        className="app-modal__panel"
+        className="app-modal__panel rd-modal"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="cancel-dialog-title"
@@ -406,32 +490,128 @@ function CancelDialog({
   )
 }
 
-function JobDetailDialog({
+function RecoverDialog({
   jobId,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  jobId: string
+  busy: boolean
+  onConfirm: (reason: string) => void
+  onClose: () => void
+}) {
+  const panelRef = useDialogFocus()
+  const [reason, setReason] = useState('')
+  const valid = reason.trim().length >= 5
+
+  return (
+    <div
+      className="app-modal app-modal--confirm"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose()
+      }}
+    >
+      <div
+        className="app-modal__panel rd-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recover-dialog-title"
+        ref={panelRef}
+      >
+        <div className="app-modal__head">
+          <div>
+            <p className="app-modal__kicker">Refused marking run</p>
+            <h2 className="app-modal__title" id="recover-dialog-title">
+              Re-mark this paper
+            </h2>
+            <p className="app-modal__subtitle mono">{jobId.slice(0, 8)}</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn--small btn--outline"
+            onClick={onClose}
+            disabled={busy}
+            data-autofocus
+            data-dialog-close
+          >
+            Close
+          </button>
+        </div>
+        <p>
+          This run was refused because the engine could not trust its own result. A new
+          correction job will mark the paper again, pinned to the engine that produced this
+          run. The refused run's marks, evidence and refusal stay exactly as they are.
+        </p>
+        <label className="app-modal__field">
+          <span className="app-modal__kicker">Why is this being re-marked?</span>
+          <textarea
+            className="app-input"
+            rows={3}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            maxLength={2000}
+            aria-label="Reason for re-marking this paper"
+          />
+        </label>
+        {valid ? null : (
+          <p className="app-hint">A reason of at least five characters is required.</p>
+        )}
+        <div className="app-inline-actions">
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={() => onConfirm(reason.trim())}
+            disabled={busy || !valid}
+          >
+            {busy ? 'Starting…' : 'Start re-mark'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--small btn--outline"
+            onClick={onClose}
+            disabled={busy}
+          >
+            Keep job
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function JobDetailDialog({
   state,
   canReview,
+  canApprove,
   busy,
   onClose,
   onRefresh,
   onCancel,
   onRetry,
+  onRecover,
 }: {
-  jobId: string
   state: Loaded<JobDetail>
   canReview: boolean
+  canApprove: boolean
   busy: boolean
   onClose: () => void
   onRefresh: () => void
   onCancel: () => void
   onRetry: () => void
+  onRecover: () => void
 }) {
   const panelRef = useDialogFocus()
   const job = state.state === 'ok' ? state.data : null
   const cancelReason = job ? cancelBlockedReason(job, canReview) : null
   const retryReason = job ? retryBlockedReason(job, canReview) : null
-  const note = job ? actionNote(job, canReview) : null
+  const recoverReason = job ? recoverBlockedReason(job, canApprove) : null
+  const note = job ? actionNote(job, canReview, canApprove) : null
 
-  return (
+  // The record is portalled to the body: the workspace content creates its own
+  // stacking context, so an in-place dialog cannot cover the fixed tab bar on a
+  // phone. The dialog only mounts after a click, so there is no SSR divergence.
+  return createPortal(
     <div
       className="app-modal"
       onMouseDown={(event) => {
@@ -439,7 +619,7 @@ function JobDetailDialog({
       }}
     >
       <div
-        className="app-modal__panel"
+        className="app-modal__panel rd-modal rd-job__panel"
         role="dialog"
         aria-modal="true"
         aria-labelledby="job-detail-title"
@@ -451,7 +631,6 @@ function JobDetailDialog({
             <h2 className="app-modal__title" id="job-detail-title">
               Job detail
             </h2>
-            <p className="app-modal__subtitle mono">{jobId.slice(0, 8)}</p>
           </div>
           <button
             type="button"
@@ -464,12 +643,12 @@ function JobDetailDialog({
           </button>
         </div>
 
-        <div className="app-modal__body">
+        <div className="app-modal__body rd-job__body">
           <DataState state={state} capability="GET /api/v1/corrections/{job_id}">
-            {job ? <JobDetailBody job={job} /> : null}
+            {job ? <JobDetailRecord job={job} /> : null}
           </DataState>
 
-          <div className="app-inline-actions app-modal__actions">
+          <div className="app-inline-actions app-modal__actions rd-job__footer">
             <button type="button" className="btn btn--small btn--outline" onClick={onRefresh}>
               Refresh detail
             </button>
@@ -493,253 +672,25 @@ function JobDetailDialog({
                 >
                   {busy ? 'Working…' : 'Retry job'}
                 </button>
+                {job.result_source === 'AUTOMATED_REFUSED' ? (
+                  <button
+                    type="button"
+                    className="btn btn--small btn--outline"
+                    disabled={busy || Boolean(recoverReason)}
+                    title={recoverReason ?? undefined}
+                    onClick={onRecover}
+                  >
+                    Re-mark paper
+                  </button>
+                ) : null}
               </>
             ) : null}
           </div>
-          {note ? <p className="app-action-note">{note}</p> : null}
+          {note ? <p className="app-action-note rd-job__note">{note}</p> : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
-function JobDetailBody({ job }: { job: JobDetail }) {
-  const provider = job.provider_call
-  return (
-    <>
-      <dl className="app-definitions app-definitions--detail">
-        <div>
-          <dt>Job ID</dt>
-          <dd className="mono app-definitions__id">{job.id}</dd>
-        </div>
-        <div>
-          <dt>Submission ID</dt>
-          <dd className="mono app-definitions__id">{job.submission_id}</dd>
-        </div>
-        <div>
-          <dt>Assignment</dt>
-          <dd>
-            {job.assignment_name ?? 'Not reported'}
-            <span className="mono app-detail-muted"> · {job.assignment_id}</span>
-          </dd>
-        </div>
-        <div>
-          <dt>State</dt>
-          <dd>
-            <span className="chip app-chip" data-tone={tone(job.state)}>
-              {job.state}
-            </span>
-          </dd>
-        </div>
-        <div>
-          <dt>Progress</dt>
-          <dd className="mono">{Math.round(job.progress * 100)}%</dd>
-        </div>
-        <div>
-          <dt>Attempts</dt>
-          <dd className="mono">
-            {job.attempts} of {job.max_attempts}
-          </dd>
-        </div>
-        <div>
-          <dt>Created</dt>
-          <dd>{formatTime(job.created_at)}</dd>
-        </div>
-        <div>
-          <dt>Last updated</dt>
-          <dd>{formatTime(job.updated_at)}</dd>
-        </div>
-        <div>
-          <dt>Started</dt>
-          <dd>{formatTime(job.started_at)}</dd>
-        </div>
-        <div>
-          <dt>Finished</dt>
-          <dd>{formatTime(job.finished_at)}</dd>
-        </div>
-        <div>
-          <dt>Processing stage</dt>
-          <dd>
-            {job.state}
-            {job.resume_state ? ` · resumes at ${job.resume_state}` : ''}
-          </dd>
-        </div>
-        <div>
-          <dt>Provider / model</dt>
-          <dd>{provider ? `${provider.provider} / ${provider.model}` : 'No provider call recorded'}</dd>
-        </div>
-        <div>
-          <dt>Provider result</dt>
-          <dd>
-            {provider
-              ? `${provider.success ? 'Succeeded' : 'Failed'} · ${provider.purpose} · ${formatTime(provider.created_at)}`
-              : 'Not recorded'}
-          </dd>
-        </div>
-        <div>
-          <dt>Error</dt>
-          <dd className="mono">
-            {job.error_code
-              ? `${job.error_code}: ${job.error_message ?? 'No message recorded'}`
-              : 'None recorded'}
-          </dd>
-        </div>
-        <div>
-          <dt>Review required reason</dt>
-          <dd>
-            {job.review_reasons.length > 0 ? (
-              <ul className="app-reasons">
-                {job.review_reasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-            ) : job.state === 'REVIEW_REQUIRED' ? (
-              'The engine did not record a reason.'
-            ) : (
-              'Not required'
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Cancellation</dt>
-          <dd>{job.cancel_requested ? 'Requested' : 'Not requested'}</dd>
-        </div>
-      </dl>
-
-      <section className="app-modal__section">
-        <h3 className="app-modal__section-title">Submission</h3>
-        {job.submission ? (
-          <dl className="app-definitions app-definitions--detail">
-            <div>
-              <dt>Student reference</dt>
-              <dd>{job.submission.student_ref}</dd>
-            </div>
-            <div>
-              <dt>Submission status</dt>
-              <dd className="mono">{job.submission.status}</dd>
-            </div>
-            <div>
-              <dt>Content hash</dt>
-              <dd className="mono app-definitions__id">{job.submission.content_hash}</dd>
-            </div>
-          </dl>
-        ) : (
-          <p className="app-hint">No authorised submission record was returned for this job.</p>
-        )}
-      </section>
-
-      <section className="app-modal__section">
-        <h3 className="app-modal__section-title">
-          Documents <span className="app-detail-muted">({job.documents.length})</span>
-        </h3>
-        {job.documents.length > 0 ? (
-          <div className="table-scroll">
-            <table className="data-table">
-              <caption className="visually-hidden">Documents attached to the submission</caption>
-              <thead>
-                <tr>
-                  <th scope="col">File</th>
-                  <th scope="col">Kind</th>
-                  <th scope="col">Pages</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Ordering</th>
-                  <th scope="col">Mapping</th>
-                </tr>
-              </thead>
-              <tbody>
-                {job.documents.map((document) => (
-                  <tr key={document.id}>
-                    <td>{document.original_filename || 'Unnamed document'}</td>
-                    <td className="mono">{document.kind}</td>
-                    <td className="mono">{document.page_count}</td>
-                    <td className="mono">{document.status}</td>
-                    <td className="mono">{document.ordering_status}</td>
-                    <td className="mono">{document.mapping_status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="app-hint">No document is recorded for this submission.</p>
-        )}
-      </section>
-
-      <section className="app-modal__section">
-        <h3 className="app-modal__section-title">
-          Review decisions <span className="app-detail-muted">({job.review_decisions.length})</span>
-        </h3>
-        {job.review_decisions.length > 0 ? (
-          <div className="table-scroll">
-            <table className="data-table">
-              <caption className="visually-hidden">Review decisions recorded for this job</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Question</th>
-                  <th scope="col">Reason</th>
-                  <th scope="col">Mode</th>
-                  <th scope="col">Outcome</th>
-                  <th scope="col">Decided</th>
-                </tr>
-              </thead>
-              <tbody>
-                {job.review_decisions.map((decision) => (
-                  <tr key={`${decision.question_id}-${decision.created_at}`}>
-                    <td className="mono">{decision.question_id}</td>
-                    <td>{decision.requested_reason}</td>
-                    <td className="mono">{decision.mode}</td>
-                    <td className="mono">{decision.outcome ?? 'Pending'}</td>
-                    <td className="mono">
-                      {decision.decided_by
-                        ? `${decision.decided_by} · ${formatTime(decision.decided_at)}`
-                        : 'Not decided'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="app-hint">No review decision has been recorded.</p>
-        )}
-      </section>
-
-      <section className="app-modal__section">
-        <h3 className="app-modal__section-title">State transitions</h3>
-        <div className="table-scroll">
-          <table className="data-table">
-            <caption className="visually-hidden">Job state transitions</caption>
-            <thead>
-              <tr>
-                <th scope="col">#</th>
-                <th scope="col">From</th>
-                <th scope="col">To</th>
-                <th scope="col">Actor</th>
-                <th scope="col">When</th>
-              </tr>
-            </thead>
-            <tbody>
-              {job.events.length > 0 ? (
-                job.events.map((event) => (
-                  <tr key={event.id}>
-                    <td className="mono">{event.event_seq}</td>
-                    <td className="mono">{event.from_state ?? '—'}</td>
-                    <td className="mono">{event.to_state}</td>
-                    <td>{event.actor}</td>
-                    <td className="mono">{formatTime(event.created_at)}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={5} className="data-table__empty">
-                    No transitions recorded for this job.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </>
-  )
-}

@@ -317,7 +317,9 @@ async function openQueue(page: Page, options: { failCancel?: boolean } = {}) {
 }
 
 function jobRow(page: Page, id: string) {
-  return page.locator('tbody tr').filter({ hasText: id.slice(0, 8) })
+  // The queue is a list of job rows, not a table; select the row itself so the
+  // actions inside it are reachable.
+  return page.locator('.rd-queue__row').filter({ hasText: id.slice(0, 8) })
 }
 
 test.describe('correction job actions', () => {
@@ -331,7 +333,14 @@ test.describe('correction job actions', () => {
     await expect(detail.getByText(REVIEW_SUBMISSION, { exact: true })).toBeVisible()
     await expect(detail.getByText('Fixture assignment', { exact: false })).toBeVisible()
     await expect(detail.getByText('google / gemini-2.5-pro')).toBeVisible()
-    await expect(detail.getByText('Question 1a: the model response was not usable.')).toBeVisible()
+    // The reason is printed as a question lead plus its engine detail, so both
+    // halves are asserted rather than one contiguous string.
+    await expect(detail.getByText('Question 1a', { exact: true })).toBeVisible()
+    await expect(
+      detail
+        .locator('.rd-job__reasons')
+        .getByText('the model response was not usable.', { exact: false }),
+    ).toBeVisible()
     await expect(detail.getByText('student-1', { exact: true })).toBeVisible()
     await expect(detail.getByText('student-1.pdf', { exact: true })).toBeVisible()
     await detail.getByRole('button', { name: 'Close' }).click()
