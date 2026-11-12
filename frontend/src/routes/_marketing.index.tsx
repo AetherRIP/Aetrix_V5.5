@@ -1,7 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useScrollReveal } from '../lib/hooks'
+import { useScrollProgress, useScrollReveal } from '../lib/hooks'
+import { AmbientField } from '../components/site/AmbientField'
 import { Hero } from '../components/site/Hero'
 import { ProductPreview } from '../components/product/ProductPreview'
+import { ScoreSignal } from '../components/site/ScoreSignal'
 import { Workflow } from '../components/site/Workflow'
 import { Features } from '../components/site/Features'
 import { Security } from '../components/site/Security'
@@ -27,9 +29,12 @@ export const Route = createFileRoute('/_marketing/')({
 
 function Home() {
   useScrollReveal()
+  useScrollProgress()
 
   return (
-    <>
+    <div className="landscape">
+      <AmbientField />
+
       <Hero />
 
       <section className="section" id="platform" aria-labelledby="platform-title">
@@ -43,10 +48,11 @@ function Home() {
         </div>
       </section>
 
+      <ScoreSignal />
       <Workflow />
       <Features />
       <Security />
       <FinalCta />
-    </>
+    </div>
   )
 }

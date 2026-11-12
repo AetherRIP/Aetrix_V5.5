@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { peekNextPath, useAuth } from '../lib/auth/AuthProvider'
 import { useScrollReveal } from '../lib/hooks'
+import { AmbientField } from '../components/site/AmbientField'
+import { HandshakeTrace } from '../components/site/HandshakeTrace'
 import { Icon } from '../components/ui/Icons'
 
 export const Route = createFileRoute('/_marketing/sign-in')({
@@ -98,167 +100,187 @@ function SignIn() {
   }
 
   return (
-    <div className="auth">
-      <div className="shell auth__grid">
-        <div className="auth__copy" data-reveal>
-          <p className="auth__kicker mono">Pilot access</p>
-          <h1 className="auth__title">Sign in to Aetrix</h1>
-          <p className="auth__lede">
-            Authentication is live. Sign in with the Google account your department
-            registered for the pilot; sessions persist across refreshes and are
-            refreshed automatically while you work.
-          </p>
+    <div className="landscape">
+      <AmbientField />
 
-          <p className="auth__body">
-            There is no self-serve sign-up. Departments join by invitation so that
-            marking can be compared against a known set of scripts. Your account is
-            created by an administrator, not by this page.
-          </p>
+      <div className="auth">
+        <div className="shell auth__inner">
+          <div className="auth__head">
+            <div className="auth__copy">
+              <p className="auth__kicker mono">Pilot access · by invitation</p>
+              <h1 className="auth__title">Sign in to Aetrix</h1>
+              <p className="auth__lede">
+                Authentication is live. Sign in with the Google account your
+                department registered for the pilot. Sessions persist across
+                refreshes and refresh themselves while you work.
+              </p>
 
-          {authUnavailableReason ? (
-            <p className="auth__alert" role="alert">
-              <Icon name="review" size={16} />
-              <span>{authUnavailableReason}</span>
-            </p>
-          ) : null}
-
-          {error ? (
-            <div className="auth__alert" role="alert">
-              <Icon name="review" size={16} />
-              <span>{error}</span>
-              <button type="button" className="auth__dismiss" onClick={dismissError}>
-                Dismiss
-              </button>
-            </div>
-          ) : null}
-
-          {status === 'authenticated' ? (
-            <p className="auth__alert" data-tone="ok" role="status">
-              <Icon name="check" size={16} />
-              <span>Signed in. Opening your workspace…</span>
-            </p>
-          ) : null}
-
-          <div className="auth__actions">
-            <button
-              type="button"
-              className="btn btn--primary auth__google"
-              onClick={() => void startGoogle()}
-              disabled={!canAuthenticate || busy || status === 'authenticated'}
-            >
-              <GoogleGlyph />
-              {busy ? 'Opening Google…' : 'Continue with Google'}
-            </button>
-            <Link className="btn btn--outline" to="/" hash="security">
-              Read the security principles
-            </Link>
-          </div>
-
-          <details className="auth__alt">
-            <summary>Use an email and password instead</summary>
-            <form
-              className="auth__form"
-              onSubmit={submitPassword}
-              method="post"
-              action="/sign-in"
-              noValidate
-            >
-              <label className="auth__field">
-                <span>Email address</span>
-                <input
-                  type="email"
-                  name="email"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  disabled={!canAuthenticate || formBusy}
-                  required
-                />
-              </label>
-              <label className="auth__field">
-                <span>Password</span>
-                <input
-                  ref={passwordInput}
-                  type="password"
-                  name="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  disabled={!canAuthenticate || formBusy}
-                  required
-                />
-              </label>
-              {formError ? (
-                <p className="auth__field-error" role="alert">
-                  {formError}
+              {authUnavailableReason ? (
+                <p className="auth__alert" role="alert">
+                  <Icon name="review" size={16} />
+                  <span>{authUnavailableReason}</span>
                 </p>
               ) : null}
-              <button
-                type="submit"
-                className="btn btn--outline btn--small"
-                disabled={!canAuthenticate || formBusy}
-              >
-                {formBusy ? 'Signing in…' : 'Sign in'}
-              </button>
-              <p className="auth__hint">
-                Email accounts must be confirmed before their first sign-in; new
-                accounts are still created by an administrator.
-              </p>
-            </form>
-          </details>
-        </div>
 
-        <aside
-          id="access"
-          className="auth__panel"
-          aria-labelledby="access-state-title"
-          data-reveal
-        >
-          <h2 className="auth__panel-title" id="access-state-title">
-            Access status
-          </h2>
-          <dl className="auth__state">
+              {error ? (
+                <div className="auth__alert" role="alert">
+                  <Icon name="review" size={16} />
+                  <span>{error}</span>
+                  <button
+                    type="button"
+                    className="auth__dismiss"
+                    onClick={dismissError}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              ) : null}
+
+              {status === 'authenticated' ? (
+                <p className="auth__alert" data-tone="ok" role="status">
+                  <Icon name="check" size={16} />
+                  <span>Signed in. Opening your workspace…</span>
+                </p>
+              ) : null}
+
+              <div className="auth__actions">
+                <button
+                  type="button"
+                  className="btn btn--primary auth__google"
+                  onClick={() => void startGoogle()}
+                  disabled={!canAuthenticate || busy || status === 'authenticated'}
+                >
+                  <GoogleGlyph />
+                  {busy ? 'Opening Google…' : 'Continue with Google'}
+                </button>
+                <Link className="btn btn--outline" to="/" hash="security">
+                  Read the security principles
+                </Link>
+              </div>
+
+              <details className="auth__alt">
+                <summary>Use an email and password instead</summary>
+                <form
+                  className="auth__form"
+                  onSubmit={submitPassword}
+                  method="post"
+                  action="/sign-in"
+                  noValidate
+                >
+                  <label className="auth__field">
+                    <span>Email address</span>
+                    <input
+                      type="email"
+                      name="email"
+                      autoComplete="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      disabled={!canAuthenticate || formBusy}
+                      required
+                    />
+                  </label>
+                  <label className="auth__field">
+                    <span>Password</span>
+                    <input
+                      ref={passwordInput}
+                      type="password"
+                      name="password"
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      disabled={!canAuthenticate || formBusy}
+                      required
+                    />
+                  </label>
+                  {formError ? (
+                    <p className="auth__field-error" role="alert">
+                      {formError}
+                    </p>
+                  ) : null}
+                  <button
+                    type="submit"
+                    className="btn btn--outline btn--small"
+                    disabled={!canAuthenticate || formBusy}
+                  >
+                    {formBusy ? 'Signing in…' : 'Sign in'}
+                  </button>
+                  <p className="auth__hint">
+                    Email accounts must be confirmed before their first sign-in; new
+                    accounts are still created by an administrator.
+                  </p>
+                </form>
+              </details>
+            </div>
+
+            <aside
+              id="access"
+              className="auth__panel"
+              aria-labelledby="access-state-title"
+            >
+              <h2 className="auth__panel-title" id="access-state-title">
+                Access status
+              </h2>
+              <dl className="auth__state">
+                <div>
+                  <dt>Sign-in method</dt>
+                  <dd>
+                    <span className="auth__dot" aria-hidden="true" />
+                    Google OAuth · enabled
+                  </dd>
+                </div>
+                <div>
+                  <dt>Email and password</dt>
+                  <dd>
+                    <span className="auth__dot" aria-hidden="true" />
+                    Enabled · confirmed accounts
+                  </dd>
+                </div>
+                <div>
+                  <dt>Session policy</dt>
+                  <dd>
+                    <span className="auth__dot" aria-hidden="true" />
+                    PKCE · persistent · auto-refresh
+                  </dd>
+                </div>
+                <div>
+                  <dt>Workspace provisioning</dt>
+                  <dd>
+                    <span className="auth__dot" aria-hidden="true" />
+                    Invitation required
+                  </dd>
+                </div>
+                <div>
+                  <dt>Provider credentials</dt>
+                  <dd>
+                    <span className="auth__dot" aria-hidden="true" />
+                    Browser publishable key only
+                  </dd>
+                </div>
+              </dl>
+            </aside>
+          </div>
+
+          <HandshakeTrace />
+
+          <div className="auth__lower" data-reveal>
             <div>
-              <dt>Sign-in method</dt>
-              <dd>
-                <span className="auth__dot" aria-hidden="true" />
-                Google OAuth · enabled
-              </dd>
+              <h2 className="auth__notes-title">Entry rules</h2>
+              <p>
+                There is no self-serve sign-up. A department joins by invitation so
+                that marking can be compared against a known set of scripts, and your
+                account is created by an administrator rather than by this page.
+              </p>
             </div>
             <div>
-              <dt>Email and password</dt>
-              <dd>
-                <span className="auth__dot" aria-hidden="true" />
-                Enabled · confirmed accounts
-              </dd>
+              <h2 className="auth__notes-title">Where authority lives</h2>
+              <p>
+                Roles and workspace membership are enforced by the engine, never by
+                this page. Session state is read from Supabase; nothing here is
+                simulated.
+              </p>
             </div>
-            <div>
-              <dt>Session policy</dt>
-              <dd>
-                <span className="auth__dot" aria-hidden="true" />
-                PKCE · persistent · auto-refresh
-              </dd>
-            </div>
-            <div>
-              <dt>Workspace provisioning</dt>
-              <dd>
-                <span className="auth__dot" aria-hidden="true" />
-                Invitation required
-              </dd>
-            </div>
-            <div>
-              <dt>Provider credentials</dt>
-              <dd>
-                <span className="auth__dot" aria-hidden="true" />
-                Browser publishable key only
-              </dd>
-            </div>
-          </dl>
-          <p className="auth__foot">
-            Roles and workspace membership are enforced by the engine, never by this
-            page. Session state is read from Supabase; nothing here is simulated.
-          </p>
-        </aside>
+          </div>
+        </div>
       </div>
     </div>
   )

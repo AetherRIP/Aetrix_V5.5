@@ -28,7 +28,7 @@ const NON_CLAIMS = [
   'No SOC 2, ISO 27001 or GDPR certification is claimed. None has been obtained.',
   'No pricing is published, because plans are not finalised.',
   'No self-serve signup exists: accounts are created by invitation.',
-  'Marking itself is not implemented yet. The engine records a job as unavailable instead of producing a mark.',
+  'No marking accuracy is certified: the benchmark holdout contains no certified paper, so no accuracy figure is claimed.',
 ] as const
 
 export function Security() {

@@ -52,6 +52,25 @@ The product is not presented as finished. Screens without a real engine contract
 an explicit unavailable state; the UI never fills a gap with fake rows or placeholder
 metrics.
 
+## Marketing surface
+
+The public pages share one drafting field: a masked grid, three static pools of light and
+translucent panes that refract them. `backdrop-filter` is deliberately absent on this
+surface — the blur was measured as the dominant scroll cost and removed.
+
+The sign-in page is a clearance desk: a masthead carrying the real access policy, the
+access-status ledger, and a handshake band that names the four steps the OAuth exchange
+actually performs — PKCE challenge in the browser, Google consent, the single-use code
+exchanged at `/auth/callback`, and token verification in the engine. It describes the
+code; it does not mock it up.
+
+One decorative element follows the pointer: a 480 px lamp moved by `transform` alone and
+written by a single `requestAnimationFrame` loop that stops once it has caught up. It is
+`aria-hidden`, never receives a pointer event, is not installed for coarse pointers, and
+is removed from the layout under `prefers-reduced-motion`. Removing the layer entirely
+left median and p95 scroll frame times unchanged in a paired measurement, so the follow
+curve is tuned for feel rather than for a frame-time budget.
+
 ## Architecture
 
 ```text
@@ -117,6 +136,7 @@ has been exercised against a live provider.
 | Frontend typecheck | `cd frontend && ../.tools/node/node.exe node_modules/typescript/bin/tsc --noEmit` | **exit 0** |
 | Production build | `cd frontend && ../.tools/node/node.exe node_modules/vite/bin/vite.js build` | **exit 0** |
 | Account browser tests | Playwright `tests/accounts.spec.ts` against a production preview and the deployed Pages build | **8 passed in both runs** |
+| Marketing and sign-in | Playwright `tests/marketing.spec.ts tests/auth.spec.ts` against a production preview | **38 passed** |
 | Browser suite, this change | Playwright `tests/responsive.spec.ts` + `tests/queue.spec.ts` against a production preview | **95 passed** |
 | Live engine probes | `GET /health`, `GET /ready` | **200, 200** |
 

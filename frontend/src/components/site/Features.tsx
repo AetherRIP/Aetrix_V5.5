@@ -60,7 +60,7 @@ export function Features() {
         <SectionHead
           id="features-title"
           title="Built for the judgement, not just the throughput."
-          note="Eight capabilities define the product. None of them is claimed as live on this page: Aetrix V5.5 is a pre-release build, and the marking pipeline is specified and in active development."
+          note="Eight capabilities define the product. None of them is claimed as certified on this page: Aetrix V5.5 is a pre-release build, marking runs on a live provider whose accuracy is unverified, and every uncertain question stops for a person."
         />
 
         <div className="feature-matrix">

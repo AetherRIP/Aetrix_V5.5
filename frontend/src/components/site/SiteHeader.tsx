@@ -8,6 +8,7 @@ import { ThemeSwitch } from './ThemeSwitch'
 const NAV = [
   { label: 'Features', hash: 'features' },
   { label: 'Workflow', hash: 'workflow' },
+  { label: 'Class reading', hash: 'signal' },
   { label: 'Security', hash: 'security' },
 ] as const
 
@@ -85,6 +86,10 @@ export function SiteHeader() {
             <Icon name={open ? 'close' : 'menu'} size={20} />
           </button>
         </div>
+      </div>
+
+      <div className="site-header__progress" aria-hidden="true">
+        <i />
       </div>
 
       <div className="mobile-panel" id="mobile-navigation" ref={panel} data-open={open} hidden={!open}>

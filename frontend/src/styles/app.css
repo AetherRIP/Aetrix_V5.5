@@ -117,6 +117,106 @@ svg {
   margin-inline: auto;
 }
 
+/* ══ 1b. Ambient field ══════════════════════════════════════════════════ */
+
+/*
+ * One drafting field sits behind the whole landing page, so every translucent
+ * pane has something to refract. It is decorative, clipped to the page, and
+ * never intercepts a pointer.
+ */
+
+.landscape {
+  position: relative;
+  isolation: isolate;
+}
+
+.landscape > *:not(.field) {
+  position: relative;
+  z-index: 1;
+}
+
+.field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: clip;
+  pointer-events: none;
+}
+
+.field__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 88px 88px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 96%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 96%);
+}
+
+/*
+ * These pools are static on purpose. Animating a gradient this large over 6000px
+ * of page cost more than it added: measured scroll frames over 20 ms fell from
+ * 71% to 17% once the drift and the panes' blur were removed together.
+ */
+.field__glow {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, var(--glow) 0%, transparent 66%);
+}
+
+.field__glow--lead {
+  width: 44rem;
+  height: 44rem;
+  top: 3%;
+  left: -18rem;
+}
+
+.field__glow--mid {
+  width: 56rem;
+  height: 56rem;
+  top: 28%;
+  right: -22rem;
+}
+
+.field__glow--foot {
+  width: 38rem;
+  height: 38rem;
+  bottom: -8%;
+  left: 28%;
+}
+
+/*
+ * The lamp is the one thing on these pages that follows the pointer: a pool of
+ * light carried across the drawing, brighter where it falls, and lifting away
+ * when the pointer leaves the window. It moves by transform only, written by a
+ * single rAF loop that stops once it has caught up, so a resting pointer costs
+ * nothing. It is clipped to the field like everything else here.
+ */
+.field__lamp {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 30rem;
+  height: 30rem;
+  margin: -15rem 0 0 -15rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, var(--lamp) 0%, transparent 38%),
+    radial-gradient(
+      circle at 50% 50%,
+      color-mix(in srgb, var(--lamp) 40%, transparent) 0%,
+      transparent 78%
+    );
+  opacity: 0;
+  transition: opacity 420ms var(--ease-out);
+  will-change: transform;
+}
+
+.field[data-pointer='active'] .field__lamp {
+  opacity: 1;
+}
+
 /* ══ 2. Buttons ════════════════════════════════════════════════════════ */
 
 .btn {
@@ -201,10 +301,37 @@ svg {
     border-color var(--dur) var(--ease);
 }
 
+/*
+ * No backdrop-filter here: the sticky header is the one surface that repaints on
+ * every scroll frame, and measured scroll frames over 20 ms halved (27% to 12%)
+ * with the blur removed. The bar is fully opaque — at 96% a bold white heading
+ * sliding underneath still read through it.
+ */
 .site-header[data-scrolled='true'],
 .site-header[data-open='true'] {
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  background: var(--bg);
   border-bottom-color: var(--line);
+}
+
+/* The reading position, drawn as a hairline under the header. */
+.site-header__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.site-header__progress i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--text);
+  opacity: 0.5;
+  transform: scaleX(var(--scroll, 0));
+  transform-origin: left;
 }
 
 .site-header__inner {
@@ -439,7 +566,8 @@ svg {
 
 .hero__grid {
   position: absolute;
-  inset: -1px;
+  inset: -1px 0 -18%;
+  transform: translate3d(0, calc(var(--scroll-y, 0px) * 0.07), 0);
   background-image:
     linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
@@ -484,6 +612,81 @@ svg {
     transparent 64%
   );
   animation: drift-b 44s var(--ease) infinite alternate;
+}
+
+/* A single band of light crosses the field: the page's only ambient motion. */
+.hero__sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--line-strong) 24%,
+    var(--line-strong) 76%,
+    transparent
+  );
+  opacity: 0;
+  animation: sweep 17s var(--ease) infinite;
+}
+
+/* Print registration marks: the hero is a page, not a viewport. */
+.hero__cross {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  opacity: 0.55;
+}
+
+.hero__cross::before,
+.hero__cross::after {
+  content: '';
+  position: absolute;
+  background: var(--line-strong);
+}
+
+.hero__cross::before {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.hero__cross::after {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.hero__cross--tl {
+  top: var(--s-5);
+  left: var(--s-5);
+}
+
+.hero__cross--tr {
+  top: var(--s-5);
+  right: var(--s-5);
+}
+
+.hero__cross--bl {
+  bottom: var(--s-5);
+  left: var(--s-5);
+}
+
+.hero__cross--br {
+  bottom: var(--s-5);
+  right: var(--s-5);
+}
+
+@media (max-width: 899px) {
+  .hero__cross {
+    display: none;
+  }
 }
 
 .hero__inner {
@@ -644,10 +847,54 @@ svg {
   position: relative;
   z-index: 2;
   padding: clamp(0.9rem, 1.6vw, 1.4rem);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-2);
+  background: color-mix(in srgb, var(--glass) 78%, transparent);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-md);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 var(--glass-sheen);
+  overflow: hidden;
+}
+
+/* The specular line along the pane's top edge: what tells the eye it is glass. */
+.stage__sheet::before {
+  content: '';
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 0;
+  height: 1px;
+  z-index: 2;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--glass-sheen),
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* Light travelling down the pane while the marked sheet is being read. */
+.sheet__scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 28%;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--glass-sheen) 55%,
+    transparent
+  );
+  opacity: 0.7;
+  animation: sheet-scan 9s var(--ease) infinite;
+}
+
+.sheet__progress .meter i {
+  animation: grow-x 900ms var(--ease-out) 620ms both;
 }
 
 .sheet__head {
@@ -790,10 +1037,12 @@ svg {
   position: absolute;
   z-index: 3;
   padding: 10px 12px;
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-xs);
-  box-shadow: var(--shadow-2);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-sm);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 var(--glass-sheen);
   animation: float 9s var(--ease) infinite alternate;
 }
 
@@ -907,15 +1156,34 @@ svg {
 }
 
 .section--security {
-  background: var(--bg-soft);
+  background: color-mix(in srgb, var(--bg-soft) 52%, transparent);
 }
 
 .section-head {
+  position: relative;
   display: grid;
   gap: var(--s-4);
   padding-bottom: clamp(1.75rem, 3.5vw, 2.75rem);
   margin-bottom: clamp(1.75rem, 3.5vw, 2.75rem);
   border-bottom: 1px solid var(--line);
+}
+
+/* The rule under each heading is drawn when the heading arrives. */
+.section-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: var(--text);
+  opacity: 0.32;
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.section-head[data-revealed]::after {
+  animation: rule-draw 1200ms var(--ease-out) 120ms both;
 }
 
 .section-head__title {
@@ -942,10 +1210,12 @@ svg {
 /* ══ 7. Product console ════════════════════════════════════════════════ */
 
 .console {
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  box-shadow: var(--shadow-2);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-md);
+  background: var(--glass);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 var(--glass-sheen);
   overflow: hidden;
 }
 
@@ -956,8 +1226,8 @@ svg {
   flex-wrap: wrap;
   gap: var(--s-3);
   padding: 10px var(--s-4);
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--line);
+  background: var(--glass-2);
+  border-bottom: 1px solid var(--glass-line);
   font-size: 0.625rem;
   color: var(--text-3);
 }
@@ -1073,8 +1343,8 @@ svg {
   align-items: center;
   gap: 7px;
   padding: 10px var(--s-4);
-  background: var(--surface-2);
-  border-top: 1px solid var(--line);
+  background: var(--glass-2);
+  border-top: 1px solid var(--glass-line);
   font-size: 0.5625rem;
   color: var(--text-3);
 }
@@ -1088,7 +1358,7 @@ svg {
 }
 
 .stat {
-  background: var(--surface);
+  background: color-mix(in srgb, var(--bg) 30%, transparent);
   padding: var(--s-4);
 }
 
@@ -1469,7 +1739,7 @@ svg {
   padding: 3px 6px;
   border: 1px solid var(--line-strong);
   border-radius: var(--r-xs);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
   color: var(--text-2);
   font-size: 0.625rem;
   line-height: 1.2;
@@ -1486,6 +1756,11 @@ svg {
 .chip[data-status='published'],
 .chip[data-status='marking'] {
   color: var(--text);
+}
+
+/* The half-filled mark is the one state that is still moving. */
+.chip[data-status='marking'] svg {
+  animation: chip-pulse 2.6s var(--ease) infinite;
 }
 
 .chip[data-status='review'] {
@@ -1528,12 +1803,12 @@ svg {
   flex-direction: column;
   gap: var(--s-2);
   padding: clamp(1.1rem, 2vw, 1.6rem);
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 66%, transparent);
   transition: background-color var(--dur) var(--ease);
 }
 
 .step:hover {
-  background: var(--surface);
+  background: var(--glass-2);
 }
 
 .step__index {
@@ -1598,12 +1873,12 @@ svg {
   flex-direction: column;
   gap: var(--s-2);
   padding: clamp(1.1rem, 2vw, 1.6rem);
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 66%, transparent);
   transition: background-color var(--dur) var(--ease);
 }
 
 .feature:hover {
-  background: var(--surface);
+  background: var(--glass-2);
 }
 
 .feature__icon {
@@ -1666,6 +1941,7 @@ svg {
   padding: var(--s-4);
   border: 1px dashed var(--line-strong);
   border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
 }
 
 .nonclaims__title {
@@ -1761,6 +2037,13 @@ svg {
   position: relative;
   display: grid;
   gap: var(--s-6);
+  padding: clamp(1.5rem, 4vw, 3.25rem);
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-md);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 var(--glass-sheen);
 }
 
 .final-cta__title {
@@ -1798,7 +2081,219 @@ svg {
   }
 }
 
-/* ══ 12. Footer ════════════════════════════════════════════════════════ */
+/* ══ 12. Class reading ═════════════════════════════════════════════════ */
+
+.signal {
+  display: grid;
+  gap: clamp(2rem, 4.5vw, 3.5rem);
+  align-items: center;
+}
+
+.signal__kicker {
+  font-size: 0.625rem;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+.signal__title {
+  margin-top: var(--s-3);
+  font-size: var(--fs-h2);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.032em;
+  text-wrap: balance;
+}
+
+.signal__note {
+  margin-top: var(--s-4);
+  max-width: 44ch;
+  color: var(--text-2);
+}
+
+.signal__readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 1px;
+  margin: var(--s-6) 0 0;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.signal__readout > div {
+  padding: var(--s-3) var(--s-4);
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+}
+
+.signal__readout dt {
+  font-size: 0.625rem;
+  color: var(--text-3);
+}
+
+.signal__readout dd {
+  margin-top: 6px;
+  font-size: 1.125rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
+.signal__readout dd span {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.signal__figure {
+  margin: 0;
+  padding: clamp(1rem, 2.2vw, 1.75rem);
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-md);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 var(--glass-sheen);
+}
+
+.signal__figure figcaption {
+  margin-top: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
+  font-size: 0.625rem;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+@media (min-width: 960px) {
+  .signal {
+    grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  }
+}
+
+@media (max-width: 519px) {
+  .signal__readout {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .signal__readout > div:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* The curve: drawn on arrival, scanned while it is read. */
+
+.curve {
+  color: var(--text);
+}
+
+.curve svg {
+  width: 100%;
+  height: auto;
+}
+
+.curve__grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.curve__grid[data-zero='true'] {
+  stroke: var(--line-strong);
+}
+
+.curve__glow,
+.curve__line {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.curve__glow {
+  stroke-width: 10;
+  opacity: 0.08;
+}
+
+.curve__line {
+  stroke-width: 2;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+[data-revealed] .curve__line {
+  animation: draw 1600ms var(--ease-out) 100ms both;
+}
+
+.curve__area {
+  opacity: 0;
+}
+
+[data-revealed] .curve__area {
+  animation: area-in 1200ms var(--ease-out) 620ms both;
+}
+
+.curve__dot {
+  fill: var(--bg);
+  stroke: currentColor;
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0);
+}
+
+[data-revealed] .curve__dot {
+  animation: dot-in 460ms var(--ease-out) both;
+  animation-delay: calc(820ms + var(--i) * 90ms);
+}
+
+.curve__ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ring 3.8s var(--ease) infinite;
+}
+
+.curve__scan {
+  animation: curve-scan 9s var(--ease) infinite;
+}
+
+.curve__scan-line {
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.4;
+}
+
+.curve__scan-glow {
+  stroke: currentColor;
+  stroke-width: 8;
+  opacity: 0.06;
+}
+
+/* The axis reads as a ledger row: count above its band, one column each. */
+.curve__bands {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 2px;
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
+}
+
+.curve__band {
+  display: grid;
+  gap: 1px;
+  text-align: center;
+  font-size: 0.5625rem;
+  color: var(--text-3);
+}
+
+.curve__band strong {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* ══ 13. Footer ════════════════════════════════════════════════════════ */
 
 .site-footer {
   padding-block: var(--s-8) var(--s-5);
@@ -1875,41 +2370,73 @@ svg {
   }
 }
 
-/* ══ 13. Access page ═══════════════════════════════════════════════════ */
+/* ══ 14. Access page ═══════════════════════════════════════════════════ */
+
+/*
+ * The sign-in page is a clearance desk: one column of plain instructions beside a
+ * ruled status sheet, with a handshake band underneath that shows the four steps
+ * the exchange actually performs. The boldness is spent on that band; everything
+ * else stays a ledger.
+ */
 
 .auth {
-  padding-block: clamp(3rem, 8vw, 7rem);
+  position: relative;
+  padding-block: clamp(2.5rem, 6vw, 5rem) clamp(3rem, 7vw, 5.5rem);
+  scroll-margin-top: 88px;
 }
 
-.auth__grid {
+.auth__inner {
   display: grid;
-  gap: clamp(2rem, 5vw, 4rem);
+  gap: clamp(2rem, 4vw, 3.25rem);
+}
+
+.auth__head {
+  position: relative;
+  display: grid;
+  gap: clamp(1.75rem, 4vw, 3rem);
+  padding-bottom: clamp(1.75rem, 3.5vw, 2.5rem);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The rule under the masthead is drawn as the page settles. */
+.auth__head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: var(--text);
+  opacity: 0.32;
+  transform: scaleX(0);
+  transform-origin: left;
+  animation: rule-draw 1200ms var(--ease-out) 200ms both;
 }
 
 .auth__kicker {
   margin-bottom: var(--s-4);
   font-size: 0.625rem;
+  letter-spacing: 0.04em;
   color: var(--text-3);
+  animation: fade 700ms var(--ease-out) 80ms both;
 }
 
 .auth__title {
-  font-size: clamp(2.25rem, 4.5vw, 3.5rem);
-  font-weight: 600;
-  line-height: 1.02;
-  letter-spacing: -0.035em;
+  font-size: clamp(2.5rem, 5.6vw, 4.25rem);
+  font-weight: 700;
+  line-height: 0.98;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+  animation: rise 900ms var(--ease-out) 140ms both;
 }
 
 .auth__lede {
-  margin-top: var(--s-4);
+  margin-top: var(--s-5);
   max-width: 46ch;
   font-size: var(--fs-lead);
-  color: var(--text);
-}
-
-.auth__body {
-  margin-top: var(--s-4);
-  max-width: 54ch;
+  line-height: 1.5;
   color: var(--text-2);
+  animation: rise 800ms var(--ease-out) 240ms both;
 }
 
 .auth__actions {
@@ -1917,14 +2444,19 @@ svg {
   flex-wrap: wrap;
   gap: var(--s-3);
   margin-top: var(--s-6);
+  animation: rise 800ms var(--ease-out) 360ms both;
 }
 
 .auth__panel {
+  align-self: start;
   padding: var(--s-5);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-2);
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-md);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 var(--glass-sheen);
+  animation: rise 800ms var(--ease-out) 480ms both;
 }
 
 .auth__panel-title {
@@ -1969,20 +2501,181 @@ svg {
   border-radius: 50%;
 }
 
-.auth__foot {
-  margin-top: var(--s-4);
-  font-size: 0.75rem;
+/* Entry rules and the note on where authority lives: footnotes, not cards. */
+
+.auth__lower {
+  display: grid;
+  gap: clamp(1.25rem, 3vw, 2.5rem);
+  padding-top: clamp(1.5rem, 3vw, 2.25rem);
+  border-top: 1px solid var(--line);
+}
+
+.auth__notes-title {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
   color: var(--text-3);
 }
 
-@media (min-width: 900px) {
-  .auth__grid {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+.auth__lower p {
+  margin-top: var(--s-2);
+  max-width: 52ch;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+@media (min-width: 760px) {
+  .auth__lower {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 980px) {
+  .auth__head {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
     align-items: start;
   }
 }
 
-/* ══ 14. Scroll reveal ═════════════════════════════════════════════════ */
+/* ── Handshake trace ─────────────────────────────────────────────────── */
+
+.trace {
+  position: relative;
+  padding: clamp(1.25rem, 2.4vw, 2rem);
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-md);
+  box-shadow:
+    var(--shadow-2),
+    inset 0 1px 0 var(--glass-sheen);
+}
+
+.trace__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.trace__title {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.trace__meta {
+  font-size: 0.5625rem;
+  color: var(--text-3);
+}
+
+.trace__plot {
+  position: relative;
+  padding-top: var(--s-5);
+}
+
+/* A single pool of light runs the rail: the page's only continuous motion. */
+.trace__sweep {
+  position: absolute;
+  top: var(--s-5);
+  left: 0;
+  right: 0;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.trace__sweep i {
+  display: block;
+  width: 22%;
+  height: 100%;
+  background: linear-gradient(to right, transparent, var(--text), transparent);
+}
+
+[data-revealed] .trace__sweep i {
+  animation: trace-sweep 6.5s var(--ease) 1.2s infinite;
+}
+
+.trace__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace__node {
+  position: relative;
+  padding: var(--s-4) var(--s-4) var(--s-5) 0;
+  border-top: 1px solid var(--line);
+}
+
+.trace__node::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--text);
+  opacity: 0.75;
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+[data-revealed] .trace__node::before {
+  animation: trace-seg 720ms var(--ease-out) both;
+  animation-delay: calc(120ms + var(--i) * 190ms);
+}
+
+.trace__index {
+  display: block;
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  opacity: 0;
+}
+
+[data-revealed] .trace__index {
+  animation: fade 500ms var(--ease-out) both;
+  animation-delay: calc(240ms + var(--i) * 190ms);
+}
+
+.trace__term {
+  margin-top: 6px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+}
+
+.trace__note {
+  margin-top: 6px;
+  max-width: 30ch;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+@media (min-width: 820px) {
+  .trace__list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .trace__node {
+    padding-right: var(--s-5);
+  }
+}
+
+/* The rail is vertical on a phone, so the travelling pool would read wrongly. */
+@media (max-width: 819px) {
+  .trace__sweep {
+    display: none;
+  }
+}
+
+/* ══ 15. Scroll reveal ═════════════════════════════════════════════════ */
 
 /*
  * Scoped to elements that have not been revealed yet. Without the :not() the
@@ -2003,7 +2696,7 @@ html[data-reveal-active] [data-reveal]:not([data-revealed]) {
   transition-delay: var(--reveal-delay, 0ms);
 }
 
-/* ══ 15. Keyframes ═════════════════════════════════════════════════════ */
+/* ══ 16. Keyframes ═════════════════════════════════════════════════════ */
 
 @keyframes rise {
   from {
@@ -2119,7 +2812,109 @@ html[data-reveal-active] [data-reveal]:not([data-revealed]) {
   }
 }
 
-/* ══ 16. Reduced motion ════════════════════════════════════════════════ */
+@keyframes trace-seg {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes trace-sweep {
+  from {
+    transform: translate3d(-100%, 0, 0);
+  }
+  to {
+    transform: translate3d(455%, 0, 0);
+  }
+}
+
+@keyframes rule-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes sweep {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -4vh, 0);
+  }
+  12% {
+    opacity: 0.55;
+  }
+  86% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 88vh, 0);
+  }
+}
+
+@keyframes sheet-scan {
+  from {
+    transform: translate3d(0, -120%, 0);
+  }
+  to {
+    transform: translate3d(0, 440%, 0);
+  }
+}
+
+@keyframes chip-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes area-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dot-in {
+  from {
+    transform: scale(0);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@keyframes ring {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.5;
+  }
+  70%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+@keyframes curve-scan {
+  from {
+    transform: translate3d(-120px, 0, 0);
+  }
+  to {
+    transform: translate3d(720px, 0, 0);
+  }
+}
+
+/* ══ 17. Reduced motion ════════════════════════════════════════════════ */
 
 @media (prefers-reduced-motion: reduce) {
   html {
@@ -2145,7 +2940,23 @@ html[data-reveal-active] [data-reveal]:not([data-revealed]) {
     transform: none !important;
   }
 
-  .hero__glow {
+  .hero__glow,
+  .field__glow {
     animation: none !important;
+  }
+
+  /* The lamp is decoration that only exists to move; without motion, remove it. */
+  .field__lamp {
+    display: none !important;
+  }
+
+  /* Parallax is scroll-linked, so the global animation reset cannot reach it. */
+  .hero__grid,
+  .hero__sweep {
+    transform: none !important;
+  }
+
+  .sheet__scan {
+    display: none !important;
   }
 }

@@ -25,6 +25,42 @@ export function usePrefersReducedMotion(): boolean {
 }
 
 /**
+ * Publishes the reading position as two custom properties on the root:
+ * `--scroll` (0–1 through the document, for the header hairline) and
+ * `--scroll-y` (pixels, for the parallax layers). CSS owns the motion, so this
+ * runs once per frame and never re-renders React.
+ */
+export function useScrollProgress() {
+  useEffect(() => {
+    const root = document.documentElement
+    let frame = 0
+
+    const read = () => {
+      frame = 0
+      const max = root.scrollHeight - window.innerHeight
+      const y = window.scrollY
+      const progress = max > 0 ? Math.min(1, Math.max(0, y / max)) : 0
+      root.style.setProperty('--scroll', progress.toFixed(4))
+      root.style.setProperty('--scroll-y', `${Math.round(y)}px`)
+    }
+
+    const schedule = () => {
+      if (frame !== 0) return
+      frame = window.requestAnimationFrame(read)
+    }
+
+    read()
+    window.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule)
+    return () => {
+      window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+    }
+  }, [])
+}
+
+/**
  * Reveals every `[data-reveal]` element once as it enters the viewport.
  *
  * The hidden initial state is only applied after this effect runs, so a
@@ -62,7 +98,13 @@ export function useScrollReveal() {
   }, [])
 }
 
-export const SECTION_IDS = ['platform', 'workflow', 'features', 'security'] as const
+export const SECTION_IDS = [
+  'platform',
+  'signal',
+  'workflow',
+  'features',
+  'security',
+] as const
 
 /** Highlights the section currently occupying the reading position. */
 export function useActiveSection(): string {
@@ -114,6 +156,102 @@ export function useScrolled(threshold = 12): boolean {
   }, [threshold])
 
   return scrolled
+}
+
+/**
+ * Slides the ambient lamp toward the pointer, as though someone were reading the
+ * page under a hand lamp. Only the transform is written, one frame at a time,
+ * and the loop stops as soon as the lamp has caught up — an idle page does no
+ * work. Coarse pointers have no hover position to follow and a visitor who asked
+ * for less motion gets no lamp at all, so neither case installs a listener.
+ */
+export function usePointerLamp(ref: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const field = ref.current
+    const lamp = field?.querySelector<HTMLElement>('[data-lamp]')
+    if (!field || !lamp) return
+    if (window.matchMedia(`${REDUCED_MOTION_QUERY}, (hover: none)`).matches) return
+
+    let frame = 0
+    let lit = false
+    let targetX = 0
+    let targetY = 0
+    let x = 0
+    let y = 0
+
+    const paint = () => {
+      lamp.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`
+    }
+
+    const follow = () => {
+      frame = 0
+      const dx = targetX - x
+      const dy = targetY - y
+      // The further behind it fell, the harder the lamp pulls. A flick across
+      // the page closes in a few frames; a slow hand keeps the carried feel.
+      // 0.10 is what leaves a visible trail at hand speed — at 0.16 the lamp sat
+      // too close to the pointer to read as something being carried.
+      const pull = 0.1 + Math.min(0.56, Math.hypot(dx, dy) / 900)
+      x += dx * pull
+      y += dy * pull
+      if (Math.abs(targetX - x) < 0.4 && Math.abs(targetY - y) < 0.4) {
+        x = targetX
+        y = targetY
+        paint()
+        return
+      }
+      paint()
+      frame = window.requestAnimationFrame(follow)
+    }
+
+    const schedule = () => {
+      if (frame !== 0) return
+      frame = window.requestAnimationFrame(follow)
+    }
+
+    const light = () => {
+      if (lit) return
+      lit = true
+      field.setAttribute('data-pointer', 'active')
+    }
+
+    const onMove = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse') return
+      const bounds = field.getBoundingClientRect()
+      targetX = event.clientX - bounds.left
+      targetY = event.clientY - bounds.top
+      if (!lit) {
+        // First sight of the pointer, or the first move after it left the
+        // window: set the lamp down where the pointer is rather than sliding
+        // it in from wherever it was parked.
+        x = targetX
+        y = targetY
+        paint()
+        light()
+        return
+      }
+      schedule()
+    }
+
+    // Leaving the window must not switch the lamp off for good: this only
+    // unlights it, and the next pointer move lights it again.
+    const lift = () => {
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame)
+        frame = 0
+      }
+      field.removeAttribute('data-pointer')
+      lit = false
+    }
+
+    document.addEventListener('pointermove', onMove, { passive: true })
+    document.documentElement.addEventListener('mouseleave', lift)
+    return () => {
+      document.removeEventListener('pointermove', onMove)
+      document.documentElement.removeEventListener('mouseleave', lift)
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+    }
+  }, [ref])
 }
 
 /**

@@ -19,6 +19,11 @@ export function Hero() {
         <div className="hero__grid" />
         <div className="hero__glow hero__glow--a" />
         <div className="hero__glow hero__glow--b" />
+        <div className="hero__sweep" />
+        <span className="hero__cross hero__cross--tl" />
+        <span className="hero__cross hero__cross--tr" />
+        <span className="hero__cross hero__cross--bl" />
+        <span className="hero__cross hero__cross--br" />
       </div>
 
       <div className="shell hero__inner">

@@ -101,7 +101,20 @@
   --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04);
   --shadow-2: 0 40px 90px -50px rgba(0, 0, 0, 0.95);
   --glow: rgba(255, 255, 255, 0.1);
+  /* The lamp that follows the pointer: brighter than the ambient pools because
+     it is a reading tool, not weather. */
+  --lamp: rgba(255, 255, 255, 0.24);
   --grid-line: rgba(255, 255, 255, 0.045);
+
+  /* ── semantic: glass (review desk) ─────────────────────────────────── */
+  /* The script is read on top of the workspace, so its panes are
+     translucent and let the surface's grain through. */
+  --glass: rgba(19, 23, 25, 0.62);
+  --glass-2: rgba(32, 37, 40, 0.5);
+  --glass-line: rgba(255, 255, 255, 0.13);
+  --glass-sheen: rgba(255, 255, 255, 0.09);
+  --glass-blur: 22px;
+  --tally-track: rgba(255, 255, 255, 0.11);
 
   color-scheme: dark;
 }
@@ -125,7 +138,17 @@
   --shadow-1: 0 1px 0 rgba(16, 18, 20, 0.04);
   --shadow-2: 0 40px 90px -60px rgba(16, 18, 20, 0.35);
   --glow: rgba(16, 18, 20, 0.07);
+  --lamp: rgba(16, 18, 20, 0.14);
   --grid-line: rgba(16, 18, 20, 0.06);
+
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-2: rgba(255, 255, 255, 0.5);
+  --glass-line: rgba(16, 18, 20, 0.15);
+  /* A near-opaque sheen turns the pane into a white card and hides the desk
+     beneath it; this stays light enough that the measure grid reads through. */
+  --glass-sheen: rgba(255, 255, 255, 0.5);
+  --glass-blur: 20px;
+  --tally-track: rgba(16, 18, 20, 0.12);
 
   color-scheme: light;
 }

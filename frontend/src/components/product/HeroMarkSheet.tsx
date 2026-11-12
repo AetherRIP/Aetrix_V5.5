@@ -12,6 +12,7 @@ export function HeroMarkSheet() {
   return (
     <div className="stage">
       <div className="stage__sheet">
+        <span className="sheet__scan" aria-hidden="true" />
         <header className="sheet__head">
           <div>
             <p className="sheet__kicker mono">igcse 4ma1 · algebra ii</p>
