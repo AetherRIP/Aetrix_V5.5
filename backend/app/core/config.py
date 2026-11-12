@@ -62,6 +62,17 @@ class AuthSettings(BaseModel):
     dev_tenant_id: UUID | None = None
     dev_user_id: UUID | None = None
 
+    #: Open access admits any verified identity into one shared workspace instead
+    #: of refusing every account that has no invitation.  It is a deliberate
+    #: posture for a private pilot deployment, not a default: it never widens
+    #: tenancy (every read stays scoped to that one workspace), the workspace is
+    #: resolved from this setting rather than from a token or a request body, and
+    #: every admission is written to the audit log as ``method: open_access``.
+    open_access: bool = False
+    open_access_tenant_slug: str = "pilot"
+    open_access_tenant_name: str = "Pilot workspace"
+    open_access_role: Literal["OWNER", "ADMIN", "TEACHER", "REVIEWER", "VIEWER"] = "TEACHER"
+
     @field_validator("jwt_secret", mode="before")
     @classmethod
     def _empty_secret_is_none(cls, value: Any) -> Any:
@@ -75,6 +86,13 @@ class AuthSettings(BaseModel):
         if value == "" or value is None:
             return None
         return value
+
+    @field_validator("open_access_tenant_slug", "open_access_tenant_name")
+    @classmethod
+    def _open_access_field_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("open-access workspace fields must not be blank")
+        return value.strip()
 
     @field_validator("jwks_url", "supabase_url", "jwt_issuer", mode="before")
     @classmethod

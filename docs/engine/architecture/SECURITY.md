@@ -57,6 +57,15 @@ Trust boundaries:
   development principal **only** when the environment is not production, and it
   requires both a dev tenant id and a dev user id. Production validation rejects
   it.
+- Provisioning is invitation-first: a verified email matching a live invitation,
+  or a one-time acceptance code, creates exactly one `users` row for the subject.
+  An operator may instead set `AETRIX_AUTH__OPEN_ACCESS=true` for a private
+  deployment, which admits any verified identity to the single workspace named by
+  `AETRIX_AUTH__OPEN_ACCESS_TENANT_SLUG` at `AETRIX_AUTH__OPEN_ACCESS_ROLE`. The
+  workspace and role come from configuration, never from the token or the request,
+  so tenancy is not widened; each admission is audited as `member.provisioned`
+  with `method: open_access`. The mode is off by default, and every other case
+  still receives `403 PROVISIONING_REQUIRED`.
 - The API never accepts a tenant id from the request body.
 
 ### Roles

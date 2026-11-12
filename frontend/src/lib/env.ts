@@ -30,6 +30,17 @@ export const env = {
 /** Authentication can only run when both the project URL and browser key exist. */
 export const isSupabaseConfigured = Boolean(env.supabaseUrl && env.supabaseAnonKey)
 
+/**
+ * Whether this build was made for an engine with open access enabled
+ * (``AETRIX_AUTH__OPEN_ACCESS``).
+ *
+ * This is a build-time hint, not an authority: the engine still decides who is
+ * admitted, and the sign-in page falls back to wording that is true under
+ * either policy when the build was not told. It mirrors the engine setting
+ * without ever letting the browser grant access.
+ */
+export const isOpenAccessBuild = read('VITE_AETRIX_OPEN_ACCESS').toLowerCase() === 'true'
+
 /** The engine API is optional until it is deployed. */
 export const isApiConfigured = Boolean(env.apiBaseUrl)
 

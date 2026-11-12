@@ -31,8 +31,12 @@ benchmark and the product record in one repository.
 The demo backend runs on the maintainer's workstation, not an always-on cloud service.
 The Funnel is beta infrastructure and the instance can be offline when the machine is
 off; a failed health check is reported honestly rather than replaced with sample data.
-The application is invitation-gated. There is no public sign-up path and no public
-platform-owner role.
+There is no public sign-up form and no public platform-owner role. Workspace access is
+provisioned by the engine: by default only an invitation, or the one-time acceptance code
+issued with it, creates a membership. A deployment may instead enable
+`AETRIX_AUTH__OPEN_ACCESS=true` to admit any Google-verified account to one shared
+workspace, which never widens tenancy — reads stay scoped to that workspace — and every
+admission is audited.
 
 ## Product preview
 
@@ -105,7 +109,7 @@ The benchmark is frozen and never imported by production code.
 
 | Area | State | Notes |
 |---|---|---|
-| Authentication and invitations | Implemented | Supabase JWT/JWKS verification, invitation-only provisioning, role fallback, session and sign-out flows |
+| Authentication and invitations | Implemented | Supabase JWT/JWKS verification, invitation-first provisioning with an optional shared-workspace open-access mode (`AETRIX_AUTH__OPEN_ACCESS`), role fallback, session and sign-out flows |
 | Tenant isolation | Implemented and integration-tested | Workspace and object reads are scoped from the verified identity; foreign IDs return 404 |
 | Exams, blueprints and schemes | Implemented | Drafting, approval, immutable versions and overrides |
 | Assignments, submissions and documents | Implemented | Registration, PDF ingestion, validation, page mapping and local storage |

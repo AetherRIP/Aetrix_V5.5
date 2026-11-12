@@ -63,13 +63,17 @@ test.describe('sign-in page', () => {
     await expect(page.getByRole('heading', { name: 'Sign in to Aetrix' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled()
 
-    // No self-serve signup is offered, and the page says so.
-    await expect(page.getByText(/no self-serve sign-up/i)).toBeVisible()
+    // There is no separate signup form, and the page says so.
+    await expect(page.getByText(/no separate sign-up form/i)).toBeVisible()
 
-    // The status panel lists only methods that are actually enabled.
+    // The status panel lists only methods that are actually enabled, and states
+    // the provisioning policy this build was made for: automatic for an engine
+    // with open access, invitation-only otherwise.
     await expect(page.locator('#access')).toContainText('Google OAuth · enabled')
     await expect(page.locator('#access')).toContainText('Workspace provisioning')
-    await expect(page.locator('#access')).toContainText('Invitation required')
+    await expect(page.locator('#access')).toContainText(
+      /Workspace provisioning\s+(Automatic · shared pilot workspace|Invitation required)/,
+    )
 
     // Nothing is signed in at this point.
     expect(await storedSession(page)).toBeNull()

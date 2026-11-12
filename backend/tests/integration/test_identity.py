@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
-from app.db.models import AuditEvent, Invitation, User
+from app.db.models import AuditEvent, Invitation, Tenant, User
 from sqlalchemy import func, select
 
 AUDIENCE = "authenticated"
@@ -116,6 +116,57 @@ def test_an_uninvited_verified_account_is_refused_without_creating_a_row(
         )
         == 0
     )
+
+
+def test_open_access_admits_an_uninvited_account_into_one_shared_workspace(
+    open_access_client, db_session
+) -> None:
+    headers = _headers("open-1", "open@example.test")
+
+    first = open_access_client.get("/api/v1/me", headers=headers)
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["role"] == "TEACHER"
+    assert body["ui_role"] == "supervisor"
+    assert body["workspace_slug"] == "pilot"
+    assert "approve" in body["capabilities"]
+
+    # A second request reuses the same membership; signing in again does not
+    # create another account or another workspace.
+    second = open_access_client.get("/api/v1/me", headers=headers)
+    assert second.status_code == 200
+    assert second.json()["user_id"] == body["user_id"]
+
+    db_session.expire_all()
+    assert (
+        db_session.scalar(
+            select(func.count()).select_from(User).where(User.subject == "open-1")
+        )
+        == 1
+    )
+    assert db_session.scalar(select(func.count()).select_from(Tenant)) == 1
+    event = db_session.scalar(
+        select(AuditEvent).where(AuditEvent.action == "member.provisioned")
+    )
+    assert event is not None
+    assert event.detail["method"] == "open_access"
+    assert event.detail["role"] == "TEACHER"
+
+
+def test_open_access_does_not_widen_tenancy(
+    open_access_client, identity, paper
+) -> None:
+    headers = _headers("open-2", "open2@example.test")
+    assert open_access_client.get("/api/v1/me", headers=headers).status_code == 200
+
+    # An open-access account lives in the shared workspace only: another
+    # workspace's records stay nonexistent rather than readable.
+    for path in (
+        f"/api/v1/workspaces/{identity.tenant_a.id}",
+        f"/api/v1/workspaces/{identity.tenant_a.id}/assignments",
+        f"/api/v1/assignments/{paper.assignment.id}",
+    ):
+        assert open_access_client.get(path, headers=headers).status_code == 404, path
 
 
 def test_an_unverified_email_cannot_redeem_an_invitation(

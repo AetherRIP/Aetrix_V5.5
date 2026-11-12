@@ -16,6 +16,15 @@
 > Classroom as unintegrated (A.2 bullet 7, screen 17, C27) are the 8 November audit record;
 > roster import and grade publishing remain unimplemented.
 
+> **Amended 12 November 2026.** Engine-side provisioning now exists and is not
+> invitation-only by design: `backend/app/api/deps.py` maps a verified subject to exactly
+> one `users` row from a live invitation or its one-time acceptance code, and a deployment
+> may set `AETRIX_AUTH__OPEN_ACCESS=true` to admit any Google-verified account to one shared
+> `pilot` workspace at a configured role. That mode is off by default and changes nothing
+> about tenancy, so another workspace still returns 404. The `/sign-in` and access-gate copy
+> now describe whichever policy the build was made for (`VITE_AETRIX_OPEN_ACCESS`). The
+> `/sign-in` row in section B and P10 in section C are the 8 November record.
+
 ---
 
 ## A. Executive summary

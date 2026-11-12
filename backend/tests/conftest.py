@@ -72,6 +72,10 @@ os.environ["AETRIX_AUTH__JWT_SECRET"] = "test-secret-not-used-outside-tests"
 os.environ["AETRIX_AUTH__JWT_AUDIENCE"] = "authenticated"
 os.environ["AETRIX_AUTH__DEV_TENANT_ID"] = ""
 os.environ["AETRIX_AUTH__DEV_USER_ID"] = ""
+# Provisioning tests assert the invitation-only default; the open-access mode is
+# enabled explicitly by the ``open_access_client`` fixture so a developer's
+# backend/.env can never change what the suite proves.
+os.environ["AETRIX_AUTH__OPEN_ACCESS"] = "false"
 os.environ["AETRIX_SECURITY__ENCRYPTION_KEY"] = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 os.environ["AETRIX_WORKER__HEARTBEAT_SECONDS"] = "5"
 os.environ["AETRIX_WORKER__LEASE_SECONDS"] = "15"
@@ -237,6 +241,26 @@ def client(clean_tables, tmp_path):
     application = create_app(settings)
     with TestClient(application) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def open_access_client(clean_tables, tmp_path, monkeypatch):
+    """The same app with ``AETRIX_AUTH__OPEN_ACCESS`` enabled for one test."""
+    from app.core.config import StorageSettings, reset_settings_cache
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("AETRIX_AUTH__OPEN_ACCESS", "true")
+    reset_settings_cache()
+    settings = get_settings().model_copy(
+        update={"storage": StorageSettings(root=tmp_path / "documents")}
+    )
+    application = create_app(settings)
+    try:
+        with TestClient(application) as test_client:
+            yield test_client
+    finally:
+        reset_settings_cache()
 
 
 @pytest.fixture

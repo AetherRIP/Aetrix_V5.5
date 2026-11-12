@@ -34,7 +34,7 @@ and no funded Gemini key is configured. Nothing in this build claims otherwise.
 | ID | Change | Status |
 |---|---|---|
 | P10 | `invitations` table + migration `0010_invitations.py` (tenant, email, role, token hash, inviter, expiry, accepted/revoked, CHECK on the role vocabulary). | VERIFIED (migrations applied from an empty database; `test_identity.py` 10 passed) |
-| A15 | Auto-provisioning in `api/deps.py::get_principal`: verified email + `email_verified` + exactly one live invitation → one `users` row, invite accepted, audit event, tenant taken from the invitation only. No invitation → `403 PROVISIONING_REQUIRED`. | VERIFIED (`test_identity.py`) |
+| A15 | Auto-provisioning in `api/deps.py::get_principal`: verified email + `email_verified` + exactly one live invitation → one `users` row, invite accepted, audit event, tenant taken from the invitation only. No invitation → `403 PROVISIONING_REQUIRED`. An operator-enabled open-access mode (`AETRIX_AUTH__OPEN_ACCESS`) instead admits a verified identity to the one workspace the setting names, at the role it names, audited as `method: open_access`; tenancy is unchanged (other workspaces still 404). Default is off. | VERIFIED (`test_identity.py`) |
 | P14 | `identity.py` router: `/me`, invitations list/create/revoke, members list, member role PATCH. `GET /me` returns the engine role and the documented `ui_role` mapping. | VERIFIED (`test_identity.py`) |
 | A01/A03 | Tenant resolution remains the verified JWT claim (`deps.py`); nothing reads a tenant from a request body. Second-tenant reads return 404. | VERIFIED (`test_identity.py`, `test_api.py`) |
 

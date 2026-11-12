@@ -250,12 +250,13 @@ function AccessGate({
           <>
             <p className="app-boot__body">
               {email ?? 'This account'} is signed in, but this address has no workspace
-              membership because it has not been invited to one.
+              membership yet.
             </p>
             <p className="app-boot__body">
               This is not a connection or outage problem. The engine answered this account’s
-              request and found no membership for this address; only a workspace invitation
-              can create one.
+              request and found no membership for this address. This deployment admits an
+              address only through an invitation, or through the one-time acceptance code
+              issued with it.
             </p>
           </>
         ) : (

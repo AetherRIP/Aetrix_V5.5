@@ -28,6 +28,14 @@ Platform operator ──[consent grant]▶ workspace data
 
 Everything inside the browser is untrusted, including anything the UI displays about permissions.
 
+> **Current implementation note (12 November 2026).** The boundary diagram above is the
+> historical D1/Worker blueprint (ADR-001); the shipped stack is FastAPI + PostgreSQL +
+> Supabase Auth, and the engine is the authorization boundary. In that implementation
+> workspace access is provisioned by the engine: by default only a live invitation, or the
+> one-time acceptance code issued with it, creates a membership, and anything else receives
+> `403 PROVISIONING_REQUIRED`. An operator may instead set `AETRIX_AUTH__OPEN_ACCESS=true`,
+> which admits any verified identity to the single workspace the deployment names (see T26).
+
 ## 3. Threat matrix
 
 | # | Threat | Vector | L | I | Mitigation | Residual |
@@ -56,7 +64,8 @@ Everything inside the browser is untrusted, including anything the UI displays a
 | T22 | Backup exposure | Public R2 bucket | L | Critical | Private buckets; signed URLs only; no `r2.dev`; separate credentials | Low |
 | T23 | Denial of wallet | Runaway AI jobs | M | High | Per-workspace quotas, per-job budget, metering, alerts, kill switch | Medium |
 | T24 | Supply chain | Malicious dependency | M | High | Lockfile, provenance, minimal deps, no postinstall scripts in CI | Medium |
-| T25 | Tenant enumeration | Signup/invite responses | M | Medium | Generic "check your email" responses; invite acceptance does not reveal workspace existence to non-recipients | Low |
+| T25 | Tenant enumeration | Signup, invitation and provisioning responses | M | Medium | Generic "check your email" responses; invite acceptance does not reveal workspace existence to non-recipients; a refusal reports the provisioning state, not workspace names | Low |
+| T26 | **Uninvited account admitted by open-access mode** | Operator enables `AETRIX_AUTH__OPEN_ACCESS`, or the sign-in copy is built for a policy the engine does not run | M | High | Off by default; admits only into the one workspace named by `AETRIX_AUTH__OPEN_ACCESS_TENANT_SLUG` at `AETRIX_AUTH__OPEN_ACCESS_ROLE`, never one chosen by the token or request; every admission audited as `member.provisioned` with `method: open_access`; tenancy unchanged, so another workspace's records still return 404; the page's policy wording is driven by build-time `VITE_AETRIX_OPEN_ACCESS` and defaults to copy true under either policy | Medium — accepted for the private pilot deployment |
 
 L = likelihood, I = impact, both qualitative.
 

@@ -11,27 +11,37 @@ set:
 * a verified email address matching a live invitation, and
 * a one-time acceptance code redeemed by an authenticated subject.
 
-Nothing else provisions.  An authenticated stranger receives
+Nothing else provisions by default.  An authenticated stranger receives
 ``PROVISIONING_REQUIRED`` rather than an implicit membership.
+
+The single exception is an operator-enabled open-access posture
+(``AETRIX_AUTH__OPEN_ACCESS``) for a private deployment: an identity with no
+invitation is admitted to the one workspace that setting names, at the role it
+names.  The workspace comes from configuration — never from the token or the
+request — so tenancy is not widened, and the admission is audited.
 """
 
 from __future__ import annotations
 
 import secrets
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..audit.service import AuditService
+from ..core.config import PlatformAdminSettings
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import sha256_hex, utcnow
 from ..core.security import Principal
 from ..db.models import Invitation, User
 from ..db.repositories import InvitationRepository, TenantRepository, UserRepository
 from ..schemas.identity import InvitationCreate, MemberRoleUpdate, MeRead
+from .platform_accounts import PlatformAdminClient, account_role
 
 WORKSPACE_ROLES: tuple[str, ...] = ("OWNER", "ADMIN", "TEACHER", "REVIEWER", "VIEWER")
 
@@ -44,6 +54,18 @@ WORKSPACE_ROLES: tuple[str, ...] = ("OWNER", "ADMIN", "TEACHER", "REVIEWER", "VI
 UI_ROLE: dict[str, str] = {
     "PLATFORM_OWNER": "owner",
     "ADMIN": "platform_operator",
+    "OWNER": "supervisor",
+    "TEACHER": "supervisor",
+    "REVIEWER": "assistant",
+    "VIEWER": "viewer",
+}
+
+#: The platform claim a workspace role writes, so a change on the Assistants
+#: screen does not leave ``app_metadata.aetrix_role`` behind.  ``ADMIN`` is
+#: deliberately absent: its platform spelling is ``platform_operator``, which
+#: carries platform authority, and a workspace role change must never grant that.
+#: ``PLATFORM_OWNER`` is never a granted workspace role either.
+PLATFORM_CLAIM_BY_WORKSPACE_ROLE: dict[str, str] = {
     "OWNER": "supervisor",
     "TEACHER": "supervisor",
     "REVIEWER": "assistant",
@@ -82,6 +104,19 @@ class Provisioning:
     method: str
 
 
+@dataclass(frozen=True, slots=True)
+class OpenAccessPolicy:
+    """Where an account that matches no invitation is admitted.
+
+    Read from settings, never from a token claim or a request body, so a caller
+    cannot choose the workspace it joins.
+    """
+
+    tenant_slug: str
+    tenant_name: str
+    role: str
+
+
 def ensure_member_manager(principal: Principal) -> None:
     if principal.role not in _MEMBER_MANAGERS:
         raise AppError(
@@ -95,12 +130,23 @@ def capabilities_for(role: str) -> list[str]:
 
 
 class IdentityService:
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self,
+        session: Session,
+        platform_admin: PlatformAdminSettings | None = None,
+        *,
+        client_factory: Callable[[], PlatformAdminClient] | None = None,
+    ) -> None:
         self.session = session
         self.users = UserRepository(session)
         self.invitations = InvitationRepository(session)
         self.tenants = TenantRepository(session)
         self.audit = AuditService(session)
+        #: Identity-provider administration, used only to keep the platform
+        #: claim in step with a workspace role change.  Absent configuration is
+        #: reported in the audit, not raised: workspace features stay available.
+        self.platform_admin = platform_admin or PlatformAdminSettings()
+        self._client_factory = client_factory
 
     # -- provisioning ----------------------------------------------------
     def provision_from_claims(
@@ -111,8 +157,16 @@ class IdentityService:
         email_verified: bool,
         display_name: str | None,
         tenant_hint: uuid.UUID | None,
+        open_access: OpenAccessPolicy | None = None,
     ) -> User:
         if not email:
+            if open_access is not None:
+                return self._provision_open_access(
+                    subject=subject,
+                    email=None,
+                    display_name=display_name,
+                    policy=open_access,
+                )
             raise AppError(
                 ErrorCode.PROVISIONING_REQUIRED,
                 "The token carries no email address, so no invitation can be matched. "
@@ -120,6 +174,15 @@ class IdentityService:
                 details={"state": "EMAIL_REQUIRED"},
             )
         if not email_verified:
+            if open_access is not None:
+                # Open access is decided by the verified subject, not by the
+                # email address, so an unverified address is not a refusal.
+                return self._provision_open_access(
+                    subject=subject,
+                    email=email,
+                    display_name=display_name,
+                    policy=open_access,
+                )
             raise AppError(
                 ErrorCode.PROVISIONING_REQUIRED,
                 "This email address is not verified by the identity provider, so an "
@@ -129,6 +192,13 @@ class IdentityService:
 
         matches = self.invitations.find_pending_for_email(email, tenant_id=tenant_hint)
         if not matches:
+            if open_access is not None:
+                return self._provision_open_access(
+                    subject=subject,
+                    email=email,
+                    display_name=display_name,
+                    policy=open_access,
+                )
             raise AppError(
                 ErrorCode.PROVISIONING_REQUIRED,
                 "This account has not been invited to a workspace. "
@@ -223,6 +293,62 @@ class IdentityService:
                 raise
             return existing
 
+    def _provision_open_access(
+        self,
+        *,
+        subject: str,
+        email: str | None,
+        display_name: str | None,
+        policy: OpenAccessPolicy,
+    ) -> User:
+        """Admit a subject with no invitation to the configured shared workspace."""
+        tenant = self.tenants.get_by_slug(policy.tenant_slug)
+        if tenant is None:
+            try:
+                tenant = self.tenants.create(
+                    name=policy.tenant_name, slug=policy.tenant_slug
+                )
+                self.session.commit()
+            except IntegrityError:
+                # Two first sign-ins can both create the workspace.  The unique
+                # slug makes one lose; the loser reads the winner's row.
+                self.session.rollback()
+                tenant = self.tenants.get_by_slug(policy.tenant_slug)
+                if tenant is None:
+                    raise
+        if not tenant.is_active:
+            raise AppError(ErrorCode.CONFLICT, "The shared workspace is suspended.")
+
+        existing = self.users.get_by_subject(tenant.id, subject)
+        if existing is not None:
+            return existing
+
+        try:
+            user = self.users.create(
+                tenant_id=tenant.id,
+                subject=subject,
+                role=policy.role,
+                email=email.lower() if email else None,
+                display_name=display_name,
+            )
+            self.audit.record(
+                tenant_id=tenant.id,
+                action="member.provisioned",
+                entity_type="user",
+                entity_id=user.id,
+                actor_type="SYSTEM",
+                actor_id=subject,
+                detail={"role": policy.role, "method": "open_access"},
+            )
+            self.session.commit()
+            return user
+        except IntegrityError:
+            self.session.rollback()
+            existing = self.users.get_by_subject(tenant.id, subject)
+            if existing is None:
+                raise
+            return existing
+
     # -- identity --------------------------------------------------------
     def me(self, principal: Principal) -> MeRead:
         tenant = self.tenants.get(principal.tenant_id)
@@ -251,6 +377,80 @@ class IdentityService:
         if tenant is None:
             raise AppError(ErrorCode.NOT_FOUND, "Workspace not found.")
         return self.users.list_for_tenant(principal.tenant_id)
+
+    def _admin_client(self) -> PlatformAdminClient | None:
+        if not self.platform_admin.configured():
+            return None
+        if self._client_factory is not None:
+            return self._client_factory()
+        assert self.platform_admin.supabase_url is not None
+        assert self.platform_admin.service_role_key is not None
+        return PlatformAdminClient(
+            self.platform_admin.supabase_url,
+            self.platform_admin.service_role_key.get_secret_value(),
+            timeout=self.platform_admin.timeout_seconds,
+        )
+
+    def _write_platform_claim(self, target: User, new_role: str) -> dict[str, Any]:
+        """Write the platform role that matches the workspace role just granted.
+
+        The platform directory reads ``app_metadata.aetrix_role``, so without
+        this write a change made on the Assistants screen leaves that claim
+        stale in the other direction.  Platform ownership and platform
+        administration are never overwritten from a workspace screen, and a
+        missing administrative credential is reported rather than raised: the
+        engine's own authorization reads the membership row, so the workspace
+        role change still stands.
+        """
+
+        claim = PLATFORM_CLAIM_BY_WORKSPACE_ROLE.get(new_role)
+        if claim is None:
+            return {
+                "state": "skipped",
+                "reason": "This workspace role has no platform-role spelling that is "
+                "safe to write; app_metadata.aetrix_role was left as it is.",
+            }
+        client = self._admin_client()
+        if client is None:
+            return {
+                "state": "not_configured",
+                "reason": "The engine has no Supabase service-role key, so the "
+                "platform claim could not be written.",
+            }
+        try:
+            with client as admin:
+                account = admin.get_user(target.subject)
+                metadata = dict(account.get("app_metadata") or {})
+                current = account_role(metadata)
+                if current in {"owner", "platform_operator"}:
+                    return {
+                        "state": "skipped",
+                        "reason": "Platform ownership and platform administration are "
+                        "assigned in the identity provider; a workspace role change "
+                        "does not overwrite them.",
+                        "previous_role": current,
+                    }
+                if current == claim:
+                    return {
+                        "state": "unchanged",
+                        "previous_role": current,
+                        "role": claim,
+                    }
+                metadata["aetrix_role"] = claim
+                admin.update_user(target.subject, {"app_metadata": metadata})
+                return {
+                    "state": "written",
+                    "previous_role": current,
+                    "role": claim,
+                }
+        except AppError as error:
+            if error.code == ErrorCode.NOT_FOUND:
+                return {
+                    "state": "skipped",
+                    "reason": "No identity-provider account matches this member's "
+                    "subject, so app_metadata.aetrix_role was not written.",
+                }
+            raise
 
     def update_member_role(
         self, principal: Principal, user_id: uuid.UUID, payload: MemberRoleUpdate
@@ -281,6 +481,10 @@ class IdentityService:
         if previous == payload.role:
             self.session.commit()
             return target
+        # The identity-provider claim is written first: if it fails, the
+        # membership row is never committed, so the two stores cannot silently
+        # disagree.  The same audit event records both halves of the change.
+        platform_claim = self._write_platform_claim(target, payload.role)
         target.role = payload.role
         self.audit.record(
             tenant_id=principal.tenant_id,
@@ -293,6 +497,7 @@ class IdentityService:
                 "previous_role": previous,
                 "role": payload.role,
                 "reason": payload.reason,
+                "platform_claim": platform_claim,
             },
             before={"role": previous},
             after={"role": payload.role},

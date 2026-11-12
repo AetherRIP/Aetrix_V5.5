@@ -82,7 +82,7 @@ test.describe('routes', () => {
     // states the invitation-only policy rather than a "not configured" notice.
     await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled()
     await expect(page.locator('#access')).toContainText('Google OAuth · enabled')
-    await expect(page.getByText(/no self-serve sign-up/i)).toBeVisible()
+    await expect(page.getByText(/no separate sign-up form/i)).toBeVisible()
   })
 
   test('in-page navigation reaches every section', async ({ context }) => {

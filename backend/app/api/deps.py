@@ -24,7 +24,7 @@ from ..db.repositories import UserRepository
 from ..db.session import get_db_session
 from ..prompts.registry import PromptRegistry
 from ..providers.base import LLMProvider
-from ..services.identity import IdentityService
+from ..services.identity import IdentityService, OpenAccessPolicy
 from ..services.provider_calls import ProviderCallService
 from ..storage.base import Storage
 
@@ -55,11 +55,28 @@ def get_claims(
     return decode_jwt(token, settings)
 
 
+def _open_access(settings: Settings) -> OpenAccessPolicy | None:
+    """The configured shared workspace, or ``None`` when access stays invitation-only.
+
+    The workspace is named by the deployment, so it cannot be chosen by the
+    caller's token or request.
+    """
+
+    if not settings.auth.open_access:
+        return None
+    return OpenAccessPolicy(
+        tenant_slug=settings.auth.open_access_tenant_slug,
+        tenant_name=settings.auth.open_access_tenant_name,
+        role=settings.auth.open_access_role,
+    )
+
+
 def _provision(
     session: Session,
     claims: dict[str, Any],
     subject: str,
     tenant_hint: uuid.UUID | None,
+    settings: Settings,
 ):
     email, verified = extract_verified_email(claims)
     return IdentityService(session).provision_from_claims(
@@ -68,6 +85,7 @@ def _provision(
         email_verified=verified,
         display_name=extract_display_name(claims),
         tenant_hint=tenant_hint,
+        open_access=_open_access(settings),
     )
 
 
@@ -110,7 +128,7 @@ def get_principal(
             # A first sign-in carries a workspace claim only when the identity
             # provider was told about it.  The invitation, not the claim, still
             # decides whether this subject may join that workspace.
-            user = _provision(session, claims, subject, tenant_claim)
+            user = _provision(session, claims, subject, tenant_claim, settings)
     else:
         matches = users.find_by_subject_any_tenant(subject)
         if len(matches) == 1:
@@ -121,7 +139,7 @@ def get_principal(
                 "The token does not identify a workspace and the account is ambiguous.",
             )
         else:
-            user = _provision(session, claims, subject, None)
+            user = _provision(session, claims, subject, None, settings)
 
     principal = Principal(
         user_id=user.id,

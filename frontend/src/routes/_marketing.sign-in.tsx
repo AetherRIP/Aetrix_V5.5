@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { peekNextPath, useAuth } from '../lib/auth/AuthProvider'
+import { isOpenAccessBuild } from '../lib/env'
 import { useScrollReveal } from '../lib/hooks'
 import { AmbientField } from '../components/site/AmbientField'
 import { HandshakeTrace } from '../components/site/HandshakeTrace'
@@ -107,12 +108,13 @@ function SignIn() {
         <div className="shell auth__inner">
           <div className="auth__head">
             <div className="auth__copy">
-              <p className="auth__kicker mono">Pilot access · by invitation</p>
+              <p className="auth__kicker mono">
+                {isOpenAccessBuild ? 'Pilot access · open sign-in' : 'Pilot access · by invitation'}
+              </p>
               <h1 className="auth__title">Sign in to Aetrix</h1>
               <p className="auth__lede">
-                Authentication is live. Sign in with the Google account your
-                department registered for the pilot. Sessions persist across
-                refreshes and refresh themselves while you work.
+                Authentication is live. Sign in with a Google account. Sessions
+                persist across refreshes and refresh themselves while you work.
               </p>
 
               {authUnavailableReason ? (
@@ -246,7 +248,9 @@ function SignIn() {
                   <dt>Workspace provisioning</dt>
                   <dd>
                     <span className="auth__dot" aria-hidden="true" />
-                    Invitation required
+                    {isOpenAccessBuild
+                      ? 'Automatic · shared pilot workspace'
+                      : 'Invitation required'}
                   </dd>
                 </div>
                 <div>
@@ -266,9 +270,11 @@ function SignIn() {
             <div>
               <h2 className="auth__notes-title">Entry rules</h2>
               <p>
-                There is no self-serve sign-up. A department joins by invitation so
-                that marking can be compared against a known set of scripts, and your
-                account is created by an administrator rather than by this page.
+                There is no separate sign-up form: the engine, not this page, decides
+                workspace access.{' '}
+                {isOpenAccessBuild
+                  ? 'This deployment admits any account Google has authenticated to one shared pilot workspace, and records the membership on the first request.'
+                  : 'This deployment admits an address only through an invitation, or through the one-time acceptance code issued with it.'}
               </p>
             </div>
             <div>
