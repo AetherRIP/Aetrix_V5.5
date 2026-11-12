@@ -24,7 +24,7 @@ function Analytics() {
         <EmptyTable
           columns={['Assignment', 'Question', 'Attempted', 'Mean', 'Flag']}
           caption="Question-level performance for this workspace"
-          note="No rows — analytics is derived from marks, and marking is not implemented."
+          note="No rows — this build exposes no cohort-analytics endpoint, so no question-level figures are computed."
         />
       </Panel>
 

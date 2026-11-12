@@ -422,15 +422,13 @@ class ProviderCallService:
                     count_toward_quota=not is_auth,
                     cooldown_seconds=cooldown_seconds,
                 )
-                if is_quota:
-                    # Free-tier quota is shared by the project, so one 429 pauses
-                    # every key under it; rotating to a sibling key would only
-                    # produce another 429.
-                    self.pool.project_cooldown(
-                        lease,
-                        seconds=cooldown_seconds or self.settings.quota.cooldown_seconds,
-                        reason=f"Project quota exhausted: {error}",
-                    )
+                # A 429 names the key that spent its allowance; it is not proof
+                # that its siblings are empty.  Observed live: one key answered
+                # 429 while a second key under the same registered project
+                # answered 200 in the same second, so pausing the project here
+                # parked a paper the fleet could still mark.  ``failure`` above
+                # cools only this key, ``excluded`` keeps the rotation moving,
+                # and the attempt budget still stops at a truthful park.
                 error_usage = error.usage or TokenUsage()
                 self._record(
                     tenant_id=tenant_id,

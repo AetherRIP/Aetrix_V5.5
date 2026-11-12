@@ -447,11 +447,11 @@ def validate_credential(
         credential.last_failure_status = error.status_code
         credential.last_validated_at = now
         if verdict.category == "quota":
-            QuotaReservationRepository(session).set_project_cooldown(
-                project_id=credential.project_id,
-                reason=f"Validation probe rate-limited: {error}",
-                cooldown_until=now
-                + timedelta(seconds=settings.quota.cooldown_seconds),
+            # The probe spent this key's allowance, which says nothing about
+            # the rest of the fleet; a project-wide pause here would stop
+            # marking on the strength of one probe.
+            credential.cooldown_until = now + timedelta(
+                seconds=settings.quota.cooldown_seconds
             )
         error_usage = error.usage or TokenUsage()
         usage.record(

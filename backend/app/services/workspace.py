@@ -10,11 +10,13 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..core.errors import AppError, ErrorCode
 from ..core.security import Principal
+from ..correction.guard import RESULT_SOURCE_REFUSED
+from ..correction.processing import effective_state, is_scoreable
 from ..db.models import (
     Assignment,
     AuditEvent,
@@ -311,12 +313,19 @@ class WorkspaceService:
                 )
             )
         )
+        # A refused run is not a result, so it is excluded here as well as on the
+        # review screen: otherwise the newest refused run would become the cell a
+        # teacher sees, and the paper's total would be taken from it.
         jobs = list(
             self.session.scalars(
                 select(CorrectionJob)
                 .where(
                     CorrectionJob.tenant_id == tenant,
                     CorrectionJob.assignment_id.in_(assignment_ids),
+                    or_(
+                        CorrectionJob.result_source.is_(None),
+                        CorrectionJob.result_source != RESULT_SOURCE_REFUSED,
+                    ),
                 )
                 .order_by(CorrectionJob.created_at.asc())
             )
@@ -387,8 +396,27 @@ class WorkspaceService:
                     else None
                 )
                 rows = results_by_job.get(job.id, []) if job is not None else []
-                awarded = sum(row.awarded_marks for row in rows) if rows else None
-                possible = sum(row.max_marks for row in rows) if rows else 0
+                # An undecided question has no mark: counting its placeholder
+                # zero against the maximum would report a failure that never
+                # happened.  The cell states the decided fraction instead.
+                decided_rows = [
+                    row
+                    for row in rows
+                    if row.status != "EXCLUDED"
+                    and is_scoreable(
+                        effective_state(
+                            row.status,
+                            row.processing_state,
+                            review_required=bool(row.review_required),
+                        )
+                    )
+                ]
+                awarded = (
+                    sum(row.awarded_marks for row in decided_rows)
+                    if decided_rows
+                    else None
+                )
+                possible = sum(row.max_marks for row in decided_rows)
                 approved = job is not None and job.id in approvals
                 if approved and possible:
                     approved_awarded += awarded or 0

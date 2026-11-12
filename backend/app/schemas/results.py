@@ -62,15 +62,35 @@ class QuestionResultRead(BaseModel):
     working_summary: str | None
     confidence: float | None
     review_required: bool
+    #: The engine's explicit claim about this question.  ``None`` only for rows
+    #: written before the column existed; readers fall back to ``status``.
+    processing_state: str | None = None
+    #: The model's own award and the mark that was actually stored, so a
+    #: normalisation or a teacher's change is visible instead of silent.
+    raw_awarded_marks: int | None = None
+    normalised_awarded_marks: int | None = None
+    normalisation_anomaly: str | None = None
     scheme_concerns: list[dict[str, Any]]
     criteria: list[CriterionResultRead] = Field(default_factory=list)
     evidence: list[EvidenceRead] = Field(default_factory=list)
 
 
 class ResultTotals(BaseModel):
+    """Totals over decided questions only.
+
+    ``awarded`` and ``total`` describe the questions the engine actually
+    decided.  An undecided question has no mark, so it contributes to neither
+    side of that fraction; ``undecided`` and ``complete`` say how much of the
+    paper the figures cover.
+    """
+
     awarded: int
     total: int
     questions: int
+    decided: int
+    undecided: int
+    scoreable: int
+    complete: bool
     unanswered: int
     review_required: int
     approved: bool
@@ -83,6 +103,11 @@ class JobResultsRead(BaseModel):
     assignment_id: UUID
     student_ref: str
     job_state: str
+    #: What produced these marks.  ``AUTOMATED_REFUSED`` means this run was not
+    #: presented; a direct job read still says so.
+    result_source: str | None = None
+    #: A newer run was refused by the result guard and is deliberately not shown.
+    refused_newer_job_id: UUID | None = None
     questions: list[QuestionResultRead]
     verifications: list[VerificationRead]
     reviews: list[ReviewDecisionRead]

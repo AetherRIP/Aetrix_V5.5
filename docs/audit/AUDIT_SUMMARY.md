@@ -1,6 +1,6 @@
 # Audit Summary
 
-**Subject:** MathChecker UI_V5.5 planning package — 32 documents, 213 KB, planning complete, no code written.
+**Subject:** Aetrix V5.5 UI_V5.5 planning package — 32 documents, 213 KB, planning complete, no code written.
 **Audit date:** 2026-11-03. **Auditor:** independent review; the auditor did not write the original plan.
 **Constraint honoured:** no application code, no dependencies, no Cloudflare resources, no deployment, no change to
 any of the 32 source documents, no rename, no modification of `MATH_CHECKER_V5` or `Engine_V5.5`.

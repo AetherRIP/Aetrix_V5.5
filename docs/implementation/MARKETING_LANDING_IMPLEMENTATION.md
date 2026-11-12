@@ -78,7 +78,7 @@ screenshot with reduced motion enabled.
 
 Semantic tokens in `frontend/src/styles/tokens.css`, three layers (primitive → semantic → component).
 Dark is the default, applied by an inline script before first paint to avoid a flash, persisted
-under `mathchecker:theme`, and reflected as `data-theme` on `<html>`. The switcher is a real
+under the app theme storage key, and reflected as `data-theme` on `<html>`. The switcher is a real
 radio group with `aria-pressed`-style state, keyboard support and a visible focus ring. There are
 no hardcoded colours in components — only semantic tokens.
 

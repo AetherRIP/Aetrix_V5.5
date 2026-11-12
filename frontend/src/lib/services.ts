@@ -284,6 +284,10 @@ export const queueService = {
   retry: (jobId: string, options?: Opts): Promise<ApiResult<Job>> =>
     apiPost<Job>(`/api/v1/corrections/${jobId}/retry`, {}, options),
 
+  /** Re-mark a refused run as a new job; a repeat returns the one in progress. */
+  recover: (jobId: string, body: { reason: string }, options?: Opts): Promise<ApiResult<Job>> =>
+    apiPost<Job>(`/api/v1/corrections/${jobId}/recover`, body, options),
+
   create: (
     body: { assignment_id: string; submission_id: string },
     options?: Opts,

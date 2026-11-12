@@ -33,6 +33,13 @@ def test_happy_path_reaches_completion() -> None:
         ensure_transition(current, target)
 
 
+def test_a_clean_run_can_finalize_directly_from_validation() -> None:
+    # One pipeline call validates and marks the paper, so a run with nothing to
+    # review returns FINALIZING while the job is still VALIDATING.
+    ensure_transition(JobState.VALIDATING, JobState.FINALIZING)
+    ensure_transition(JobState.FINALIZING, JobState.COMPLETED)
+
+
 def test_created_cannot_jump_to_completed() -> None:
     assert not can_transition(JobState.CREATED, JobState.COMPLETED)
     with pytest.raises(IllegalTransition):

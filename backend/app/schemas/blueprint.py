@@ -109,6 +109,27 @@ class BlueprintStructure(BaseModel):
     def scoreable_question_ids(self) -> list[str]:
         return [q.question_id for q in self.questions if not q.excluded]
 
+    @property
+    def scoreable_leaf_ids(self) -> list[str]:
+        """The question ids the correction pipeline actually marks.
+
+        A parent with sub-questions is not itself scoreable, and an excluded
+        question or sub-question is never marked.  This mirrors the pipeline's
+        leaf enumeration; a test asserts the two agree so they cannot drift.
+        """
+
+        identifiers: list[str] = []
+        for question in self.questions:
+            if question.excluded:
+                continue
+            if question.subquestions:
+                identifiers.extend(
+                    sub.question_id for sub in question.subquestions if not sub.excluded
+                )
+                continue
+            identifiers.append(question.question_id)
+        return identifiers
+
 
 class BlueprintPut(BaseModel):
     structure: BlueprintStructure

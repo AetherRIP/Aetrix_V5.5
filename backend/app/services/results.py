@@ -16,17 +16,26 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..audit.service import AuditService
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
 from ..core.security import Principal, ensure_reviewer
+from ..correction.guard import RESULT_SOURCE_REFUSED
+from ..correction.processing import (
+    ProcessingState,
+    effective_state,
+    is_scoreable,
+    status_for,
+)
 from ..db.models import (
     CorrectionJob,
+    ExamBlueprintVersion,
     JobApproval,
     LearningFeedback,
+    QuestionResult,
     ReviewDecision,
     Submission,
 )
@@ -38,6 +47,7 @@ from ..db.repositories import (
     UserRepository,
 )
 from ..jobs.states import JobState
+from ..schemas.blueprint import BlueprintStructure
 from ..schemas.results import (
     CriterionResultRead,
     EvidenceRead,
@@ -62,6 +72,31 @@ def ensure_approver(principal: Principal) -> None:
             ErrorCode.FORBIDDEN,
             "Approving results requires a teacher, administrator or owner role.",
         )
+
+
+def _processing_state(row: QuestionResult) -> str:
+    """The row's explicit state, or the one its status implies.
+
+    ``processing_state`` is nullable for rows written before the column existed,
+    so an old ``AWARDED`` row must stay decididable rather than becoming
+    unapprovable forever.
+    """
+
+    return effective_state(
+        row.status,
+        row.processing_state,
+        review_required=bool(row.review_required),
+    )
+
+
+def _decided_state(award: int) -> str:
+    """The state a stored award implies.  A zero is a decision, not a default."""
+
+    return (
+        ProcessingState.CONFIRMED_ZERO.value
+        if award == 0
+        else ProcessingState.MARKED.value
+    )
 
 
 class ResultsService:
@@ -90,15 +125,53 @@ class ResultsService:
     def latest_job_for_submission(
         self, tenant_id: uuid.UUID, submission_id: uuid.UUID
     ) -> CorrectionJob | None:
+        """The newest run that may stand as this submission's result.
+
+        A run the guard refused is skipped: its marks are retained as evidence
+        for a reviewer, but presenting them would apply marks the engine itself
+        declined to apply.  Falling back to the previous run is the conservative
+        choice — the stored result stays visible until a person acts.
+        """
         return self.session.scalar(
             select(CorrectionJob)
             .where(
                 CorrectionJob.tenant_id == tenant_id,
                 CorrectionJob.submission_id == submission_id,
+                or_(
+                    CorrectionJob.result_source.is_(None),
+                    CorrectionJob.result_source != RESULT_SOURCE_REFUSED,
+                ),
             )
             .order_by(CorrectionJob.created_at.desc())
             .limit(1)
         )
+
+    def newest_refused_job(
+        self, tenant_id: uuid.UUID, submission_id: uuid.UUID
+    ) -> CorrectionJob | None:
+        """The newest refused run, which is evidence rather than a result."""
+        return self.session.scalar(
+            select(CorrectionJob)
+            .where(
+                CorrectionJob.tenant_id == tenant_id,
+                CorrectionJob.submission_id == submission_id,
+                CorrectionJob.result_source == RESULT_SOURCE_REFUSED,
+            )
+            .order_by(CorrectionJob.created_at.desc())
+            .limit(1)
+        )
+
+    def _refuse_refused_run(self, job: CorrectionJob) -> None:
+        """A refused run may be read, but never approved or changed."""
+
+        if job.result_source == RESULT_SOURCE_REFUSED:
+            raise AppError(
+                ErrorCode.CONFLICT,
+                "This run was refused by the result guard, so its marks are not the "
+                "submission's result and cannot be approved or changed. Approve the "
+                "stored result instead, or re-mark the paper.",
+                details={"job_id": str(job.id)},
+            )
 
     def job_results(self, principal: Principal, job_id: uuid.UUID) -> JobResultsRead:
         job = self._job(principal.tenant_id, job_id)
@@ -110,6 +183,21 @@ class ResultsService:
         submission = self._submission(principal.tenant_id, submission_id)
         job = self.latest_job_for_submission(principal.tenant_id, submission.id)
         if job is None:
+            refused = self.newest_refused_job(principal.tenant_id, submission.id)
+            if refused is not None:
+                recovery = self.jobs.active_recovery_of(principal.tenant_id, refused.id)
+                details = {"refused_job_id": str(refused.id)}
+                if recovery is not None:
+                    # The screen can say "recovery in progress" instead of
+                    # offering a second re-mark while the first one runs.
+                    details["recovery_job_id"] = str(recovery.id)
+                raise AppError(
+                    ErrorCode.RESULT_NOT_READY,
+                    "Every marking run for this submission was refused by the result "
+                    "guard, so none of them is the submission's result. Re-mark the "
+                    "paper to produce a presentable result.",
+                    details=details,
+                )
             return None
         return self._build(job)
 
@@ -142,16 +230,35 @@ class ResultsService:
         approval = self.session.scalar(
             select(JobApproval).where(JobApproval.job_id == job.id)
         )
-        awarded = sum(row.awarded_marks for row in rows)
-        total = sum(row.max_marks for row in rows)
+        # An undecided question has no award: its stored zero is a placeholder,
+        # so it must contribute to neither the numerator nor the denominator.
+        in_scope = [row for row in rows if row.status != "EXCLUDED"]
+        decided = [row for row in in_scope if is_scoreable(_processing_state(row))]
+        awarded = sum(row.awarded_marks for row in decided)
+        total = sum(row.max_marks for row in decided)
+        undecided = len(in_scope) - len(decided)
         totals = ResultTotals(
             awarded=awarded,
             total=total,
             questions=len(rows),
-            unanswered=sum(1 for row in rows if row.status == "UNMARKED"),
+            decided=len(decided),
+            undecided=undecided,
+            scoreable=len(in_scope),
+            complete=bool(in_scope) and undecided == 0,
+            unanswered=sum(
+                1
+                for row in in_scope
+                if _processing_state(row) == ProcessingState.UNMARKED.value
+            ),
             review_required=sum(1 for row in rows if row.review_required),
             approved=approval is not None,
             state=job.state,
+        )
+        refused_newer = self.newest_refused_job(job.tenant_id, job.submission_id)
+        refused_newer_id = (
+            refused_newer.id
+            if refused_newer is not None and refused_newer.created_at > job.created_at
+            else None
         )
         return JobResultsRead(
             job_id=job.id,
@@ -159,6 +266,8 @@ class ResultsService:
             assignment_id=job.assignment_id,
             student_ref=submission.student_ref,
             job_state=job.state,
+            result_source=job.result_source,
+            refused_newer_job_id=refused_newer_id,
             questions=questions,
             verifications=[
                 VerificationRead.model_validate(row)
@@ -184,6 +293,7 @@ class ResultsService:
         job = self._job(principal.tenant_id, result.job_id)
         if JobState(job.state) is JobState.CANCELLED:
             raise AppError(ErrorCode.CONFLICT, "A cancelled job's results cannot be changed.")
+        self._refuse_refused_run(job)
         if payload.awarded_marks > result.max_marks:
             raise AppError(
                 ErrorCode.VALIDATION_ERROR,
@@ -210,7 +320,12 @@ class ResultsService:
 
         previous = result.awarded_marks
         result.awarded_marks = payload.awarded_marks
-        result.status = "AWARDED" if payload.awarded_marks > 0 else "ZERO"
+        # The teacher's mark is a decision, so the row's two claims must agree
+        # afterwards; recovery reads the state to decide what may be re-run.
+        decided = _decided_state(payload.awarded_marks)
+        result.status = status_for(decided)
+        result.processing_state = decided
+        result.normalised_awarded_marks = payload.awarded_marks
         result.review_required = False
         kept_concerns = [
             concern
@@ -294,6 +409,7 @@ class ResultsService:
         job = self._job(principal.tenant_id, job_id)
         if JobState(job.state) is JobState.CANCELLED:
             raise AppError(ErrorCode.CONFLICT, "A cancelled job's results cannot be reviewed.")
+        self._refuse_refused_run(job)
         approval = self.session.scalar(
             select(JobApproval).where(JobApproval.job_id == job.id)
         )
@@ -317,12 +433,19 @@ class ResultsService:
                 details={"max_marks": result.max_marks},
             )
 
+        state = _processing_state(result)
+        if payload.decision == "UPHOLD" and not is_scoreable(state):
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "This question has not been marked, so there is no award to uphold. "
+                "Enter a mark with CHANGE, or re-mark the paper.",
+                details={"question_id": question_id, "processing_state": state},
+            )
+
         previous = result.awarded_marks
         award = previous if payload.decision == "UPHOLD" else payload.awarded_marks
         if award is not None and award != previous:
             result.awarded_marks = award
-            result.status = "AWARDED" if award > 0 else "ZERO"
-            result.review_required = False
             kept_concerns = [
                 concern
                 for concern in (result.scheme_concerns or [])
@@ -332,8 +455,13 @@ class ResultsService:
                 *kept_concerns,
                 {"code": "REVIEW_DECISION", "message": payload.reason},
             ]
-        else:
-            result.review_required = False
+        # Every decision lands in one consistent claim: a decided state, the
+        # status that state implies, and no outstanding review flag.
+        decided = _decided_state(result.awarded_marks)
+        result.status = status_for(decided)
+        result.processing_state = decided
+        result.normalised_awarded_marks = result.awarded_marks
+        result.review_required = False
 
         job.record_version += 1
         reviewer = self.users.get(principal.tenant_id, principal.user_id)
@@ -403,6 +531,7 @@ class ResultsService:
         job = self._job(principal.tenant_id, job_id)
         if JobState(job.state) is JobState.CANCELLED:
             raise AppError(ErrorCode.CONFLICT, "A cancelled job cannot be approved.")
+        self._refuse_refused_run(job)
         if (
             payload.expected_record_version is not None
             and payload.expected_record_version != job.record_version
@@ -427,11 +556,77 @@ class ResultsService:
                 details={"questions": unresolved[:50]},
             )
 
+        # ``review_required`` is the engine's flag; the processing state is the
+        # fact.  A placeholder zero on an unread question has neither a decision
+        # nor, in some historical rows, a flag, so approval checks the state.
+        undecided_rows = [
+            row
+            for row in rows
+            if row.status != "EXCLUDED"
+            and not is_scoreable(_processing_state(row))
+        ]
+        if undecided_rows:
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "This job still has questions the engine has not decided, so it "
+                "cannot be approved. Mark each one explicitly or re-mark the paper.",
+                details={
+                    "questions": [row.question_id for row in undecided_rows][:50],
+                    "states": {
+                        row.question_id: _processing_state(row)
+                        for row in undecided_rows[:50]
+                    },
+                },
+            )
+
         existing = self.session.scalar(
             select(JobApproval).where(JobApproval.job_id == job.id)
         )
         if existing is not None:
+            # An approval that already exists is returned as stored: historical
+            # approvals are never re-litigated or rewritten by a later check.
             return self._build(job)
+
+        # Coverage is checked against the authoritative blueprint, not the rows
+        # that happen to exist.  A question nobody marked is a missing mark, not
+        # a zero and not an exclusion.
+        blueprint = self.session.get(ExamBlueprintVersion, job.blueprint_version_id)
+        if blueprint is None or blueprint.tenant_id != principal.tenant_id:
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "The blueprint this job was marked against cannot be loaded, so its "
+                "coverage cannot be verified and the result cannot be approved.",
+            )
+        if blueprint.status != "APPROVED":
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "The blueprint this job was marked against is not approved, so the "
+                "result cannot be approved.",
+                details={"blueprint_status": blueprint.status},
+            )
+        try:
+            structure = BlueprintStructure.model_validate(blueprint.structure)
+        except ValueError as error:
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "The blueprint this job was marked against is not valid, so the "
+                "result cannot be approved.",
+            ) from error
+
+        expected = structure.scoreable_leaf_ids
+        present = {row.question_id for row in rows}
+        missing = [question_id for question_id in expected if question_id not in present]
+        if missing:
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "This job has no result for every question in its blueprint, so the "
+                "paper is incomplete and cannot be approved.",
+                details={
+                    "questions": missing[:50],
+                    "missing": len(missing),
+                    "expected": len(expected),
+                },
+            )
 
         state = JobState(job.state)
         if state is not JobState.COMPLETED:

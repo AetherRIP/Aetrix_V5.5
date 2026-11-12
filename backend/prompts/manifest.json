@@ -21,8 +21,24 @@
       "version": 1,
       "path": "question_marking/v1.md",
       "model_role": "primary",
-      "description": "Mark one question against an approved blueprint and record evidence.",
+      "description": "Mark one question against an approved mark scheme.",
       "content_hash": "f39b417128bc766d80097ff0d3f81d33a2f79918300a81bf3f5a5297cf3e1dfd"
+    },
+    {
+      "id": "aetrix_v5_5_marking",
+      "version": 1,
+      "path": "aetrix_v5_5_marking/v1.md",
+      "model_role": "primary",
+      "description": "Mark one question against an approved blueprint and record evidence.",
+      "content_hash": "72ae54c74b23e125dbf15e928c7075ab0b5c9ac3f12e202f44b3acf2c962533e"
+    },
+    {
+      "id": "aetrix_v5_5_double_check",
+      "version": 1,
+      "path": "aetrix_v5_5_double_check/v1.md",
+      "model_role": "review",
+      "description": "Independently re-mark one question as the second examiner.",
+      "content_hash": "3844317baaf89ff709a210a9d10322b3d4084eadc2aaefdc99e1e14654c388bf"
     }
   ]
 }

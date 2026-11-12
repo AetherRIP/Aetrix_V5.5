@@ -9,7 +9,7 @@
 
 **Status:** 18 design skills installed and verified · **Installed:** 2026-11-03 · **Workspace:** `TEMP` (future `UI_V5.5`)
 
-This directory prepares an AI agent to act as a **senior UI/UX designer, design-system architect and WPF desktop UI specialist** during brainstorming for the MathChecker redesign. It contains **design intelligence and planning material only** — no application code, no .NET solution, no XAML, no UI libraries.
+This directory prepares an AI agent to act as a **senior UI/UX designer, design-system architect and WPF desktop UI specialist** during brainstorming for the Aetrix V5.5 redesign. It contains **design intelligence and planning material only** — no application code, no .NET solution, no XAML, no UI libraries.
 
 ---
 
@@ -73,7 +73,7 @@ Every entry: source repository → original path → installed path. All install
 
 #### `impeccable`
 - **Source:** `pbakaus/impeccable` @ `9fadc41` · **Original:** `.agents/skills/impeccable/` · **Installed:** `.agents/skills/impeccable/`
-- **Capabilities:** the design *vocabulary* and the reviewer. 24 named moves (`shape`, `critique`, `audit`, `polish`, `bolder`, `quieter`, `distill`, `typeset`, `layout`, `animate`, `harden`, `onboard`, `colorize`, `document`, `extract`, …) each with a dedicated playbook in `reference/`. Defines four surface **modes** — **Persuade / Operate / Read / Experience** — where *Operate* ("the visitor completes a task: app UI, dashboards, editors, admin, settings, tools — scanability, consistency, native expectations") is exactly the MathChecker mode. `reference/craft-floor.md` is a genuine quality floor, `reference/critique.md` scores against usability heuristics, `reference/operate.md` covers dashboard/app guidance, and the launcher bundles a 62-rule deterministic "AI slop" detector.
+- **Capabilities:** the design *vocabulary* and the reviewer. 24 named moves (`shape`, `critique`, `audit`, `polish`, `bolder`, `quieter`, `distill`, `typeset`, `layout`, `animate`, `harden`, `onboard`, `colorize`, `document`, `extract`, …) each with a dedicated playbook in `reference/`. Defines four surface **modes** — **Persuade / Operate / Read / Experience** — where *Operate* ("the visitor completes a task: app UI, dashboards, editors, admin, settings, tools — scanability, consistency, native expectations") is exactly the Aetrix V5.5 mode. `reference/craft-floor.md` is a genuine quality floor, `reference/critique.md` scores against usability heuristics, `reference/operate.md` covers dashboard/app guidance, and the launcher bundles a 62-rule deterministic "AI slop" detector.
 - **Use for:** critiquing a proposed layout, scoring alternatives, applying a single directional move ("quieter", "distill", "typeset") to one screen, documenting the existing visual system into `DESIGN.md`.
 - **Dependencies:** the `scripts/impeccable` launcher downloads a self-contained engine on first run (network + executing a third-party binary). **It was not executed during this install and is not required** — every `reference/*.md` playbook is self-contained Markdown and works read-only. Treat the launcher as opt-in and inspect/approve before first use.
 
@@ -87,7 +87,7 @@ Every entry: source repository → original path → installed path. All install
 #### `design-systems-frontend-architecture`
 - **Source:** same repo · **Original:** `design-systems-frontend-architecture/` · **Installed:** `.agents/skills/design-systems-frontend-architecture/`
 - **Capabilities:** turning screens into a system — design tokens, component contracts, layout rules, state behaviour, documentation and governance; also reads mockups/screenshots and decomposes them into reusable components.
-- **Use for:** deciding which MathChecker surfaces are components vs. one-off screens; component inventories; preventing drift between the marking view and the assignment view.
+- **Use for:** deciding which Aetrix V5.5 surfaces are components vs. one-off screens; component inventories; preventing drift between the marking view and the assignment view.
 
 #### `information-architecture-navigation`
 - **Source:** same repo · **Original:** `information-architecture-navigation/` · **Installed:** `.agents/skills/information-architecture-navigation/`
@@ -134,7 +134,7 @@ Every entry: source repository → original path → installed path. All install
 #### `idea-refine`
 - **Source:** `addyosmani/agent-skills` @ `301b02b` · **Original:** `skills/idea-refine/` · **Installed:** `.agents/skills/idea-refine/`
 - **Capabilities:** structured divergent-then-convergent refinement — restate, sharpen, generate variations; cluster, stress-test, surface hidden assumptions; converge into a concrete one-pager. Ships `frameworks.md`, `refinement-criteria.md`, `examples.md`.
-- **Use for:** taking "make MathChecker look modern" to a ranked set of distinct, defensible directions.
+- **Use for:** taking "make Aetrix V5.5 look modern" to a ranked set of distinct, defensible directions.
 
 #### `interview-me`
 - **Source:** same repo · **Original:** `skills/interview-me/` · **Installed:** `.agents/skills/interview-me/`
@@ -209,7 +209,7 @@ Every entry: source repository → original path → installed path. All install
 
 ### 4.4 Session protocol
 
-1. State the surface and the mode (`Operate` for MathChecker app screens).
+1. State the surface and the mode (`Operate` for Aetrix V5.5 app screens).
 2. Ask only the questions that change the design (`interview-me`).
 3. Produce 2–4 genuinely distinct directions, each with a token plan (palette hexes, type roles, layout concept, principles) and ASCII wireframes.
 4. Critique them against usability heuristics and accessibility before recommending one.
@@ -244,7 +244,7 @@ No repository failed to clone or was abandoned. All are actively maintained with
 |---|---|---|
 | `canvas-design` | anthropics | 5.6 MB of bundled TTFs for generating poster/art canvases; produces static artwork, not interface architecture. Redundant with `frontend-design` for direction work. |
 | `theme-factory` | anthropics | Themes for slides/artifacts, not application design systems. |
-| `brand-guidelines` | anthropics | Anthropic's own corporate identity — not applicable to MathChecker. |
+| `brand-guidelines` | anthropics | Anthropic's own corporate identity — not applicable to Aetrix V5.5. |
 | `skill-creator` | anthropics | Meta-tooling for authoring skills; useful later, no design value now. |
 | `webapp-testing`, `web-artifacts-builder` | anthropics | Browser-testing harnesses and HTML artifact scaffolding; web-stack-specific. |
 | `docx`, `pdf`, `pptx`, `xlsx`, `slack-gif-creator`, `internal-comms`, `mcp-builder`, `claude-api`, `algorithmic-art`, `academy-guide`, `discernment-nudge` | anthropics | Off-scope (documents, APIs, comms, art). |

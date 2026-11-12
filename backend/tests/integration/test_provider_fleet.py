@@ -176,7 +176,17 @@ def test_a_second_project_has_its_own_allowance(db_session, identity) -> None:
     assert row is not None and row.project_id == "proj-b"
 
 
-def test_429_pauses_the_whole_project_not_only_the_key(db_session, identity) -> None:
+def test_429_pauses_only_the_key_that_spent_its_quota(db_session, identity) -> None:
+    """A quota rejection is key-scoped, and the call rotates past it.
+
+    Live evidence: one key answered 429 while a second key under the same
+    registered project answered 200 in the same second.  Pausing the project
+    on the first 429 parked a paper the fleet could still mark, so a quota
+    failure now cools the leased key only and the next candidate takes the
+    call; the attempt budget still ends in a truthful park when every key is
+    spent.
+    """
+
     settings = _settings(rpm=100)
     keys = _register(db_session, settings, "hot-proj", 3)
     provider = FakeProvider(error=ProviderQuotaError("429 quota", status_code=429))
@@ -185,18 +195,20 @@ def test_429_pauses_the_whole_project_not_only_the_key(db_session, identity) -> 
     with pytest.raises(AppError):
         _call(service, identity)
 
-    cooldown = db_session.scalar(
-        select(ProviderProjectCooldown).where(
-            ProviderProjectCooldown.project_id == "hot-proj"
+    # No project-wide pause: the siblings were never given the call.
+    assert (
+        db_session.scalar(
+            select(ProviderProjectCooldown).where(
+                ProviderProjectCooldown.project_id == "hot-proj"
+            )
         )
+        is None
     )
-    assert cooldown is not None
-    assert cooldown.cooldown_until > _now()
-    # A quota rejection is an operational condition, not proof the credential
-    # is invalid. Only the leased key is paused; the project row stops siblings.
+    # Every candidate was tried and each 429 cooled only its own key.
+    assert len(provider.keys) == 3
+    assert all(key.cooldown_until is not None for key in keys)
+    # A quota rejection is an operational condition, not proof of invalidity.
     assert {key.health for key in keys} == {"UNKNOWN"}
-    assert sum(key.cooldown_until is not None for key in keys) == 1
-    assert len(provider.keys) == 1
 
 
 def test_revoked_key_is_disabled_without_pausing_its_project(db_session, identity) -> None:

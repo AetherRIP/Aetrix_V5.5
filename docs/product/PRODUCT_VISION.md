@@ -4,7 +4,7 @@
 
 ## One line
 
-MathChecker marks IGCSE mathematics homework the way an experienced examiner would — deterministically,
+Aetrix V5.5 marks IGCSE mathematics homework the way an experienced examiner would — deterministically,
 against the official mark scheme, with a human deciding every mark that matters — and lets a department
 do it together, in one shared workspace, without sending a single script to a browser tab.
 

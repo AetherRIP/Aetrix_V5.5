@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from app.marking.schema import MarkingResponseInvalid, parse_question_mark
+from app.correction.aetrix.schema import MarkingResponseInvalid, parse_question_mark
 
 
 def _payload(**overrides) -> str:
@@ -67,7 +67,9 @@ def test_a_mark_for_the_wrong_question_is_rejected() -> None:
         parse_question_mark(_payload(), question_id="1b")
 
 
-def test_a_reused_component_code_is_rejected() -> None:
+def test_a_reused_component_code_is_disambiguated_not_discarded() -> None:
+    """A scheme reuses M1 legitimately; a repeated label must not lose the mark."""
+
     payload = _payload(
         components=[
             {"code": "M1", "marks": 1, "awarded": True, "evidence": "x = 3"},
@@ -75,8 +77,12 @@ def test_a_reused_component_code_is_rejected() -> None:
         ]
     )
 
-    with pytest.raises(MarkingResponseInvalid, match="component code"):
-        parse_question_mark(payload, question_id="1a")
+    mark = parse_question_mark(payload, question_id="1a")
+
+    assert [component.code for component in mark.components] == ["M1", "M1-2"]
+    assert [component.awarded for component in mark.components] == [True, True]
+    assert [component.evidence for component in mark.components] == ["x = 3", "x = 3"]
+    assert mark.component_total == 2
 
 
 def test_non_json_and_empty_responses_are_typed_failures() -> None:

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
+from ..correction.guard import RESULT_SOURCE_REFUSED
 from ..jobs.states import RUNNABLE_STATES, JobState, ensure_transition, progress_for
 from .models import (
     Assignment,
@@ -560,6 +561,22 @@ class SubmissionRepository:
         return submission
 
 
+#: A recovery that has not finished is the job a repeated request returns.
+#: A refused recovery is deliberately absent: the teacher must be able to ask
+#: for another attempt once the failed one is closed.
+_IN_PROGRESS_JOB_STATES = (
+    "CREATED",
+    "VALIDATING",
+    "PROCESSING_DOCUMENTS",
+    "BUILDING_BLUEPRINT",
+    "CORRECTING",
+    "VERIFYING",
+    "COHORT_PENDING",
+    "FINALIZING",
+    "RETRY_SUSPENDED",
+)
+
+
 class JobRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -582,6 +599,38 @@ class JobRepository:
                 CorrectionJob.tenant_id == tenant_id,
                 CorrectionJob.idempotency_key == idempotency_key,
             )
+        )
+
+    def recoveries_of(
+        self, tenant_id: uuid.UUID, source_id: uuid.UUID
+    ) -> list[CorrectionJob]:
+        """Every job created to re-mark one refused run, oldest first."""
+
+        return list(
+            self.session.scalars(
+                select(CorrectionJob)
+                .where(
+                    CorrectionJob.tenant_id == tenant_id,
+                    CorrectionJob.recovery_of_job_id == source_id,
+                )
+                .order_by(CorrectionJob.created_at)
+            )
+        )
+
+    def active_recovery_of(
+        self, tenant_id: uuid.UUID, source_id: uuid.UUID
+    ) -> CorrectionJob | None:
+        """The recovery still in progress, so a repeat request cannot fan out."""
+
+        return self.session.scalar(
+            select(CorrectionJob)
+            .where(
+                CorrectionJob.tenant_id == tenant_id,
+                CorrectionJob.recovery_of_job_id == source_id,
+                CorrectionJob.state.in_(_IN_PROGRESS_JOB_STATES),
+            )
+            .order_by(CorrectionJob.created_at.desc())
+            .limit(1)
         )
 
     def list(
@@ -627,6 +676,9 @@ class JobRepository:
         idempotency_key: str,
         request_hash: str,
         max_attempts: int,
+        recovery_of_job_id: uuid.UUID | None = None,
+        requested_engine_name: str | None = None,
+        requested_engine_version: str | None = None,
     ) -> CorrectionJob:
         job = CorrectionJob(
             tenant_id=tenant_id,
@@ -640,6 +692,9 @@ class JobRepository:
             max_attempts=max_attempts,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
+            recovery_of_job_id=recovery_of_job_id,
+            requested_engine_name=requested_engine_name,
+            requested_engine_version=requested_engine_version,
         )
         self.session.add(job)
         self.session.flush()
@@ -940,6 +995,76 @@ class ResultRepository:
                 )
                 .order_by(QuestionResult.question_id.asc())
             )
+        )
+
+    def prior_job_totals(
+        self,
+        tenant_id: uuid.UUID,
+        submission_id: uuid.UUID,
+        *,
+        exclude_job_id: uuid.UUID,
+    ) -> tuple[uuid.UUID, int, int, bool, bool] | None:
+        """The stored result this run would replace, locked for the decision.
+
+        Returns ``(job_id, earned, available, approved, teacher_override)`` for
+        the most recent other job on the submission, or ``None`` when there is
+        nothing to protect.  Both rows are read with ``FOR UPDATE`` so two
+        workers cannot each decide against a stale snapshot and then both write.
+
+        A refused run is skipped: it was never the submission's result, so it
+        must not become the baseline a later run is judged against.
+
+        Approvals and overrides are read through their own tables: an approval
+        is a person's decision, and an override is a person's mark, so neither
+        can be inferred from the engine's state.
+        """
+
+        from .models import CorrectionJob, JobApproval, QuestionResult
+
+        prior = self.session.scalar(
+            select(CorrectionJob)
+            .where(
+                CorrectionJob.tenant_id == tenant_id,
+                CorrectionJob.submission_id == submission_id,
+                CorrectionJob.id != exclude_job_id,
+                or_(
+                    CorrectionJob.result_source.is_(None),
+                    CorrectionJob.result_source != RESULT_SOURCE_REFUSED,
+                ),
+            )
+            .order_by(CorrectionJob.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if prior is None:
+            return None
+        rows = list(
+            self.session.scalars(
+                select(QuestionResult)
+                .where(
+                    QuestionResult.tenant_id == tenant_id,
+                    QuestionResult.job_id == prior.id,
+                )
+                .with_for_update()
+            )
+        )
+        if not rows:
+            return None
+        approval = self.session.scalar(
+            select(JobApproval).where(JobApproval.job_id == prior.id)
+        )
+        override = any(
+            concern.get("code") == "TEACHER_OVERRIDE"
+            for row in rows
+            for concern in (row.scheme_concerns or [])
+            if isinstance(concern, dict)
+        )
+        return (
+            prior.id,
+            sum(row.awarded_marks for row in rows),
+            sum(row.max_marks for row in rows),
+            approval is not None,
+            override,
         )
 
     def criteria(

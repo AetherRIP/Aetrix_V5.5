@@ -74,7 +74,12 @@ def test_no_heartbeat_is_reported_as_not_deployed(client):
     assert worker["last_success_at"] is None
 
 
-def test_a_recorded_live_call_verifies_reachability_not_marking(client, db_session):
+def test_a_recorded_live_call_verifies_reachability_not_marking(
+    client, db_session, provider_credential
+):
+    # ``provider_credential`` registers one HEALTHY key: the component reports a
+    # provider as deployed only when a credential actually exists, which is the
+    # condition this test is about.
     _heartbeat(db_session)
     db_session.add(
         ProviderUsage(
@@ -106,7 +111,7 @@ def test_a_recorded_live_call_verifies_reachability_not_marking(client, db_sessi
     assert "UNVERIFIED" in provider["diagnostic"]
 
 
-def test_a_recorded_failure_degrades_the_provider(client, db_session):
+def test_a_recorded_failure_degrades_the_provider(client, db_session, provider_credential):
     _heartbeat(db_session)
     db_session.add(
         ProviderUsage(

@@ -425,6 +425,7 @@ class CorrectionJob(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
         Index("ix_jobs_state_created", "state", "created_at"),
         Index("ix_jobs_lease", "lease_expires_at"),
         Index("ix_jobs_submission", "submission_id"),
+        Index("ix_jobs_recovery_of", "recovery_of_job_id"),
     )
 
     assignment_id: Mapped[uuid.UUID] = mapped_column(
@@ -455,6 +456,27 @@ class CorrectionJob(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     record_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Provenance: which engine, which prompt, which models, which inputs.  All
+    #: nullable because rows written before the seam existed have none of it.
+    engine_name: Mapped[str | None] = mapped_column(String(40))
+    engine_version: Mapped[str | None] = mapped_column(String(40))
+    primary_model: Mapped[str | None] = mapped_column(String(120))
+    secondary_model: Mapped[str | None] = mapped_column(String(120))
+    result_source: Mapped[str | None] = mapped_column(String(40))
+    submission_hash: Mapped[str | None] = mapped_column(String(64))
+    scheme_hash: Mapped[str | None] = mapped_column(String(64))
+    double_check_status: Mapped[str | None] = mapped_column(String(40))
+    disagreement_status: Mapped[str | None] = mapped_column(String(40))
+    recovery_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: The refused run this job re-marks, if any.  Set only on a recovery job;
+    #: the source keeps its rows, guard decision and engine attribution intact.
+    recovery_of_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("correction_jobs.id", ondelete="SET NULL")
+    )
+    #: The engine this job was created for.  A job with a value here may only be
+    #: marked by that engine; a mismatch fails loudly instead of switching.
+    requested_engine_name: Mapped[str | None] = mapped_column(String(40))
+    requested_engine_version: Mapped[str | None] = mapped_column(String(40))
 
 
 class JobEvent(UUIDPrimaryKey, TenantScoped, Base):
@@ -484,6 +506,11 @@ class QuestionResult(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
             "status IN ('AWARDED','ZERO','UNMARKED','REVIEW_REQUIRED','EXCLUDED')",
             name="status",
         ),
+        CheckConstraint(
+            "processing_state IS NULL OR processing_state IN "
+            "('MARKED','CONFIRMED_ZERO','UNMARKED','NEEDS_REVIEW')",
+            name="processing_state",
+        ),
     )
 
     job_id: Mapped[uuid.UUID] = mapped_column(
@@ -500,6 +527,23 @@ class QuestionResult(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     scheme_concerns: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, nullable=False, default=list
     )
+    #: What the engine claims about this question.  ``status`` remains the API
+    #: contract; this column is the narrower, explicit state.
+    processing_state: Mapped[str | None] = mapped_column(String(20))
+    #: The model's own award, preserved when normalisation changes the stored
+    #: mark, plus the anomaly code and the detail behind it.
+    raw_awarded_marks: Mapped[int | None] = mapped_column(Integer)
+    normalised_awarded_marks: Mapped[int | None] = mapped_column(Integer)
+    normalisation_anomaly: Mapped[str | None] = mapped_column(String(40))
+    normalisation_detail: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    #: The raw model reply, so an unusable response stays inspectable instead of
+    #: being reduced to an error message.
+    raw_response: Mapped[Any | None] = mapped_column(JSON)
+    raw_response_truncated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    engine_version: Mapped[str | None] = mapped_column(String(40))
+    prompt_version: Mapped[str | None] = mapped_column(String(80))
 
 
 class CriterionResult(UUIDPrimaryKey, TenantScoped, Base):
@@ -542,9 +586,12 @@ class VerificationResult(UUIDPrimaryKey, TenantScoped, Base):
     __tablename__ = "verification_results"
     __table_args__ = (
         UniqueConstraint("job_id", "question_id", "kind", name="uq_verification_identity"),
-        CheckConstraint("kind IN ('MATHEMATICAL','INTEGRITY')", name="kind"),
         CheckConstraint(
-            "status IN ('EQUIVALENT','DIFFERENT','UNKNOWN','PASS','FAIL','REVIEW_REQUIRED')",
+            "kind IN ('MATHEMATICAL','INTEGRITY','DOUBLE_CHECK')", name="kind"
+        ),
+        CheckConstraint(
+            "status IN ('EQUIVALENT','DIFFERENT','UNKNOWN','PASS','FAIL',"
+            "'REVIEW_REQUIRED','AGREES','DISAGREES','UNVERIFIABLE')",
             name="status",
         ),
     )
@@ -942,6 +989,54 @@ class JobApproval(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     total_marks: Mapped[int] = mapped_column(Integer, nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
     record_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class EngineRun(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """One stage of one execution, recorded as it happened.
+
+    Provenance is written per stage rather than inferred from the final marks,
+    so a job can say which engine and prompt produced it, and whether a guard
+    or a recovery step changed what would otherwise have been stored.
+    """
+
+    __tablename__ = "engine_runs"
+    __table_args__ = (Index("ix_engine_runs_job", "job_id"),)
+
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("correction_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    engine_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    engine_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    prompt_version: Mapped[str | None] = mapped_column(String(80))
+    stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(40), nullable=False)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class GradeBoundary(UUIDPrimaryKey, TimestampMixin, Base):
+    """A configurable percentage boundary for one qualification sitting.
+
+    Present so a grade is a lookup against stated boundaries for a named
+    specification and session, never a percentage band presented as an official
+    Edexcel grade.  Nothing writes to it yet; grading is a later slice.
+    """
+
+    __tablename__ = "grade_boundaries"
+    __table_args__ = (
+        UniqueConstraint(
+            "qualification", "session", "specification", "grade", name="uq_grade_boundary"
+        ),
+        CheckConstraint(
+            "min_percent >= 0 AND min_percent <= 100", name="min_percent_range"
+        ),
+    )
+
+    qualification: Mapped[str] = mapped_column(String(120), nullable=False)
+    session: Mapped[str] = mapped_column(String(80), nullable=False)
+    specification: Mapped[str] = mapped_column(String(80), nullable=False)
+    grade: Mapped[str] = mapped_column(String(8), nullable=False)
+    min_percent: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="operator")
 
 
 class Invitation(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):

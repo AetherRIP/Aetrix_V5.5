@@ -12,9 +12,9 @@ function AssistantWork() {
     <div className="app-stack">
       <Panel title="Marking workspace" note="No script loaded" index={0}>
         <p className="panel-copy">
-          Opening a submission shows the student’s pages beside the marking surface. Because
-          marking is not implemented in this build, the surface stays empty and says so —
-          there is no placeholder mark to click.
+          Opening a submission shows the student’s pages beside the marking surface. This
+          build gives assistants no marking surface of their own, so the panel stays empty
+          and says so — there is no placeholder mark to click.
         </p>
         <CapabilityList
           items={[
@@ -26,7 +26,7 @@ function AssistantWork() {
             },
             {
               label: 'Marking surface',
-              detail: 'The correction engine returns no marks in this release.',
+              detail: 'Assistants have no marking endpoint in this build.',
               state: 'blocked',
               icon: 'pen',
             },
@@ -66,7 +66,7 @@ function AssistantWork() {
       <StatePanel
         tone="wip"
         title="The marking workspace cannot open a script yet"
-        capability="correction engine: marking (not implemented)"
+        capability="correction engine: assistant marking surface (not implemented)"
       >
         <p>
           Without stored documents and a mark endpoint there is nothing to render. The queue

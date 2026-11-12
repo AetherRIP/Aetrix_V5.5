@@ -1792,8 +1792,9 @@ function ModelsTab({
           ))}
         </div>
         <p className="gem-footnote">
-          The lightweight role is stored for extraction and classification work. No task in this
-          build consumes it yet: marking is not implemented, so nothing here claims otherwise.
+          The lightweight role is stored for extraction and classification work. Question
+          marking runs on the primary role, so nothing here claims the secondary model is used
+          for it.
         </p>
       </Panel>
 

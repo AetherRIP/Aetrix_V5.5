@@ -139,6 +139,12 @@ export type Job = {
   started_at: string | null
   finished_at: string | null
   record_version: number
+  engine_name: string | null
+  engine_version: string | null
+  /** AUTOMATED_REFUSED means this run is evidence, not the submission's result. */
+  result_source: string | null
+  recovery_of_job_id: string | null
+  requested_engine_name: string | null
 }
 
 export type JobEvent = {
@@ -322,6 +328,12 @@ export type QuestionResult = {
   working_summary: string | null
   confidence: number | null
   review_required: boolean
+  /** The engine's explicit claim. `null` only on rows written before the column. */
+  processing_state: 'MARKED' | 'CONFIRMED_ZERO' | 'UNMARKED' | 'NEEDS_REVIEW' | null
+  /** The model's own award, kept when normalisation or a teacher changed the stored one. */
+  raw_awarded_marks: number | null
+  normalised_awarded_marks: number | null
+  normalisation_anomaly: string | null
   scheme_concerns: { code?: string; message?: string }[]
   criteria: CriterionResult[]
   evidence: Evidence[]
@@ -329,7 +341,8 @@ export type QuestionResult = {
 
 export type Verification = {
   question_id: string
-  kind: 'MATHEMATICAL' | 'INTEGRITY'
+  /** `DOUBLE_CHECK` is the independent second marking; it never changes an award. */
+  kind: 'MATHEMATICAL' | 'INTEGRITY' | 'DOUBLE_CHECK'
   status: string
   detail: Record<string, unknown>
 }
@@ -350,13 +363,22 @@ export type JobResults = {
   assignment_id: string
   student_ref: string
   job_state: JobState
+  /** `AUTOMATED_REFUSED` means this run is evidence, not the submission's result. */
+  result_source: string | null
+  /** A newer run was refused by the result guard and is deliberately not shown. */
+  refused_newer_job_id: string | null
   questions: QuestionResult[]
   verifications: Verification[]
   reviews: ReviewDecision[]
   totals: {
+    /** Awarded and available marks over decided questions only. */
     awarded: number
     total: number
     questions: number
+    decided: number
+    undecided: number
+    scoreable: number
+    complete: boolean
     unanswered: number
     review_required: number
     approved: boolean

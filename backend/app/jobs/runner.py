@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..audit.service import AuditService
 from ..core.config import Settings
 from ..core.logging import get_logger, log_context
 from ..db.models import CorrectionJob
@@ -60,9 +61,33 @@ class JobRunner:
             job_id = job.id
             state = job.state
             attempts = job.attempts
+            #: Either the engine this job was created for or the engine that has
+            #: already marked part of it.  Both must match this worker.
+            recorded_engine = job.requested_engine_name or job.engine_name
+            #: Captured at claim time.  A write is only applied if the job has
+            #: not moved on since; that is what stops a worker whose lease
+            #: lapsed from overwriting the work of the worker that replaced it.
+            claimed_version = job.record_version
 
         with log_context(tenant_id=str(tenant_id), job_id=str(job_id)):
             log.info("job claimed", extra={"extra_fields": {"state": state, "attempt": attempts}})
+            if recorded_engine and recorded_engine != self._pipeline.name:
+                log.warning(
+                    "job was created for a different engine; refusing to mark it",
+                    extra={
+                        "extra_fields": {
+                            "recorded_engine": recorded_engine,
+                            "worker_engine": self._pipeline.name,
+                        }
+                    },
+                )
+                self._refuse_engine_mismatch(
+                    tenant_id,
+                    job_id,
+                    recorded_engine,
+                    claimed_version=claimed_version,
+                )
+                return str(job_id)
             heartbeat = self._start_heartbeat(job_id)
             try:
                 if self._cancel_requested(tenant_id, job_id):
@@ -73,7 +98,13 @@ class JobRunner:
                 if self._cancel_requested(tenant_id, job_id):
                     self._finalize_cancel(tenant_id, job_id)
                     return str(job_id)
-                self._apply_outcome(tenant_id, job_id, outcome.state, outcome.detail)
+                self._apply_outcome(
+                    tenant_id,
+                    job_id,
+                    outcome.state,
+                    outcome.detail,
+                    claimed_version=claimed_version,
+                )
                 return str(job_id)
             except PipelineUnavailable as error:
                 log.warning("marking pipeline unavailable; parking job")
@@ -83,6 +114,7 @@ class JobRunner:
                     code="PIPELINE_UNAVAILABLE",
                     message=str(error),
                     retryable=True,
+                    claimed_version=claimed_version,
                 )
                 return str(job_id)
             except RetryablePipelineError as error:
@@ -93,6 +125,7 @@ class JobRunner:
                     code="PROVIDER_UNAVAILABLE",
                     message=str(error),
                     retryable=True,
+                    claimed_version=claimed_version,
                 )
                 return str(job_id)
             except Exception as error:
@@ -103,6 +136,7 @@ class JobRunner:
                     code="PIPELINE_ERROR",
                     message=f"{type(error).__name__}: {error}",
                     retryable=True,
+                    claimed_version=claimed_version,
                 )
                 return str(job_id)
             finally:
@@ -169,10 +203,18 @@ class JobRunner:
             session.close()
 
     def _apply_outcome(
-        self, tenant_id: Any, job_id: Any, state: JobState, detail: dict[str, Any]
+        self,
+        tenant_id: Any,
+        job_id: Any,
+        state: JobState,
+        detail: dict[str, Any],
+        *,
+        claimed_version: int,
     ) -> None:
         session, service, job = self._reload(tenant_id, job_id)
         try:
+            if self._refuse_stale_write(session, job, claimed_version):
+                return
             if JobState(job.state) is JobState.CANCELLED:
                 return
             if state is JobState.COMPLETED or state is JobState.FINALIZING:
@@ -198,9 +240,12 @@ class JobRunner:
         code: str,
         message: str,
         retryable: bool,
+        claimed_version: int,
     ) -> None:
         session, service, job = self._reload(tenant_id, job_id)
         try:
+            if self._refuse_stale_write(session, job, claimed_version):
+                return
             if JobState(job.state) in {JobState.CANCELLED, JobState.COMPLETED}:
                 return
             service.mark_failed(
@@ -210,6 +255,92 @@ class JobRunner:
                 retryable=retryable,
                 actor=f"worker:{self.worker_id}",
             )
+        finally:
+            session.close()
+
+    def _refuse_stale_write(
+        self, session: Session, job: CorrectionJob, claimed_version: int
+    ) -> bool:
+        """Refuse to write over a job that moved on after this worker claimed it.
+
+        Two facts must still hold: the lease is this worker's, and the record
+        version is the one captured at claim time.  A worker whose lease lapsed
+        has no claim on the row any more, and writing its outcome would replace
+        the work of the worker that took over.
+
+        The refusal is audited rather than logged only, because a silently
+        dropped result is indistinguishable from a bug.
+        """
+
+        lease_owner = job.lease_owner
+        if lease_owner in (None, self.worker_id) and job.record_version == claimed_version:
+            return False
+        log.warning(
+            "refusing a stale write",
+            extra={
+                "extra_fields": {
+                    "job_id": str(job.id),
+                    "claimed_version": claimed_version,
+                    "current_version": job.record_version,
+                    "lease_owner": lease_owner,
+                    "worker": self.worker_id,
+                }
+            },
+        )
+        AuditService(session).record(
+            tenant_id=job.tenant_id,
+            action="job.stale_write_refused",
+            entity_type="correction_job",
+            entity_id=job.id,
+            detail={
+                "worker": self.worker_id,
+                "claimed_version": claimed_version,
+                "current_version": job.record_version,
+                "lease_owner": lease_owner,
+            },
+        )
+        session.commit()
+        return True
+
+    def _refuse_engine_mismatch(
+        self,
+        tenant_id: Any,
+        job_id: Any,
+        recorded: str | None,
+        *,
+        claimed_version: int,
+    ) -> None:
+        """Fail a job created for an engine this worker does not run.
+
+        The job is not marked and is not retried automatically: switching
+        methodology has to be an explicit decision, never a fallback.
+        """
+
+        session, service, job = self._reload(tenant_id, job_id)
+        try:
+            if self._refuse_stale_write(session, job, claimed_version):
+                return
+            service.mark_failed(
+                job,
+                code="ENGINE_MISMATCH",
+                message=(
+                    f"This job was created for {recorded!r}, but this worker runs "
+                    f"{self._pipeline.name!r}. It was not marked."
+                ),
+                retryable=False,
+                actor=f"worker:{self.worker_id}",
+            )
+            AuditService(session).record(
+                tenant_id=tenant_id,
+                action="job.engine_mismatch_refused",
+                entity_type="correction_job",
+                entity_id=job_id,
+                detail={
+                    "recorded_engine": recorded,
+                    "worker_engine": self._pipeline.name,
+                },
+            )
+            session.commit()
         finally:
             session.close()
 

@@ -87,6 +87,21 @@ class CorrectionCreate(BaseModel):
         return value
 
 
+class RecoveryRequest(BaseModel):
+    """A teacher's reason for re-marking a refused run."""
+
+    reason: str = Field(min_length=5, max_length=2000)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=200)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_shape(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("re-marking a paper needs a stated reason")
+        return value
+
+
 class JobEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -121,6 +136,13 @@ class JobRead(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     record_version: int
+    #: Provenance.  ``result_source == AUTOMATED_REFUSED`` means this run is
+    #: evidence rather than the submission's result.
+    engine_name: str | None = None
+    engine_version: str | None = None
+    result_source: str | None = None
+    recovery_of_job_id: UUID | None = None
+    requested_engine_name: str | None = None
 
 
 class JobSubmissionRead(BaseModel):

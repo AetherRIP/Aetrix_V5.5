@@ -56,21 +56,30 @@ WORKER_MIN_GRACE_SECONDS = 60
 FEATURES: tuple[FeatureStatus, ...] = (
     FeatureStatus(
         name="Marking",
-        state="not_implemented",
+        state="available",
         reason=(
-            "A job validates its inputs and then parks at PIPELINE_UNAVAILABLE. "
-            "No mark is produced."
+            "The worker marks every scoreable question through the provider and stores a "
+            "question result with its criteria and quoted evidence. Live marking accuracy "
+            "is UNVERIFIED, and a question the engine cannot settle stops the job at "
+            "REVIEW_REQUIRED rather than producing a silent zero."
         ),
     ),
     FeatureStatus(
         name="SymPy verification",
-        state="not_implemented",
-        reason="Verification results are not produced in this build.",
+        state="available",
+        reason=(
+            "Each award is checked for internal consistency, and where the script and the "
+            "scheme both state an expression SymPy decides equivalence. A check SymPy "
+            "cannot decide forces human review."
+        ),
     ),
     FeatureStatus(
         name="Cohort intelligence",
         state="not_implemented",
-        reason="Analytics is derived from marks, and marking is not implemented.",
+        reason=(
+            "The gradebook and reports aggregate stored marks, but question-level cohort "
+            "analysis has no endpoint yet."
+        ),
     ),
     FeatureStatus(
         name="Provider quota monitoring",
@@ -434,11 +443,15 @@ def _worker_component(
         pipeline_text = (
             "The last job parked at PIPELINE_UNAVAILABLE, so no mark was produced."
         )
-    elif last_job is not None:
+    elif last_job is not None and last_job.state == JobState.REVIEW_REQUIRED.value:
         readiness = "not_ready"
         pipeline_text = (
-            f"The last job stopped at {last_job.state}; no mark was produced for it."
+            "The last job stopped at REVIEW_REQUIRED, a human-review state: its question "
+            "results are waiting for a person, not approved."
         )
+    elif last_job is not None:
+        readiness = "not_ready"
+        pipeline_text = f"The last job stopped at {last_job.state}."
     else:
         readiness = "not_ready"
         pipeline_text = (
@@ -613,7 +626,9 @@ def read_system_status(session: Session, settings: Settings) -> SystemStatusRead
                 else "Not ready to accept correction jobs"
             ),
             detail=(
-                "Marking is not implemented: an accepted job parks at PIPELINE_UNAVAILABLE."
+                "An accepted job is marked by the worker against an approved blueprint and "
+                "scheme. Live marking accuracy is UNVERIFIED, and a question the engine "
+                "cannot settle stops at REVIEW_REQUIRED."
                 if ready
                 else "Readiness requires a successful database query."
             ),

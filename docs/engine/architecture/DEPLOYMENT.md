@@ -259,9 +259,12 @@ cd backend
 .tools/python/python.exe -m benchmark.holdout.manifest --check-code
 ```
 
-Integration tests need `AETRIX_TEST_DATABASE_URL` (or the development
-`backend/.env`). They truncate the public tables between tests. **Never point
-them at a production database.**
+Integration tests need `AETRIX_TEST_DATABASE_URL`, and it must be on this
+machine (`localhost`, `127.x.x.x`, `::1` or a unix socket). They migrate the
+database to head and truncate the public tables between tests, so the conftest
+refuses any other host before the first migration — falling back to the
+development `backend/.env` stops the run instead of altering that database.
+**Never point them at a production database.**
 
 ---
 

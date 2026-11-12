@@ -245,7 +245,7 @@ and job paths. One rule, one test, two callers.
 
 | Term | Meaning |
 |---|---|
-| **MathChecker** | The product name, used in UI, docs and contracts |
+| **Aetrix V5.5** | The product name, used in UI, docs and contracts |
 | **UI_V5.5** | The package/phase name for this blueprint |
 | `UI_Webpage_V5.5` | The directory on disk. It is **not** renamed; the brief forbids it |
 | `TEMP` | The workspace label in `README.md`; historical, not a product name |

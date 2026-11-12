@@ -141,7 +141,7 @@ ACCEPTANCE_CRITERIA, `ISO` TENANT_ISOLATION_TESTS, `DP` DATA_PRIVACY, `J` USER_J
 | DOC-12 | MED | Edge limits assume an unselected plan | Tier named, costed and marked as a purchase decision; per-user limits moved in-Worker | CF §7, DEPLOY | COST-R §4, OWNER C8 | DEC |
 | DOC-13 | LOW | `usage_daily` period ambiguous | Events → hourly job → day-grain `usage_daily` → monthly view, stated once | DB §5, BP §8, COST §7 | DB-R §5.5 | SPEC |
 | DOC-14 | LOW | Unsourced D1 REST rate-limit figure | Figure dropped; the dynamic-binding argument stands without it | MT §1 | MT-R §1 | SPEC |
-| DOC-15 | LOW | Two names for the project | Naming stated once: product **MathChecker**, package **UI_V5.5**, directory `UI_Webpage_V5.5` | README | PROD-R §6 | SPEC |
+| DOC-15 | LOW | Two names for the project | Naming stated once: product **Aetrix V5.5**, package **UI_V5.5**, directory `UI_Webpage_V5.5` | README | PROD-R §6 | SPEC |
 | DOC-16 | LOW | D6 "this is what V5 looks like" unsourced | Claim withdrawn; D6 retained on its own merits | DESIGN_DIRECTIONS | PROD-R §7 | SPEC |
 
 ### 2.6 UX and product (`UX`)

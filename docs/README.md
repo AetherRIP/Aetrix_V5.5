@@ -2,7 +2,7 @@
 
 **Status:** planning only. No application code, no Cloudflare resources, no dependencies installed.
 **Workspace:** `TEMP` (future `UI_V5.5`) · **Prepared:** 2026-11-03
-**Product:** MathChecker — AI-assisted marking for Edexcel IGCSE 4MA1, becoming a multi-tenant SaaS.
+**Product:** Aetrix V5.5 — AI-assisted marking for Edexcel IGCSE 4MA1, becoming a multi-tenant SaaS.
 
 > **Consolidation note (2026-11-05):** This is the original planning, audit and
 > remediation set, retained for history. It predates the unified repository. The
@@ -14,7 +14,7 @@
 
 ## What this package is
 
-A decision-oriented blueprint for turning MathChecker V5 (a local-first FastAPI + React + SQLite
+A decision-oriented blueprint for turning Aetrix V5.5 (a local-first FastAPI + React + SQLite
 application with a WPF companion) into a multi-tenant SaaS hosted on Cloudflare.
 
 Every major decision states the alternatives considered, why one was chosen, and what would force a

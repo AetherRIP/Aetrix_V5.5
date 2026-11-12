@@ -57,15 +57,16 @@ class UnavailablePipeline:
 
 
 def build_pipeline(settings: Settings) -> CorrectionPipeline:
-    """Return the configured pipeline.
+    """Return the configured correction engine as a pipeline.
 
-    There is intentionally no fallback to a fake implementation.  The real
-    pipeline is the production choice; when the provider is not configured it
-    raises while marking, which the runner records as a truthful parked job.
-    The import is local so the marking package can depend on this module's
-    outcome types without a cycle.
+    Selection lives in the registry, not here: this function only resolves the
+    configured name to an engine.  There is intentionally no fallback to a fake
+    implementation or to another engine, so a misconfiguration parks the job
+    with a truthful error instead of marking with something else.  The import
+    is local so the correction package can depend on this module's outcome
+    types without a cycle.
     """
 
-    from ..marking.pipeline import QuestionMarkingPipeline
+    from ..correction.registry import build_engine
 
-    return QuestionMarkingPipeline()
+    return build_engine(settings)

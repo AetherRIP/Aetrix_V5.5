@@ -29,6 +29,10 @@ from ..services.provider_calls import ProviderCallResult, ProviderCallService
 from ..storage.base import Storage
 from .service import DocumentService
 
+#: How many scheme pages are sent as images.  A 21-page scanned scheme is
+#: comfortably inside this, and the provider accepts far more image input.
+MAX_IMAGE_PAGES = 24
+
 
 @dataclass(frozen=True, slots=True)
 class ExtractionResult:
@@ -79,6 +83,38 @@ def blueprint_response_schema() -> dict[str, Any]:
     }
 
 
+def _repair_total(payload: dict[str, Any]) -> dict[str, Any]:
+    """Derive ``total_marks`` from the extracted questions.
+
+    The total is arithmetic over the questions, and a model's own sum drifts on
+    long scanned schemes (61 vs 63, then 83 vs 91 on the same paper).  Trusting
+    that number would reject usable extractions; deriving it keeps the strict
+    schema check intact and records what the model declared, so a reviewer can
+    see the correction on the draft.
+    """
+    questions = payload.get("questions")
+    if not isinstance(questions, list):
+        return payload
+    total = 0
+    for question in questions:
+        if not isinstance(question, dict) or question.get("excluded") is True:
+            continue
+        marks = question.get("max_marks")
+        if not isinstance(marks, int) or isinstance(marks, bool):
+            return payload
+        total += marks
+    declared = payload.get("total_marks")
+    if declared == total:
+        return payload
+    notes = payload.get("notes")
+    notes = list(notes) if isinstance(notes, list) else []
+    notes.append(
+        f"The model declared total_marks={declared}, but its extracted questions "
+        f"sum to {total}; the total was derived from the questions."
+    )
+    return {**payload, "total_marks": total, "notes": notes}
+
+
 class BlueprintExtractionService:
     def __init__(
         self,
@@ -127,7 +163,11 @@ class BlueprintExtractionService:
         images = self.documents.page_images(principal.tenant_id, document.id)
         inputs: list[LLMInput] = []
         for index, (page, image) in enumerate(images):
-            if index < 12:
+            # A scanned scheme has no text layer, so a page sent as text alone is
+            # invisible to the model.  Every page therefore goes in as an image
+            # up to the cap; a scheme longer than the cap is still extraction
+            # input for its later pages, but those pages are stated as text.
+            if index < MAX_IMAGE_PAGES:
                 inputs.append(LLMInput.text_part(f"\n--- page {page.page_index} ---\n"))
                 inputs.append(LLMInput.image_part(image, "image/png"))
             else:
@@ -159,6 +199,7 @@ class BlueprintExtractionService:
                 "The model's blueprint extraction was not a JSON object.",
                 details={"usage_id": str(result.usage_id)},
             )
+        payload = _repair_total(payload)
         try:
             structure = BlueprintStructure.model_validate(payload)
         except ValidationError as error:

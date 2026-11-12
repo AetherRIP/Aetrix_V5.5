@@ -122,12 +122,28 @@ def test_provider_availability_is_never_claimed() -> None:
         assert status.provider.state == "unknown"
 
 
-def test_unimplemented_features_are_named_by_the_engine() -> None:
-    names = {feature.name for feature in FEATURES}
+def test_the_engine_names_each_feature_and_its_state() -> None:
+    features = {feature.name: feature for feature in FEATURES}
 
-    assert {"Marking", "SymPy verification", "Cohort intelligence"} <= names
-    assert all(feature.state == "not_implemented" for feature in FEATURES)
+    assert {"Marking", "SymPy verification", "Cohort intelligence"} <= set(features)
+    # The worker runs a real marking pipeline and verifies every award, so neither
+    # may be reported as absent. Accuracy is a separate claim and stays unverified.
+    assert features["Marking"].state == "available"
+    assert features["SymPy verification"].state == "available"
+    assert "UNVERIFIED" in features["Marking"].reason
+    # The capabilities this build genuinely lacks stay named rather than hidden.
+    assert features["Cohort intelligence"].state == "not_implemented"
     assert all(feature.reason.strip() for feature in FEATURES)
+
+
+def test_readiness_describes_the_pipeline_this_build_runs() -> None:
+    status = read_system_status(
+        EvidenceSession(heartbeat=FakeHeartbeat(datetime.now(UTC))), _settings()
+    )
+
+    detail = status.readiness.detail or ""
+    assert "not implemented" not in detail.lower()
+    assert "UNVERIFIED" in detail
 
 
 def test_the_response_serialises_every_subsystem() -> None:

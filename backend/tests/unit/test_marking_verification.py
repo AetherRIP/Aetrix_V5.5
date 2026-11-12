@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from app.marking.schema import MarkComponent, QuestionMark
-from app.marking.verification import equivalent, verify_question
+from app.correction.aetrix.schema import MarkComponent, QuestionMark
+from app.correction.aetrix.verification import equivalent, verify_question
 
 
 def _mark(**overrides) -> QuestionMark:
@@ -133,7 +133,73 @@ def test_an_undecidable_expression_is_unknown_not_zero() -> None:
         ("x + x", "2*x", True),
         ("3", "4", False),
         ("__import__('os')", "3", None),
+        # A script states the result as an equation, not a bare value.
+        ("x = 4", "4", True),
+        ("gradient = 3", "3", True),
+        ("x = 5", "4", False),
+        # Implicit multiplication and typographic operators.
+        ("(x - 3)(x + 3)", "x**2 - 9", True),
+        ("2x + 1", "2*x + 1", True),
+        ("3(x + 1)", "3x + 3", True),
+        ("6 \u00f7 2", "3", True),
+        ("5 \u2212 2", "3", True),
     ],
 )
 def test_equivalence_is_decided_or_admits_ignorance(left, right, expected) -> None:
     assert equivalent(left, right) is expected
+
+
+def test_an_equation_form_answer_is_proven_and_clears_review() -> None:
+    mark = _mark(answer_check={"student_expression": "x = 4", "expected_expression": "4"})
+
+    outcome = verify_question(mark, max_marks=2, min_confidence=0.6)
+
+    assert outcome.review_required is False
+    mathematical = [record for record in outcome.records if record.kind == "MATHEMATICAL"]
+    assert mathematical and mathematical[0].status == "EQUIVALENT"
+
+
+def test_a_capitalised_variable_is_the_same_variable() -> None:
+    """A script's capitals are a writing habit, not a different answer."""
+
+    assert equivalent("24X-9", "24x-9") is True
+    assert equivalent("4X^2+12X-(4X^2-12X+9)", "24x-9") is True
+
+    mark = _mark(
+        answer_check={"student_expression": "24X-9", "expected_expression": "24x-9"}
+    )
+    outcome = verify_question(mark, max_marks=2, min_confidence=0.6)
+
+    assert outcome.review_required is False
+    mathematical = [record for record in outcome.records if record.kind == "MATHEMATICAL"]
+    assert mathematical and mathematical[0].status == "EQUIVALENT"
+
+
+def test_case_folding_never_hides_a_real_difference() -> None:
+    # Folding is a second chance at proving equivalence, never a way to make a
+    # different answer look equal.
+    assert equivalent("24X-9", "24x-10") is False
+    assert equivalent("3X+1", "3y+1") is False
+    assert equivalent("2X+3", "2x+3", ) is True
+
+
+def test_an_implicitly_multiplied_answer_is_proven() -> None:
+    mark = _mark(
+        answer_check={
+            "student_expression": "(x - 3)(x + 3)",
+            "expected_expression": "x^2 - 9",
+        }
+    )
+
+    outcome = verify_question(mark, max_marks=2, min_confidence=0.6)
+
+    assert outcome.review_required is False
+
+
+def test_a_wrong_equation_answer_still_requires_a_person() -> None:
+    mark = _mark(answer_check={"student_expression": "x = 5", "expected_expression": "4"})
+
+    outcome = verify_question(mark, max_marks=2, min_confidence=0.6)
+
+    assert outcome.review_required is True
+    assert any("not mathematically equivalent" in reason for reason in outcome.reasons)

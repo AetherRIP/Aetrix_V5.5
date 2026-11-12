@@ -1,6 +1,6 @@
-# MathChecker V5.5
+# Aetrix V5.5
 
-**This repository is part of MathChecker V5.5 — the hosted, multi-tenant rebuild of MathChecker — and it is a
+**This repository is part of Aetrix V5.5 — the hosted, multi-tenant rebuild of the marking platform — and it is a
 work in progress.**
 
 It currently contains the **planning, audit and remediation documentation** for the rebuild. There is no
@@ -9,11 +9,11 @@ deliberate: the rebuild is being specified to the point where implementation can
 
 | | |
 |---|---|
-| **Product** | MathChecker — AI-assisted marking for Edexcel IGCSE 4MA1 |
+| **Product** | Aetrix V5.5 — AI-assisted marking for Edexcel IGCSE 4MA1 |
 | **This package** | `UI_V5.5` — the blueprint for the hosted rebuild |
 | **Status** | Planning complete · independently audited · remediation complete · **awaiting six owner decisions** before phase 2 |
 | **Code** | None. Documentation only, by design |
-| **Predecessor** | MathChecker V5 (`C:\Projects\MATH_CHECKER_V5`) — a local FastAPI + React + SQLite application, untouched by this repository |
+| **Predecessor** | the earlier local FastAPI + React + SQLite application (`C:\Projects\MATH_CHECKER_V5`), untouched by this repository |
 
 ## Where the build stands
 

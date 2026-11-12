@@ -17,7 +17,7 @@ import secrets
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
@@ -284,12 +284,36 @@ class GoogleCloudSettings(BaseModel):
         )
 
 
+class EngineSettings(BaseModel):
+    """Which correction engine marks a paper, and nothing else.
+
+    ``aetrix_legacy`` is the shipped default; ``aetrix_v5_5`` is the reviewed V5
+    engine, which adds mark integrity, targeted recovery, the independent double
+    check and the result guard; ``mathchecker_v5`` is registered but refuses to
+    mark until its slice lands.  Selection is configuration only.
+    Flipping the value changes what the next claimed job runs on; it writes
+    nothing, migrates nothing and leaves every
+    stored result attached to the engine that produced it.  An unknown name is
+    refused by the type, and again by the registry, rather than falling back to
+    a different engine.
+    """
+
+    correction_engine: Literal["aetrix_legacy", "aetrix_v5_5", "mathchecker_v5"] = (
+        "aetrix_legacy"
+    )
+
+
 class MarkingSettings(BaseModel):
     review_mode: ReviewMode = ReviewMode.BALANCED
     blueprint_approval_required: bool = True
     max_escalations_per_job: int = Field(default=6, ge=0, le=50)
     min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     max_marks_per_question: int = Field(default=50, ge=1, le=200)
+    #: Independent second marking of low-confidence questions.  It never
+    #: overwrites the first award: a disagreement goes to a teacher.
+    double_check_enabled: bool = False
+    double_check_min_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    double_check_max_questions: int = Field(default=8, ge=0, le=50)
 
 
 class WorkerSettings(BaseModel):
@@ -356,6 +380,7 @@ class Settings(BaseSettings):
     quota: QuotaSettings = Field(default_factory=QuotaSettings)
     google_cloud: GoogleCloudSettings = Field(default_factory=GoogleCloudSettings)
     marking: MarkingSettings = Field(default_factory=MarkingSettings)
+    engine: EngineSettings = Field(default_factory=EngineSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)

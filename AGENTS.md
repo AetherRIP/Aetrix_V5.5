@@ -1,14 +1,18 @@
 # Aetrix V5.5 — agent instructions
 
 Pre-release integration checkpoint for an AI-assisted mathematics-marking platform.
-The correction engine is real; **marking is not implemented** and no screen or document may
-imply otherwise.
+The correction engine is real: **`aetrix_legacy` is the shipped default and `aetrix_v5_5` is
+registered and selectable**, while `mathchecker_v5` is registered but raises
+`EngineNotImplemented`. Nothing may be described as working beyond what the code and a
+passing check demonstrate.
 
 ## Non-negotiables
 
-1. **Describe what the code does.** Marking, SymPy verification, results, cohort
-   intelligence, Supabase Storage, malware scanning, rate limiting, the authenticated data
-   frontend, Cloudflare data bindings and production deployment are **not implemented**.
+1. **Describe what the code does.** Marking, SymPy verification, results, teacher review,
+   overrides and approvals are implemented through `aetrix_legacy` and, when selected,
+   `aetrix_v5_5`. Cohort intelligence,
+   Supabase Storage, malware scanning, rate limiting, the authenticated data frontend,
+   Cloudflare data bindings and production deployment are **not implemented**.
    The live provider is `UNVERIFIED`; the benchmark holdout has zero certified papers.
 2. **Tenant isolation is not optional.** Resolve the tenant from the verified JWT claim in
    `backend/app/api/deps.py`; never from a request body. Cross-tenant reads must look

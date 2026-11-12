@@ -42,9 +42,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="Aetrix V5.5 Correction Engine",
         version=__version__,
         description=(
-            "Provider-independent correction engine. Phase 1 exposes the job "
-            "lifecycle, canonical blueprints and tenancy; marking itself is "
-            "implemented in later phases and jobs park honestly until then."
+            "Provider-independent correction engine. It owns the job lifecycle, "
+            "canonical blueprints and tenancy, and marks a submission against an "
+            "approved blueprint and scheme in a separate worker process. Live marking "
+            "accuracy is unverified; a question the engine cannot settle stops at "
+            "human review."
         ),
         openapi_url=f"{resolved.api_prefix}/openapi.json",
         docs_url="/docs" if resolved.env is not Environment.PRODUCTION else None,

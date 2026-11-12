@@ -15,6 +15,7 @@ from ...schemas.api import (
     CorrectionCreate,
     JobDetailRead,
     JobRead,
+    RecoveryRequest,
 )
 from ..deps import get_principal
 
@@ -81,3 +82,26 @@ def retry_correction(
 ) -> JobRead:
     job = _service(session, settings).retry(principal, job_id)
     return JobRead.model_validate(job)
+
+
+@router.post(
+    "/{job_id}/recover", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED
+)
+def recover_correction(
+    job_id: uuid.UUID,
+    payload: RecoveryRequest,
+    response: Response,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> JobRead:
+    """Re-mark a refused run as a new, linked job.
+
+    A repeated request returns the recovery already in progress instead of
+    creating a second one, so a double click cannot fan out.
+    """
+
+    creation = _service(session, settings).recover(principal, job_id, payload)
+    if not creation.created:
+        response.status_code = status.HTTP_200_OK
+    return JobRead.model_validate(creation.job)

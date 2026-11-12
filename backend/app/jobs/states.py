@@ -55,10 +55,14 @@ ACTIVE_STATES: frozenset[JobState] = frozenset(
 
 _TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.CREATED: frozenset({JobState.VALIDATING, JobState.CANCELLED, JobState.FAILED}),
+    # The worker validates and marks inside one pipeline call, so a paper with
+    # nothing to review reaches FINALIZING straight from VALIDATING.  Without
+    # this edge a clean run threw on completion and no job could ever finish.
     JobState.VALIDATING: frozenset(
         {
             JobState.PROCESSING_DOCUMENTS,
             JobState.REVIEW_REQUIRED,
+            JobState.FINALIZING,
             JobState.RETRY_SUSPENDED,
             JobState.FAILED,
             JobState.CANCELLED,

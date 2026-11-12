@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,8 +24,14 @@ from ..audit.service import AuditService
 from ..core.config import Settings
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import content_hash, utcnow
-from ..core.security import Principal, ensure_reviewer
-from ..db.models import CorrectionJob, ExamBlueprintVersion, MarkSchemeVersion
+from ..core.security import Principal, ensure_exam_manager, ensure_reviewer
+from ..correction.guard import RESULT_SOURCE_REFUSED
+from ..db.models import (
+    CorrectionJob,
+    ExamBlueprintVersion,
+    JobApproval,
+    MarkSchemeVersion,
+)
 from ..db.repositories import (
     AssignmentRepository,
     BlueprintRepository,
@@ -42,7 +49,9 @@ from ..schemas.api import (
     JobRead,
     JobReviewDecisionRead,
     JobSubmissionRead,
+    RecoveryRequest,
 )
+from ..schemas.blueprint import BlueprintStructure
 from .states import JobState
 
 
@@ -358,6 +367,149 @@ class JobService:
         )
         self.session.commit()
         return job
+
+    def recover(
+        self, principal: Principal, job_id: uuid.UUID, payload: RecoveryRequest
+    ) -> JobCreation:
+        """Create a fresh, linked job that re-marks a refused run.
+
+        A refused run is evidence, never a result.  Recovery therefore never
+        edits it: the new job points back at the refusal, pins the same engine,
+        and runs the unchanged pipeline, so the guard, integrity checks and
+        approval gates all apply to the new attempt as they would to any other.
+
+        Repeating the request returns the recovery already in progress, and the
+        per-attempt idempotency key makes a concurrent duplicate collapse onto
+        the same row rather than fanning out.
+        """
+
+        ensure_exam_manager(principal)
+        source = self.jobs.get(principal.tenant_id, job_id, for_update=True)
+        if source is None:
+            raise AppError(ErrorCode.NOT_FOUND, "Correction job not found.")
+        if JobState(source.state) is not JobState.REVIEW_REQUIRED:
+            raise AppError(
+                ErrorCode.JOB_NOT_RECOVERABLE,
+                "Only a refused marking run waiting for review can be re-marked.",
+                details={"state": source.state},
+            )
+        if source.result_source != RESULT_SOURCE_REFUSED:
+            raise AppError(
+                ErrorCode.JOB_NOT_RECOVERABLE,
+                "This run was not refused by the result guard, so there is nothing "
+                "to recover. Use retry for a failed or suspended job.",
+                details={
+                    "state": source.state,
+                    "result_source": source.result_source,
+                },
+            )
+        approval = self.session.scalar(
+            select(JobApproval.id).where(
+                JobApproval.tenant_id == principal.tenant_id,
+                JobApproval.job_id == source.id,
+            )
+        )
+        if approval is not None:
+            raise AppError(
+                ErrorCode.CONFLICT,
+                "This run was approved, so it cannot be re-marked.",
+            )
+        if not source.engine_name:
+            raise AppError(
+                ErrorCode.JOB_NOT_RECOVERABLE,
+                "This run has no recorded engine, so the re-mark cannot be pinned "
+                "to the same methodology.",
+            )
+
+        # The inputs must still be usable: a recovery cannot quietly mark against
+        # a blueprint or scheme that has since been withdrawn or corrupted.
+        blueprint = self.blueprints.get(principal.tenant_id, source.blueprint_version_id)
+        if blueprint is None or blueprint.status != "APPROVED":
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "The blueprint this run was marked against is no longer approved.",
+            )
+        try:
+            BlueprintStructure.model_validate(blueprint.structure)
+        except ValueError as error:
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "The blueprint this run was marked against is not valid.",
+            ) from error
+        scheme = self.schemes.get_version(principal.tenant_id, source.scheme_version_id)
+        if scheme is None or scheme.status != "APPROVED":
+            raise AppError(
+                ErrorCode.RESULT_NOT_READY,
+                "The mark scheme this run was marked against is no longer approved.",
+            )
+
+        active = self.jobs.active_recovery_of(principal.tenant_id, source.id)
+        if active is not None:
+            return JobCreation(job=active, created=False)
+
+        attempt = len(self.jobs.recoveries_of(principal.tenant_id, source.id)) + 1
+        key = content_hash(
+            "recovery", str(principal.tenant_id), str(source.id), str(attempt)
+        )
+        request_hash = content_hash(
+            source.request_hash, "recovery", str(source.id), str(attempt), __version__
+        )
+        existing = self.jobs.find_by_idempotency(principal.tenant_id, key)
+        if existing is not None:
+            return self._existing(existing, request_hash)
+
+        try:
+            job = self.jobs.create(
+                tenant_id=principal.tenant_id,
+                assignment_id=source.assignment_id,
+                submission_id=source.submission_id,
+                blueprint_version_id=source.blueprint_version_id,
+                scheme_version_id=source.scheme_version_id,
+                idempotency_key=key,
+                request_hash=request_hash,
+                max_attempts=self.settings.worker.max_attempts,
+                recovery_of_job_id=source.id,
+                requested_engine_name=source.engine_name,
+                requested_engine_version=source.engine_version,
+            )
+            self.jobs.add_event(
+                job,
+                from_state=None,
+                to_state=JobState.CREATED.value,
+                detail={
+                    "recovery_of_job_id": str(source.id),
+                    "attempt": attempt,
+                    "source_state": source.state,
+                    "source_result_source": source.result_source,
+                    "requested_engine_name": source.engine_name,
+                    "requested_engine_version": source.engine_version,
+                    "reason": payload.reason,
+                },
+                actor=f"user:{principal.user_id}",
+            )
+            self.audit.record(
+                tenant_id=principal.tenant_id,
+                action="job.recovery_requested",
+                entity_type="correction_job",
+                entity_id=job.id,
+                actor_type="USER",
+                actor_id=principal.user_id,
+                detail={
+                    "recovery_of_job_id": str(source.id),
+                    "attempt": attempt,
+                    "requested_engine_name": source.engine_name,
+                    "requested_engine_version": source.engine_version,
+                    "reason": payload.reason,
+                },
+            )
+            self.session.commit()
+            return JobCreation(job=job, created=True)
+        except IntegrityError:
+            self.session.rollback()
+            existing = self.jobs.find_by_idempotency(principal.tenant_id, key)
+            if existing is None:
+                raise
+            return self._existing(existing, request_hash)
 
     def list(
         self, tenant_id: uuid.UUID, *, state: str | None = None, limit: int = 50

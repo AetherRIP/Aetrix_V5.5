@@ -1,7 +1,7 @@
 /*
  * The authenticated hub — the workspace a signed-in user actually works in.
  *
- * Recovered from the original MathChecker hub design and rebuilt on the Aetrix
+ * Recovered from the original Aetrix V5.5 hub design and rebuilt on the Aetrix
  * tokens: one monochrome ramp, hairline rules, a rail plus an editorial column
  * with a context aside, so the page reads as a working desk rather than a grid of
  * cards. Motion is staged and short (transform/opacity only), and every entrance
@@ -450,10 +450,25 @@
 .app-content {
   position: relative;
   z-index: 1;
+  isolation: isolate;
   width: 100%;
   max-width: 1240px;
   margin-inline: auto;
   padding: clamp(20px, 3vw, 40px) clamp(18px, 3.6vw, 48px) 40px;
+}
+
+/* The desk light: one faint measure grid behind the whole workspace, so the
+   glass panels have something to sit on. Static, never animated. */
+.app-content::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: calc(var(--s-6) * -1) 0 auto;
+  height: 560px;
+  background:
+    radial-gradient(52% 72% at 12% 0%, var(--glow), transparent 72%),
+    repeating-linear-gradient(90deg, transparent 0 79px, var(--grid-line) 79px 80px);
+  pointer-events: none;
 }
 
 .app-content:focus {
@@ -513,8 +528,15 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: clamp(20px, 3vw, 32px);
-  padding-bottom: var(--s-5);
-  border-bottom: 1px solid var(--line);
+  padding: var(--s-5);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  box-shadow: var(--shadow-1), var(--shadow-2);
   animation: hub-rise 520ms var(--ease-out) both;
 }
 
@@ -559,6 +581,15 @@
 
 /* a block of the page; the index stages its entrance */
 .hub-section {
+  padding: var(--s-5);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  box-shadow: var(--shadow-1), var(--shadow-2);
   animation: hub-rise 520ms var(--ease-out) both;
   animation-delay: calc(var(--i, 0) * 45ms);
 }
@@ -587,12 +618,20 @@
   margin-left: auto;
 }
 
-/* figures on one ruled line */
+/* figures on one ruled line, on their own glass sheet */
 
 .hub-stats {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  border-bottom: 1px solid var(--line);
+  padding: var(--s-3) var(--s-5) var(--s-3);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  box-shadow: var(--shadow-1), var(--shadow-2);
 }
 
 .hub-stat {
@@ -663,9 +702,11 @@
   flex-direction: column;
   gap: 6px;
   padding: 16px 18px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-line);
   border-radius: var(--r-lg);
-  background: var(--surface);
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
 }
 
 .platform-metric__label {
@@ -1291,9 +1332,14 @@ a.hub-action--primary:hover > svg {
 
 .app-card {
   padding: var(--s-5);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.06);
+  box-shadow: var(--shadow-1), var(--shadow-2);
   transition: border-color 200ms var(--ease);
 }
 
@@ -2439,7 +2485,10 @@ a.hub-action--primary:hover > svg {
   .hub-skel::after,
   .app-ambient::before,
   .hub-feed__dot,
-  .auth__alert {
+  .auth__alert,
+  .hub-sheet,
+  .hub-profile__menu,
+  .hub-actions__note {
     animation: none !important;
   }
 
@@ -2457,6 +2506,7 @@ a.hub-action--primary:hover > svg {
   .app-sidebar,
   .hub-rail__collapse,
   .hub-rail__collapse svg,
+  .hub-stat--state,
   .panel-link {
     transition: none !important;
   }
