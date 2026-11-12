@@ -417,8 +417,10 @@ function AppLayout() {
     }
     const signOutAndLeave = () => {
       void (async () => {
-        await signOut()
-        await router.navigate({ to: '/sign-in', replace: true })
+        // A second account saved on this device takes over, so only a sign-out
+        // with nothing left to open ends at the sign-in page.
+        const stillSignedIn = await signOut()
+        if (!stillSignedIn) await router.navigate({ to: '/sign-in', replace: true })
       })()
     }
     if (engine.status === 'error' && engine.errorCode === 'PROVISIONING_REQUIRED') {

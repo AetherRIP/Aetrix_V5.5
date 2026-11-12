@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { takeNextPath, useAuth } from '../lib/auth/AuthProvider'
 import { Icon } from '../components/ui/Icons'
@@ -19,13 +19,24 @@ export const Route = createFileRoute('/auth/callback')({
  * forwards the user to the page they originally asked for.
  */
 function AuthCallback() {
-  const { status, error } = useAuth()
+  const { status, error, addingAccount } = useAuth()
+  const [waited, setWaited] = useState(false)
+
+  // When the round-trip is adding a second account, the previous session is
+  // still stored, so the first `authenticated` is not the new account. Wait for
+  // the exchange to finish — but never indefinitely: a round-trip that produces
+  // no new session returns the user to where they were.
+  useEffect(() => {
+    if (status !== 'authenticated' || !addingAccount) return
+    const timer = window.setTimeout(() => setWaited(true), 15_000)
+    return () => window.clearTimeout(timer)
+  }, [status, addingAccount])
 
   useEffect(() => {
-    if (status === 'authenticated') {
+    if (status === 'authenticated' && (!addingAccount || waited)) {
       window.location.replace(takeNextPath())
     }
-  }, [status])
+  }, [status, addingAccount, waited])
 
   // Nothing pending once the client has finished checking: a callback without a
   // usable code is a failure, not an indefinite spinner.
@@ -53,7 +64,9 @@ function AuthCallback() {
               <Icon name="sparkle" size={20} /> Completing sign-in
             </h1>
             <p className="callback__body">
-              Verifying the session with Supabase. This takes a moment.
+              {addingAccount && status === 'authenticated'
+                ? 'Adding the account you chose. The account already signed in stays saved on this device.'
+                : 'Verifying the session with Supabase. This takes a moment.'}
             </p>
           </>
         )}
