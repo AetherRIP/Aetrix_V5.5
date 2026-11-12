@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useRouter, useRouterState } from '@tanstack/react-router'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { displayName, initials, useAuth } from '../../lib/auth/AuthProvider'
 import { NAV_BY_ROLE, ROLE_META, type AppPath, type NavItem, type RoleNav } from '../../lib/auth/roles'
 import { ThemeSwitch } from '../site/ThemeSwitch'
 import { Brand } from '../ui/Brand'
 import { Icon } from '../ui/Icons'
+import { AccountSwitcher } from './AccountSwitcher'
 
 /** Trailing slashes are normal on static hosting, so the comparison strips them. */
 function useActivePath() {
@@ -102,35 +104,94 @@ function useRailCollapsed() {
 
 function ProfileMenu({ role }: { role: keyof typeof ROLE_META | null }) {
   const { user, signOut } = useAuth()
-  const router = useRouter()
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
+  // Escape is the one dismissal that owes the user their focus back; a click on
+  // the page keeps the focus where the click put it.
+  const restoreFocus = useRef(false)
+  // Where the panel hangs, in viewport coordinates: just past the rail's outer
+  // edge and level with the trigger's foot. Measured rather than fixed, so the
+  // expanded (236px) and collapsed (72px) rails place it identically.
+  const [anchor, setAnchor] = useState<{ left: number; bottom: number; width: number } | null>(null)
+
+  const place = useCallback(() => {
+    const trigger = button.current
+    if (!trigger || typeof window === 'undefined') return
+    const rail = trigger.closest('.app-sidebar') ?? trigger
+    const left = Math.round(rail.getBoundingClientRect().right + 12)
+    setAnchor({
+      left,
+      bottom: Math.max(12, Math.round(window.innerHeight - trigger.getBoundingClientRect().bottom)),
+      // Never wider than the room beside the rail, so the panel cannot run off
+      // the window on a narrow desktop.
+      width: Math.max(240, Math.round(window.innerWidth - left - 16)),
+    })
+  }, [])
 
   useEffect(() => {
     if (!open) return
+    const close = () => setOpen(false)
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        setOpen(false)
-        button.current?.focus()
-      }
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      restoreFocus.current = true
+      close()
+    }
+    // An open panel must not be left hanging over content that moved beneath it,
+    // so a scroll outside the panel dismisses it. The scroll position is
+    // compared rather than the event: the router restores scroll on render and
+    // emits scroll events without moving the page at all.
+    const openedAt = { x: window.scrollX, y: window.scrollY }
+    const onScroll = (event: Event) => {
+      const target = event.target as Node | null
+      if (target && panel.current?.contains(target)) return
+      const moved =
+        Math.abs(window.scrollY - openedAt.y) >= 2 || Math.abs(window.scrollX - openedAt.x) >= 2
+      if (!moved) return
+      close()
     }
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node
       if (panel.current?.contains(target) || button.current?.contains(target)) return
-      setOpen(false)
+      close()
     }
+    const onResize = () => place()
+
+    // preventScroll: focusing the panel must not scroll the page, which would
+    // dismiss the panel that was just opened.
+    panel.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true })
+
     document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onResize)
     document.addEventListener('pointerdown', onPointerDown)
     return () => {
       document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
       document.removeEventListener('pointerdown', onPointerDown)
+      // After the commit, not in the handler: removing the focused close button
+      // sends focus to the body, which would undo an earlier focus() call.
+      if (restoreFocus.current) {
+        restoreFocus.current = false
+        button.current?.focus({ preventScroll: true })
+      }
     }
-  }, [open])
+  }, [open, place])
 
   const name = displayName(user)
   const meta = role ? ROLE_META[role] : null
+
+  function toggle() {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    place()
+    setOpen(true)
+  }
 
   return (
     <div className="hub-profile">
@@ -140,7 +201,7 @@ function ProfileMenu({ role }: { role: keyof typeof ROLE_META | null }) {
         className="hub-profile__trigger"
         aria-expanded={open}
         aria-controls="hub-profile-menu"
-        onClick={() => setOpen((value) => !value)}
+        onClick={toggle}
       >
         <span className="hub-avatar" aria-hidden="true">
           {initials(name) || 'A'}
@@ -152,29 +213,72 @@ function ProfileMenu({ role }: { role: keyof typeof ROLE_META | null }) {
         <Icon name="chevron" size={14} className="hub-profile__caret" />
       </button>
 
-      <div className="hub-profile__menu" id="hub-profile-menu" ref={panel} hidden={!open}>
-        <p className="hub-profile__label mono">Signed in</p>
-        <p className="hub-profile__account mono">{user?.email ?? 'No email on session'}</p>
-        <p className="hub-profile__note">
-          {meta
-            ? `${meta.label} · ${meta.scope}. The engine, not this screen, decides what the account may read.`
-            : 'This account has no role in its verified claims, so no dashboard is opened for it.'}
-        </p>
-        <button
-          type="button"
-          className="hub-profile__signout"
-          onClick={() => {
-            void (async () => {
-              await signOut()
-              setOpen(false)
-              await router.navigate({ to: '/sign-in', replace: true })
-            })()
-          }}
-        >
-          <Icon name="logout" size={15} />
-          Sign out
-        </button>
-      </div>
+      {/*
+       * Portalled to the body and measured from the rail: inside the sidebar the
+       * panel inherits the rail's stacking context, so page content could paint
+       * over it, and its 340px width would hang across the reading column. The
+       * panel only mounts after a click, so there is no SSR divergence.
+       */}
+      {open
+        ? createPortal(
+            <div className="hub-profile__layer">
+              <div className="hub-profile__scrim" aria-hidden="true" />
+              <div
+                className="hub-profile__menu"
+                id="hub-profile-menu"
+                ref={panel}
+                role="group"
+                aria-label="Your account"
+                style={
+                  anchor
+                    ? {
+                        left: anchor.left,
+                        bottom: anchor.bottom,
+                        width: Math.min(340, anchor.width),
+                        maxHeight: `calc(100dvh - ${anchor.bottom + 16}px)`,
+                      }
+                    : undefined
+                }
+              >
+                <div className="hub-profile__head">
+                  <p className="hub-profile__label mono">Signed in</p>
+                  <button
+                    type="button"
+                    className="hub-profile__close"
+                    aria-label="Close account menu"
+                    data-autofocus
+                    onClick={() => setOpen(false)}
+                  >
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+                <p className="hub-profile__account mono">{user?.email ?? 'No email on session'}</p>
+                <p className="hub-profile__note">
+                  {meta
+                    ? `${meta.label} · ${meta.scope}. The engine, not this screen, decides what the account may read.`
+                    : 'This account has no role in its verified claims, so no dashboard is opened for it.'}
+                </p>
+                <AccountSwitcher onSwitched={() => setOpen(false)} />
+                <button
+                  type="button"
+                  className="hub-profile__signout"
+                  onClick={() => {
+                    void (async () => {
+                      // With another account saved, signing out opens it rather than
+                      // ending at the sign-in page; the shell keeps rendering either way.
+                      await signOut()
+                      setOpen(false)
+                    })()
+                  }}
+                >
+                  <Icon name="logout" size={15} />
+                  Sign out of this account
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   )
 }
@@ -193,7 +297,6 @@ function AccountSheet({
   role: keyof typeof ROLE_META | null
 }) {
   const { user, signOut } = useAuth()
-  const router = useRouter()
   const panel = useRef<HTMLDivElement>(null)
   const name = displayName(user)
   const meta = role ? ROLE_META[role] : null
@@ -263,19 +366,22 @@ function AccountSheet({
         <ThemeSwitch />
       </div>
 
+      <AccountSwitcher onSwitched={onClose} />
+
       <button
         type="button"
         className="hub-sheet__signout"
         onClick={() => {
           void (async () => {
+            // A second saved account takes over, so this must not force the
+            // sign-in page for a user who is still signed in elsewhere.
             await signOut()
             onClose()
-            await router.navigate({ to: '/sign-in', replace: true })
           })()
         }}
       >
         <Icon name="logout" size={16} />
-        Sign out
+        Sign out of this account
       </button>
 
       <p className="hub-sheet__note">
