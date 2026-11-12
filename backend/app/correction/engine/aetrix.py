@@ -1,22 +1,21 @@
-"""The Aetrix V5.5 engine, behind the seam the runner already speaks.
+"""The Aetrix V5.5 engine: the only correction engine in this build.
 
 The adapter's only jobs are provenance and delegation: it stamps which engine and
-model produced the run, then hands the claimed job to ``AetrixPipeline``,
-which owns per-question marking, evidence, integrity, recovery, the independent
-double check and the result guard.
+model produced the run, then hands the claimed job to ``AetrixPipeline``, which
+owns per-question marking, evidence, integrity, recovery, the independent double
+check and the result guard.
 
-Two other names exist beside this one.  ``aetrix_legacy`` still delegates to the
-pre-existing per-question pipeline and remains the shipped default.
-``mathchecker_v5`` is a placeholder that refuses to mark.  An unrecognised name
-is refused by the registry rather than silently mapped to something else, so a
-stale deployment fails loudly instead of marking with an engine nobody selected.
+There is no other engine to choose and no fallback.  A job recorded as created or
+marked by a different engine — a historical ``aetrix_legacy`` row, for instance —
+is refused rather than re-marked, because changing the engine under a paper has
+to be a deliberate, separately recorded decision.
 """
 
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from ...core.config import Settings
+from ...core.config import CORRECTION_ENGINE_NAME, CORRECTION_ENGINE_VERSION, Settings
 from ...core.errors import AppError, ErrorCode
 from ...db.models import CorrectionJob
 from ...jobs.pipeline import PipelineOutcome
@@ -25,8 +24,12 @@ from .protocol import engine_attribution_conflict
 
 
 class AetrixEngine:
-    name = "aetrix_v5_5"
-    version = "5.5.0"
+    """The correction engine, behind the seam the runner already speaks."""
+
+    #: Stable identifier recorded on every job this engine marks.
+    name = CORRECTION_ENGINE_NAME
+    #: Engine revision, recorded beside the name so a result can be placed.
+    version = CORRECTION_ENGINE_VERSION
 
     def __init__(self, pipeline: AetrixPipeline | None = None) -> None:
         #: Injected by tests; production builds one per call, which is cheap

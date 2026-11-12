@@ -1,6 +1,6 @@
 """The rewritten pipeline and the engine seam, executed against real PostgreSQL.
 
-These tests mark a paper end to end through ``registry.build_engine`` — the same
+These tests mark a paper end to end through ``build_pipeline`` — the same
 call the worker makes — with a stub provider standing in for Gemini.  Everything
 else is real: the credential lease, the usage ledger, the prompt registry, the
 storage adapter, the per-question writes, the guard's locking reads and the job
@@ -16,13 +16,9 @@ import threading
 import time
 import uuid
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
-import pytest
-from app.core.config import EngineSettings, MarkingSettings, StorageSettings, get_settings
-from app.core.errors import AppError, ErrorCode
-from app.correction.engine import AetrixEngine, EngineNotImplemented, LegacyEngine
-from app.correction.registry import build_engine
+from app.core.config import MarkingSettings, StorageSettings, get_settings
+from app.correction.engine import AetrixEngine
 from app.db.models import (
     CorrectionJob,
     CriterionResult,
@@ -35,7 +31,7 @@ from app.db.models import (
     VerificationResult,
 )
 from app.db.repositories import ResultRepository
-from app.jobs.pipeline import PipelineOutcome, build_pipeline
+from app.jobs.pipeline import build_pipeline
 from app.jobs.runner import JobRunner
 from app.jobs.states import JobState
 from app.providers.base import LLMResponse, TokenUsage
@@ -611,9 +607,7 @@ def test_a_job_created_through_the_api_is_marked_by_the_configured_v5_5_engine(
 ) -> None:
     """Configuration, not a test stub, must choose the engine for an API job."""
 
-    settings = _settings(
-        tmp_path, engine=EngineSettings(correction_engine="aetrix_v5_5")
-    )
+    settings = _settings(tmp_path)
     _page(db_session, paper, identity, settings)
     provider = StubProvider()
     monkeypatch.setattr(
@@ -665,57 +659,8 @@ def test_a_job_created_through_the_api_is_marked_by_the_configured_v5_5_engine(
     assert {"MARKING", "INTEGRITY", "DOUBLE_CHECK", "GUARD"} <= stages
 
 
-def test_build_pipeline_returns_the_legacy_engine_by_default() -> None:
+def test_the_worker_always_builds_the_one_engine() -> None:
     pipeline = build_pipeline(get_settings())
 
-    assert isinstance(pipeline, LegacyEngine)
-    assert pipeline.name == "aetrix_legacy"
-
-
-def test_a_legacy_execution_records_the_engine_that_produced_it(
-    session_factory, db_session, paper, identity
-) -> None:
-    class Pipeline:
-        name = "question-marking-v1"
-
-        def run(self, job, session, settings):
-            return PipelineOutcome(JobState.FINALIZING, {"reason": "stub"})
-
-    job = _job(db_session, paper, identity, key="legacy-provenance")
-    engine = LegacyEngine(pipeline=Pipeline())
-
-    with session_factory() as session:
-        outcome = engine.run(session.get(CorrectionJob, job.id), session, get_settings())
-
-    assert outcome.state is JobState.FINALIZING
-    db_session.expire_all()
-    stored = db_session.get(CorrectionJob, job.id)
-    assert (stored.engine_name, stored.engine_version) == ("aetrix_legacy", "1.0.0")
-    assert stored.result_source == "AI_PRIMARY"
-
-
-def test_selecting_v5_is_accepted_and_refuses_to_mark() -> None:
-    settings = get_settings().model_copy(
-        update={"engine": EngineSettings(correction_engine="mathchecker_v5")}
-    )
-
-    engine = build_engine(settings)
-
-    assert engine.name == "mathchecker_v5"
-    with pytest.raises(EngineNotImplemented):
-        engine.run(SimpleNamespace(id=None), SimpleNamespace(), settings)
-
-
-def test_an_unknown_engine_name_is_refused_without_fallback() -> None:
-    settings = get_settings().model_copy(
-        update={"engine": EngineSettings.model_construct(correction_engine="aetrix_v6_0")}
-    )
-
-    with pytest.raises(AppError) as error:
-        build_engine(settings)
-
-    assert error.value.code is ErrorCode.CONFIGURATION_ERROR
-    assert "aetrix_v6_0" in error.value.message
-    assert "aetrix_legacy" in error.value.message
-    assert "aetrix_v5_5" in error.value.message
-    assert "mathchecker_v5" in error.value.message
+    assert isinstance(pipeline, AetrixEngine)
+    assert (pipeline.name, pipeline.version) == ("aetrix_v5_5", "5.5.0")

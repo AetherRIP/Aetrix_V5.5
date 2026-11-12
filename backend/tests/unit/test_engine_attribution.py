@@ -1,4 +1,9 @@
-"""The rule that stops a job changing engine underneath itself."""
+"""The rule that stops a job changing engine underneath itself.
+
+Only one engine exists now, but historical rows still name the engines that were
+removed.  Those names are read as stored, so a job marked by ``aetrix_legacy``
+must still be recognised as another engine's work.
+"""
 
 from __future__ import annotations
 
@@ -14,5 +19,6 @@ def test_the_same_engine_is_not_a_conflict() -> None:
     assert engine_attribution_conflict("aetrix_v5_5", "aetrix_v5_5") is False
 
 
-def test_another_engine_is_a_conflict() -> None:
+def test_a_historical_engine_name_is_a_conflict() -> None:
     assert engine_attribution_conflict("aetrix_legacy", "aetrix_v5_5") is True
+    assert engine_attribution_conflict("mathchecker_v5", "aetrix_v5_5") is True

@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..core.config import CORRECTION_ENGINE_NAME
 from ..db.models import CorrectionJob, EngineRun
 
 #: Stages.  Kept as plain strings so a future engine can add one without a
@@ -46,7 +47,7 @@ def record_run(
     row = EngineRun(
         tenant_id=job.tenant_id,
         job_id=job.id,
-        engine_name=job.engine_name or "aetrix_legacy",
+        engine_name=job.engine_name or CORRECTION_ENGINE_NAME,
         engine_version=job.engine_version or "unknown",
         prompt_version=prompt_version or job.engine_version,
         stage=stage,

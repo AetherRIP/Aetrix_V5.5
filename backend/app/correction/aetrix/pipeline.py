@@ -40,7 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...audit.service import AuditService
-from ...core.config import Settings
+from ...core.config import CORRECTION_ENGINE_VERSION, Settings
 from ...core.errors import AppError, ErrorCode
 from ...core.ids import sha256_hex
 from ...db.models import (
@@ -602,7 +602,7 @@ class AetrixPipeline(CorrectionPipeline):
             calls=calls,
             storage=storage,
             quality=quality,
-            engine_version=current.engine_version or "5.0.0",
+            engine_version=current.engine_version or CORRECTION_ENGINE_VERSION,
             leaf_by_question={leaf[0]: leaf for leaf in leaves},
         )
 

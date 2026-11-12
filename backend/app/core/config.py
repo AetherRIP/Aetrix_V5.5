@@ -13,6 +13,7 @@ point of use.
 
 from __future__ import annotations
 
+import os
 import secrets
 from enum import StrEnum
 from functools import lru_cache
@@ -24,6 +25,44 @@ from pydantic import BaseModel, Field, SecretStr, field_validator, model_validat
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_ENCRYPTION_KEY = "dev-only-not-for-production-rotate-me-0000000000="
+
+#: The one correction engine this build contains.  Historical rows may name
+#: engines that no longer exist; those values are read as stored, never rewritten.
+CORRECTION_ENGINE_NAME = "aetrix_v5_5"
+CORRECTION_ENGINE_VERSION = "5.5.0"
+
+#: The engine-selection variable earlier builds read.  Selection is gone, so a
+#: deployment that still asks for another engine must fail at startup rather
+#: than silently run this one instead.
+OBSOLETE_CORRECTION_ENGINE_ENV = "AETRIX_ENGINE__CORRECTION_ENGINE"
+
+#: Files the settings layer reads, relative to the working directory.
+ENV_FILES = (".env", "backend/.env")
+
+
+def _obsolete_engine_setting() -> str | None:
+    """The obsolete engine-selection value, from the environment or an env file.
+
+    ``backend/.env`` is read by the settings layer itself, so a value written
+    there is as real as an exported variable and is refused the same way.  The
+    value is returned, never logged.
+    """
+
+    for key, value in os.environ.items():
+        if key.upper() == OBSOLETE_CORRECTION_ENGINE_ENV:
+            return value
+    for name in ENV_FILES:
+        path = Path(name)
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            entry = line.strip()
+            if not entry or entry.startswith("#") or "=" not in entry:
+                continue
+            key, _, value = entry.partition("=")
+            if key.strip().upper() == OBSOLETE_CORRECTION_ENGINE_ENV:
+                return value.strip().strip("\"'")
+    return None
 
 
 class Environment(StrEnum):
@@ -302,25 +341,6 @@ class GoogleCloudSettings(BaseModel):
         )
 
 
-class EngineSettings(BaseModel):
-    """Which correction engine marks a paper, and nothing else.
-
-    ``aetrix_legacy`` is the shipped default; ``aetrix_v5_5`` is the reviewed V5
-    engine, which adds mark integrity, targeted recovery, the independent double
-    check and the result guard; ``mathchecker_v5`` is registered but refuses to
-    mark until its slice lands.  Selection is configuration only.
-    Flipping the value changes what the next claimed job runs on; it writes
-    nothing, migrates nothing and leaves every
-    stored result attached to the engine that produced it.  An unknown name is
-    refused by the type, and again by the registry, rather than falling back to
-    a different engine.
-    """
-
-    correction_engine: Literal["aetrix_legacy", "aetrix_v5_5", "mathchecker_v5"] = (
-        "aetrix_legacy"
-    )
-
-
 class MarkingSettings(BaseModel):
     review_mode: ReviewMode = ReviewMode.BALANCED
     blueprint_approval_required: bool = True
@@ -378,7 +398,7 @@ class FeatureFlags(BaseModel):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AETRIX_",
-        env_file=(".env", "backend/.env"),
+        env_file=ENV_FILES,
         env_nested_delimiter="__",
         env_file_encoding="utf-8",
         extra="ignore",
@@ -398,7 +418,6 @@ class Settings(BaseSettings):
     quota: QuotaSettings = Field(default_factory=QuotaSettings)
     google_cloud: GoogleCloudSettings = Field(default_factory=GoogleCloudSettings)
     marking: MarkingSettings = Field(default_factory=MarkingSettings)
-    engine: EngineSettings = Field(default_factory=EngineSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
@@ -410,6 +429,25 @@ class Settings(BaseSettings):
         if not value.startswith("/") or value.endswith("/"):
             raise ValueError("api_prefix must start with '/' and not end with '/'")
         return value
+
+    @model_validator(mode="after")
+    def _refuse_obsolete_engine_selection(self) -> Settings:
+        """Fail at boot when a deployment still selects a correction engine.
+
+        ``aetrix_v5_5`` is the only engine and there is no fallback.  The old
+        variable is no longer a field, so accepting another value would mark
+        papers with an engine the operator did not choose.
+        """
+
+        configured = _obsolete_engine_setting()
+        if configured is None or configured.strip() == CORRECTION_ENGINE_NAME:
+            return self
+        raise ValueError(
+            f"{OBSOLETE_CORRECTION_ENGINE_ENV}={configured!r} is not supported. "
+            f"{CORRECTION_ENGINE_NAME!r} is the only correction engine in this "
+            "build, and this build never falls back to another. Remove the "
+            f"variable or set it to {CORRECTION_ENGINE_NAME!r}."
+        )
 
     @property
     def cors_origin_list(self) -> list[str]:

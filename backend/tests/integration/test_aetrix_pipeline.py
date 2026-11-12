@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import uuid
 
+import pytest
 from app.core.config import get_settings
 from app.core.security import Principal
 from app.correction.aetrix.pipeline import AetrixPipeline
+from app.correction.processing import STATUS_TO_STATE, ensure_consistent
 from app.db.models import (
     CorrectionJob,
     CriterionResult,
@@ -16,11 +18,13 @@ from app.db.models import (
     QuestionResult,
     VerificationResult,
 )
+from app.jobs.pipeline import RetryablePipelineError
 from app.jobs.service import JobService
 from app.jobs.states import JobState
+from app.providers.base import ProviderNotConfigured
 from app.schemas.api import CorrectionCreate
 from app.storage.local import LocalStorage
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from tests.support import FakeProvider, make_png
 
@@ -325,3 +329,121 @@ def test_an_unreadable_submission_is_reviewed_not_zeroed(
     assert outcome.detail["reason"] == "NO_RENDERABLE_PAGES"
     assert provider.requests == []
     assert _all_marks(db_session, job) == []
+
+
+# -- behaviours carried over from the removed legacy suite --------------------
+
+
+class BrokenProvider(FakeProvider):
+    """Fails every call, so the execution ends without a usable result."""
+
+    def __init__(self) -> None:
+        super().__init__(error=ProviderNotConfigured("the provider is not configured"))
+
+
+def test_a_provider_failure_never_becomes_a_zero(
+    paper, identity, db_session, provider_credential, tmp_path
+) -> None:
+    """An outage is a finding about us, not about the student.
+
+    The provider error is raised as retryable so the runner parks the job, and no
+    question result — least of all a zero — is written for the paper.
+    """
+
+    storage = LocalStorage(tmp_path / "store")
+    job = _setup(paper, identity, db_session, storage)
+    provider = BrokenProvider()
+
+    with pytest.raises(RetryablePipelineError):
+        AetrixPipeline(provider=provider, storage=storage).run(
+            job, db_session, get_settings()
+        )
+
+    assert provider.requests, "the failure must have come from the model call"
+    db_session.expire_all()
+    assert _all_marks(db_session, job) == []
+    assert db_session.scalar(
+        select(QuestionResult.id).where(
+            QuestionResult.job_id == job.id, QuestionResult.status == "ZERO"
+        )
+    ) is None
+
+
+def test_a_failed_run_never_persists_a_confirmed_zero(
+    paper, identity, db_session, provider_credential, tmp_path
+) -> None:
+    storage = LocalStorage(tmp_path / "store")
+    job = _setup(paper, identity, db_session, storage)
+    provider = BrokenProvider()
+
+    with pytest.raises(RetryablePipelineError):
+        AetrixPipeline(provider=provider, storage=storage).run(
+            job, db_session, get_settings()
+        )
+
+    db_session.expire_all()
+    assert db_session.scalar(
+        select(QuestionResult.id).where(
+            QuestionResult.job_id == job.id,
+            QuestionResult.processing_state == "CONFIRMED_ZERO",
+        )
+    ) is None
+    assert db_session.scalar(
+        select(QuestionResult.id).where(
+            QuestionResult.job_id == job.id, QuestionResult.status == "ZERO"
+        )
+    ) is None
+
+
+def test_every_persisted_state_agrees_with_its_status(
+    paper, identity, db_session, provider_credential, tmp_path
+) -> None:
+    storage = LocalStorage(tmp_path / "store")
+    job = _setup(paper, identity, db_session, storage)
+    provider = ScriptedProvider({**_full_script(), "2": _payload("2", awarded=0)})
+
+    AetrixPipeline(provider=provider, storage=storage).run(
+        job, db_session, get_settings()
+    )
+
+    rows = {row.question_id: row for row in _all_marks(db_session, job)}
+    assert {(row.status, row.processing_state) for row in rows.values()} == {
+        ("AWARDED", "MARKED"),
+        ("ZERO", "CONFIRMED_ZERO"),
+    }
+    for row in rows.values():
+        assert row.processing_state is not None, row.question_id
+        ensure_consistent(row.status, row.processing_state)
+
+
+def test_the_state_is_written_in_the_same_insert_as_the_status(
+    paper, identity, db_session, provider_credential, tmp_path
+) -> None:
+    """One INSERT carries both columns; there is no later reconciliation step."""
+
+    storage = LocalStorage(tmp_path / "store")
+    job = _setup(paper, identity, db_session, storage)
+    provider = ScriptedProvider(_full_script())
+
+    captured: list[dict] = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        del conn, cursor, context, executemany
+        if "INSERT INTO question_results" in statement:
+            rows = parameters if isinstance(parameters, list) else [parameters]
+            captured.extend(rows)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", capture)
+    try:
+        AetrixPipeline(provider=provider, storage=storage).run(
+            job, db_session, get_settings()
+        )
+    finally:
+        event.remove(bind, "before_cursor_execute", capture)
+
+    assert len(captured) == 3
+    for params in captured:
+        assert params["status"] in STATUS_TO_STATE
+        assert params["processing_state"] == STATUS_TO_STATE[params["status"]]
+        assert params["engine_version"] == "5.5.0"

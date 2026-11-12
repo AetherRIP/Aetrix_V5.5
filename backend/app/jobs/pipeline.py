@@ -1,13 +1,14 @@
 """The marking pipeline boundary.
 
-Phase 1 deliberately ships an *unavailable* pipeline.  It does not return an
-empty result, a zero score or a canned response: it raises, and the runner parks
-the job in ``RETRY_SUSPENDED`` with ``PIPELINE_UNAVAILABLE``.  That is the honest
-state of a build before Phases 2-8 exist, and it lets the job infrastructure be
-tested without pretending marking has been implemented.
+The pipeline is the object the job runner calls.  This build contains one
+correction engine — ``aetrix_v5_5`` — and ``build_pipeline`` returns it, always,
+with no registry, no configuration switch and no fallback.
 
-A later phase supplies an object with the same ``run`` contract; the runner does
-not change.
+``UnavailablePipeline`` is not an engine and is not reachable from configuration:
+it is the explicit "nothing to run" object the job-infrastructure tests use.  It
+raises, and the runner parks the job in ``RETRY_SUSPENDED`` with
+``PIPELINE_UNAVAILABLE``, rather than returning an empty result, a zero score or
+a canned response.
 """
 
 from __future__ import annotations
@@ -57,16 +58,19 @@ class UnavailablePipeline:
 
 
 def build_pipeline(settings: Settings) -> CorrectionPipeline:
-    """Return the configured correction engine as a pipeline.
+    """Return the one correction engine this build contains.
 
-    Selection lives in the registry, not here: this function only resolves the
-    configured name to an engine.  There is intentionally no fallback to a fake
-    implementation or to another engine, so a misconfiguration parks the job
-    with a truthful error instead of marking with something else.  The import
-    is local so the correction package can depend on this module's outcome
-    types without a cycle.
+    ``aetrix_v5_5`` is the only engine.  There is intentionally no selection and
+    no fallback: an unsupported engine request fails at configuration time, and a
+    job recorded under a different engine is refused by the runner, rather than
+    being marked with something the operator did not choose.
+
+    ``settings`` is accepted because the worker resolves a single settings object
+    for the whole process; the engine reads its own configuration when it runs.
+    The import is local so the correction package can depend on this module's
+    outcome types without a cycle.
     """
 
-    from ..correction.registry import build_engine
+    from ..correction.engine import AetrixEngine
 
-    return build_engine(settings)
+    return AetrixEngine()

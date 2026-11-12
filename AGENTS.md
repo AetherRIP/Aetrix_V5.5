@@ -1,16 +1,16 @@
 # Aetrix V5.5 — agent instructions
 
 Pre-release integration checkpoint for an AI-assisted mathematics-marking platform.
-The correction engine is real: **`aetrix_legacy` is the shipped default and `aetrix_v5_5` is
-registered and selectable**, while `mathchecker_v5` is registered but raises
-`EngineNotImplemented`. Nothing may be described as working beyond what the code and a
-passing check demonstrate.
+The correction engine is real and singular: **`aetrix_v5_5` is the only correction engine**,
+with no engine selection and no fallback. Nothing may be described as working beyond what
+the code and a passing check demonstrate.
 
 ## Non-negotiables
 
 1. **Describe what the code does.** Marking, SymPy verification, results, teacher review,
-   overrides and approvals are implemented through `aetrix_legacy` and, when selected,
-   `aetrix_v5_5`. Cohort intelligence,
+   overrides and approvals are implemented through `aetrix_v5_5`. Historical jobs and results
+   keep the engine and version that produced them (`aetrix_legacy`, `mathchecker_v5`) and are
+   never rewritten. Cohort intelligence,
    Supabase Storage, malware scanning, rate limiting, the authenticated data frontend,
    Cloudflare data bindings and production deployment are **not implemented**.
    The live provider is `UNVERIFIED`; the benchmark holdout has zero certified papers.
