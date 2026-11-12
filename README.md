@@ -90,6 +90,7 @@ The benchmark is frozen and never imported by production code.
 | Tenant isolation | Implemented and integration-tested | Workspace and object reads are scoped from the verified identity; foreign IDs return 404 |
 | Exams, blueprints and schemes | Implemented | Drafting, approval, immutable versions and overrides |
 | Assignments, submissions and documents | Implemented | Registration, PDF ingestion, validation, page mapping and local storage |
+| Reviewer manual upload | Implemented and tested | A reviewer may register a script and upload a script or a mark scheme so marking continues while Google Classroom is unavailable; creating an exam, creating an assignment and approving a scheme stay with a teacher or administrator (`Principal.can_upload_documents`) |
 | Correction jobs and worker | Implemented | Idempotency, leases, attempts, cancellation, retry policy and typed failure states |
 | Marking pipeline and results | Tested, live marking unverified | Strict structured output, SymPy verification, question results and evidence; provider reachability is not an accuracy claim |
 | Human review and approval | Implemented and integration-tested | Reviewer decisions, reasoned overrides, approval gate and audit |
@@ -109,13 +110,14 @@ has been exercised against a live provider.
 | Check | Command | Result |
 |---|---|---|
 | Engine lint | `cd backend && .venv/Scripts/python.exe -m ruff check app tests migrations` | **pass** |
-| Engine unit suite | `cd backend && .venv/Scripts/python.exe -m pytest tests/unit -q` | **237 passed** |
+| Engine unit suite | `cd backend && .venv/Scripts/python.exe -m pytest tests/unit -q` | **355 passed** |
+| Reviewer upload permissions | `pytest tests/unit/test_upload_permissions.py`; live probe as a REVIEWER against the demo engine | **9 passed**; register 201, document upload 201 `PROCESSED`, create exam / approve scheme / create assignment all 403 |
 | Engine CI | GitHub Actions: full pytest against a disposable PostgreSQL service | **passed** |
 | Schema and RLS | Live `alembic check`; `pg_class` scan | **head 0022; no drift; 44/44 public tables RLS** |
 | Frontend typecheck | `cd frontend && ../.tools/node/node.exe node_modules/typescript/bin/tsc --noEmit` | **exit 0** |
 | Production build | `cd frontend && ../.tools/node/node.exe node_modules/vite/bin/vite.js build` | **exit 0** |
 | Account browser tests | Playwright `tests/accounts.spec.ts` against a production preview and the deployed Pages build | **8 passed in both runs** |
-| Full browser suite | Playwright against a production preview | **205 passed, 2 skipped** |
+| Browser suite, this change | Playwright `tests/responsive.spec.ts` + `tests/queue.spec.ts` against a production preview | **95 passed** |
 | Live engine probes | `GET /health`, `GET /ready` | **200, 200** |
 
 The two skipped browser tests are live-engine DOM probes that require
@@ -203,6 +205,9 @@ accuracy claim until the holdout contains independently certified papers.
   the browser cannot select a tenant by request body.
 - **Append-only history.** Audit events, job events and provider usage are protected by
   database triggers.
+- **Uploading is not exam authority.** `ensure_uploader` admits a teacher, an
+  administrator or a reviewer to ingestion; `ensure_exam_manager` still gates exam,
+  assignment, scheme-approval and blueprint writes.
 - **No fabricated data.** API failures, unavailable engine routes and unconfigured
   integrations produce explicit states. The marker never fills missing results with zeros.
 - **Not hardened for untrusted production.** Rate limiting, malware scanning, backup and

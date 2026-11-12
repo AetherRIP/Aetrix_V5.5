@@ -61,13 +61,20 @@ Trust boundaries:
 
 ### Roles
 
-| Role | Can manage exams/blueprints | Can review | Read tenant data |
-|---|---:|---:|---:|
-| OWNER | Yes | Yes | Yes |
-| ADMIN | Yes | Yes | Yes |
-| TEACHER | Yes | Yes | Yes |
-| REVIEWER | No | Yes | Yes |
-| VIEWER | No | No | Yes |
+| Role | Can manage exams/blueprints | Can upload scripts and schemes | Can review | Read tenant data |
+|---|---:|---:|---:|---:|
+| OWNER | Yes | Yes | Yes | Yes |
+| ADMIN | Yes | Yes | Yes | Yes |
+| TEACHER | Yes | Yes | Yes | Yes |
+| REVIEWER | No | Yes | Yes | Yes |
+| VIEWER | No | No | No | Yes |
+
+Uploading is its own permission (`Principal.can_upload_documents`, enforced by
+`ensure_uploader`), not a side effect of exam management: a REVIEWER may register
+a submission, upload its script and upload a mark scheme so marking continues while
+Google Classroom is unavailable, and is refused when creating an exam, creating an
+assignment or approving a scheme. Every other write path still requires
+`ensure_exam_manager`.
 
 Roles are read from the `users` row, not trusted from a token claim. A token can
 identify a subject; the database decides the role.

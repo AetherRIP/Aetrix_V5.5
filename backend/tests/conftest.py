@@ -1,10 +1,15 @@
 # ruff: noqa: E402 - the environment must be configured before app imports
 """Test configuration.
 
-Integration tests run against a real PostgreSQL database — the same Supabase
-project during development, or ``AETRIX_TEST_DATABASE_URL`` in CI.  There is no
+Integration tests run against a real PostgreSQL database — a disposable
+loopback instance supplied by ``AETRIX_TEST_DATABASE_URL``.  There is no
 SQLite fallback: the lease query uses PostgreSQL's ``FOR UPDATE SKIP LOCKED``,
 and testing it on another dialect would not test the thing that matters.
+
+The suite migrates its database to head and truncates every table, so it
+refuses any DSN that is not on this machine.  Falling back to ``backend/.env``
+(a shared Supabase project) is therefore safe by construction: the run stops
+before the first migration instead of altering the project database.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import jwt
+from sqlalchemy.engine import make_url
 
 BACKEND = Path(__file__).resolve().parents[1]
 
@@ -26,6 +32,33 @@ def _dotenv_database_url() -> str:
             if line.startswith("AETRIX_DATABASE__URL="):
                 return line.split("=", 1)[1].strip()
     return ""
+
+
+def _is_loopback_dsn(dsn: str) -> bool:
+    """True for a DSN on this machine: a host, 127.x.x.x, ::1 or a unix socket."""
+    try:
+        url = make_url(dsn)
+    except Exception:  # an unparseable DSN is never loopback
+        return False
+    host = (url.host or "").strip().lower()
+    return host in {"", "localhost", "::1"} or host.startswith("127.")
+
+
+def _refuse_non_loopback(dsn: str) -> None:
+    """The suite migrates to head and truncates every table; only do that locally."""
+    if _is_loopback_dsn(dsn):
+        return
+    try:
+        shown = make_url(dsn).render_as_string(hide_password=True)
+    except Exception:  # still refuse, just without echoing the DSN
+        shown = "<unparseable DSN>"
+    raise RuntimeError(
+        "Refusing to run the integration suite against a non-loopback database "
+        f"({shown}): it migrates to head and truncates every table. Set "
+        "AETRIX_TEST_DATABASE_URL to a disposable loopback database, for example "
+        "postgresql+psycopg://postgres@127.0.0.1:55432/aetrix_test. The development "
+        "backend/.env database is never used by this suite."
+    )
 
 
 os.environ["AETRIX_ENV"] = "test"
@@ -95,9 +128,11 @@ BLUEPRINT_STRUCTURE = {
 #: connection, while every integration test still migrates to head first.
 @pytest.fixture(scope="session")
 def migrated_database() -> None:
+    dsn = get_settings().database.dsn()
+    _refuse_non_loopback(dsn)
     config = Config(str(BACKEND / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND / "migrations"))
-    config.set_main_option("sqlalchemy.url", get_settings().database.dsn().replace("%", "%%"))
+    config.set_main_option("sqlalchemy.url", dsn.replace("%", "%%"))
     command.upgrade(config, "head")
 
 
@@ -117,17 +152,9 @@ def clean_tables(request):
         yield
         return
     engine = request.getfixturevalue("engine")
-    # These tests delete every row in every table.  Without an explicit
-    # disposable database they must not run against a shared or reachable
-    # Supabase project, because that would destroy real workspace data.
-    if not os.environ.get("AETRIX_TEST_DATABASE_URL"):
-        dsn = get_settings().database.dsn()
-        if "localhost" not in dsn and "127.0.0.1" not in dsn:
-            raise RuntimeError(
-                "Refusing to TRUNCATE a non-loopback database: set "
-                "AETRIX_TEST_DATABASE_URL to a disposable test database. "
-                "The integration suite deletes every row."
-            )
+    # These tests delete every row in every table, so the target must be on this
+    # machine whether it came from AETRIX_TEST_DATABASE_URL or from backend/.env.
+    _refuse_non_loopback(get_settings().database.dsn())
     names = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
     statement = text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE")
     with engine.begin() as connection:
@@ -161,14 +188,16 @@ def identity(db_session):
 
     user_a = User(tenant_id=tenant_a.id, subject="teacher-a", role="OWNER")
     user_b = User(tenant_id=tenant_b.id, subject="teacher-b", role="OWNER")
+    reviewer = User(tenant_id=tenant_a.id, subject="reviewer-a", role="REVIEWER")
     viewer = User(tenant_id=tenant_a.id, subject="viewer-a", role="VIEWER")
-    db_session.add_all([user_a, user_b, viewer])
+    db_session.add_all([user_a, user_b, reviewer, viewer])
     db_session.commit()
     return SimpleNamespace(
         tenant_a=tenant_a,
         tenant_b=tenant_b,
         user_a=user_a,
         user_b=user_b,
+        reviewer=reviewer,
         viewer=viewer,
     )
 

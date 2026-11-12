@@ -55,6 +55,18 @@ class Principal:
     def can_manage_exams(self) -> bool:
         return self.role in {"OWNER", "ADMIN", "TEACHER", "PLATFORM_OWNER"}
 
+    @property
+    def can_upload_documents(self) -> bool:
+        """Whether this account may feed a script or a scheme into the engine.
+
+        Deliberately narrower than ``can_manage_exams``: a REVIEWER uploads so
+        marking can continue while Google Classroom is unavailable, but creating
+        exams, assignments, approvals and blueprints stay with a teacher or
+        administrator. The two permissions are separate on purpose; do not fold
+        uploads back into exam management.
+        """
+        return self.can_manage_exams or self.role == "REVIEWER"
+
 
 class SecretBox:
     """Symmetric encryption for provider credentials at rest."""
@@ -274,3 +286,12 @@ def ensure_reviewer(principal: Principal) -> None:
 def ensure_exam_manager(principal: Principal) -> None:
     if not principal.can_manage_exams:
         raise AppError(ErrorCode.FORBIDDEN, "This action requires a teacher or admin role.")
+
+
+def ensure_uploader(principal: Principal) -> None:
+    """Gate ingestion: a teacher, an administrator or a reviewer may upload."""
+    if not principal.can_upload_documents:
+        raise AppError(
+            ErrorCode.FORBIDDEN,
+            "This action requires a teacher, admin or reviewer role.",
+        )

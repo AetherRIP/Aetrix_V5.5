@@ -17,7 +17,7 @@ from ..audit.service import AuditService
 from ..core.config import Settings
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import sha256_hex, utcnow
-from ..core.security import Principal, ensure_exam_manager
+from ..core.security import Principal, ensure_uploader
 from ..db.models import Document, DocumentPage, Submission
 from ..db.repositories import (
     AssignmentRepository,
@@ -62,7 +62,7 @@ class DocumentService:
         declared_mime: str,
         data: bytes,
     ) -> Document:
-        ensure_exam_manager(principal)
+        ensure_uploader(principal)
         submission, exam_id = self._submission_and_exam(principal, submission_id)
         return self._ingest(
             principal,
@@ -84,7 +84,7 @@ class DocumentService:
         declared_mime: str,
         data: bytes,
     ) -> Document:
-        ensure_exam_manager(principal)
+        ensure_uploader(principal)
         if kind not in {"MARK_SCHEME", "QUESTION_PAPER"}:
             raise AppError(ErrorCode.VALIDATION_ERROR, "Unsupported document kind.")
         if self.exams.get(principal.tenant_id, exam_id) is None:

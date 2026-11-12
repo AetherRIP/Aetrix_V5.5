@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..audit.service import AuditService
 from ..core.config import Settings
 from ..core.errors import AppError, ErrorCode
-from ..core.security import Principal, ensure_exam_manager
+from ..core.security import Principal, ensure_exam_manager, ensure_uploader
 from ..db.models import MarkScheme, MarkSchemeVersion
 from ..db.repositories import ExamRepository, MarkSchemeRepository
 from ..documents.service import DocumentService
@@ -39,7 +39,8 @@ class SchemeService:
         declared_mime: str,
         data: bytes,
     ) -> tuple[MarkScheme, MarkSchemeVersion]:
-        ensure_exam_manager(principal)
+        # Uploading is open to reviewers; approving the version below is not.
+        ensure_uploader(principal)
         if self.exams.get(principal.tenant_id, exam_id) is None:
             raise AppError(ErrorCode.NOT_FOUND, "Exam not found.")
         clean_title = title.strip()

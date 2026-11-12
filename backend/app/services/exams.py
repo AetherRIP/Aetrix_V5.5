@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..audit.service import AuditService
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import content_hash
-from ..core.security import Principal, ensure_exam_manager
+from ..core.security import Principal, ensure_exam_manager, ensure_uploader
 from ..db.models import (
     Assignment,
     Exam,
@@ -281,7 +281,8 @@ class SubmissionService:
         self.audit = AuditService(session)
 
     def create(self, principal: Principal, payload: SubmissionCreate) -> Submission:
-        ensure_exam_manager(principal)
+        # Registering a script is part of manual ingestion, not exam management.
+        ensure_uploader(principal)
         if self.assignments.get(principal.tenant_id, payload.assignment_id) is None:
             raise AppError(ErrorCode.NOT_FOUND, "Assignment not found.")
         submission = self.submissions.create(
