@@ -109,8 +109,17 @@ const BO: Account = {
       user_row_id: '00000000-0000-4000-8000-0000000000c3',
       joined_at: '2026-01-04T09:00:00Z',
     },
+    {
+      tenant_id: '00000000-0000-4000-8000-000000000011',
+      workspace_name: 'Beta workspace',
+      workspace_slug: 'beta',
+      role: 'REVIEWER',
+      is_demo: false,
+      user_row_id: '00000000-0000-4000-8000-0000000000c4',
+      joined_at: '2026-02-05T09:00:00Z',
+    },
   ],
-  workspace_count: 1,
+  workspace_count: 2,
   has_workspace: true,
   pending_invitation_count: 0,
 }
@@ -198,6 +207,35 @@ async function open(
       })
     }
     if (request.method() !== 'GET') {
+      if (path.endsWith('/role')) {
+        // The real route answers with the account and the effect of the change
+        // on every membership row. Alpha moves; Beta is already REVIEWER.
+        const account = detail(path.split('/').slice(-2)[0])
+        return json({
+          account,
+          memberships: account.memberships.map((membership) =>
+            membership.workspace_slug === 'alpha'
+              ? {
+                  state: 'changed',
+                  reason: `Workspace membership moved from ${membership.role} to REVIEWER.`,
+                  workspace_name: membership.workspace_name,
+                  workspace_slug: membership.workspace_slug,
+                  user_row_id: membership.user_row_id,
+                  previous_role: membership.role,
+                  role: 'REVIEWER',
+                }
+              : {
+                  state: 'skipped',
+                  reason: `The workspace role is already ${membership.role}.`,
+                  workspace_name: membership.workspace_name,
+                  workspace_slug: membership.workspace_slug,
+                  user_row_id: membership.user_row_id,
+                  previous_role: membership.role,
+                  role: membership.role,
+                },
+          ),
+        })
+      }
       return json({ status: 'OK', message: 'Recorded.' })
     }
     if (path.endsWith('/accounts')) {
@@ -252,6 +290,33 @@ test.describe('platform account management', () => {
     await expect(page.getByText('workspace role TEACHER')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Platform activity' })).toBeVisible()
     await expect(page.getByText('account.role_changed')).toBeVisible()
+  })
+
+  test('a role change shows the changed and skipped membership rows', async ({ page }) => {
+    await open(page, 'owner')
+    page.on('dialog', (dialog) => void dialog.accept())
+
+    await page
+      .locator('.data-table tbody tr')
+      .filter({ hasText: 'bo@aetrix.test' })
+      .getByRole('button', { name: 'Inspect' })
+      .click()
+
+    await page.getByLabel('New platform role').selectOption('assistant')
+    await page.getByRole('button', { name: 'Change role' }).click()
+
+    await expect(page.getByText('Workspace membership effect')).toBeVisible()
+    await expect(page.getByText('changed', { exact: true })).toBeVisible()
+    await expect(page.getByText('skipped', { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('Alpha workspace: workspace role TEACHER → REVIEWER'),
+    ).toBeVisible()
+    await expect(
+      page.getByText('Beta workspace: The workspace role is already REVIEWER.'),
+    ).toBeVisible()
+    await expect(
+      page.getByText('Platform role saved; 1 workspace membership row moved.'),
+    ).toBeVisible()
   })
 
   test('search and status filters travel to the engine as query parameters', async ({ page }) => {

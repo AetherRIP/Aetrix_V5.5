@@ -61,12 +61,16 @@ UI_ROLE: dict[str, str] = {
 }
 
 #: The platform claim a workspace role writes, so a change on the Assistants
-#: screen does not leave ``app_metadata.aetrix_role`` behind.  ``ADMIN`` is
-#: deliberately absent: its platform spelling is ``platform_operator``, which
-#: carries platform authority, and a workspace role change must never grant that.
-#: ``PLATFORM_OWNER`` is never a granted workspace role either.
+#: screen does not leave ``app_metadata.aetrix_role`` behind.  Two roles are
+#: deliberately absent:
+#:
+#: * ``ADMIN``'s platform spelling is ``platform_operator``, which carries
+#:   platform authority, and a workspace role change must never grant that;
+#: * ``OWNER`` has no platform spelling. Writing ``supervisor`` for it would put
+#:   a workspace owner in the directory as a teacher, and a later "Teacher" save
+#:   from Account management would sync back as ``TEACHER`` and silently strip
+#:   the owner's member-management rights.  Ownership stays a workspace fact.
 PLATFORM_CLAIM_BY_WORKSPACE_ROLE: dict[str, str] = {
-    "OWNER": "supervisor",
     "TEACHER": "supervisor",
     "REVIEWER": "assistant",
     "VIEWER": "viewer",
@@ -403,6 +407,13 @@ class IdentityService:
         role change still stands.
         """
 
+        if new_role == "OWNER":
+            return {
+                "state": "skipped",
+                "reason": "Workspace ownership has no platform-role spelling; "
+                "app_metadata.aetrix_role was left as it is so a later platform "
+                "role change cannot demote the owner.",
+            }
         claim = PLATFORM_CLAIM_BY_WORKSPACE_ROLE.get(new_role)
         if claim is None:
             return {

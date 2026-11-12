@@ -25,11 +25,42 @@ surfaces only; reading customer data additionally requires a time-boxed, audited
 (see `../security/SECURITY_REQUIREMENTS.md` §7).
 
 `platform_owner` (identity-provider claim `aetrix_role: "owner"`) is assigned **only** in the
-identity provider's `app_metadata`. No endpoint or screen writes a role, so an ordinary administrator
-has no path to grant, modify or remove ownership; a downgrade requires identity-provider administrator
-access. The engine carries the value as `PLATFORM_OWNER` in `users.role`, where it is admitted to the
-fleet-administration gate and keeps the workspace capabilities of `OWNER`. Platform ownership widens
-*platform* administration only: engine data queries remain scoped to the tenant in the verified token.
+identity provider's `app_metadata`. No endpoint or screen writes platform ownership, so an ordinary
+administrator has no path to grant, modify or remove it; a downgrade requires identity-provider
+administrator access. The engine carries the value as `PLATFORM_OWNER` in `users.role`, where it is
+admitted to the fleet-administration gate and keeps the workspace capabilities of `OWNER`. Platform
+ownership widens *platform* administration only: engine data queries remain scoped to the tenant in
+the verified token.
+
+### 2.1 The platform role and the membership row stay in step
+
+The shell's role comes from `/api/v1/me`, which derives it from the engine's membership row. The
+platform directory reads `app_metadata.aetrix_role`. Saving a workspace-facing platform role through
+platform account management therefore also rewrites the engine membership row, so the two stores
+cannot silently disagree:
+
+| Platform role saved | Engine membership row written |
+|---|---|
+| `supervisor` (Teacher) | `TEACHER` |
+| `assistant` | `REVIEWER` |
+| `viewer` | `VIEWER` |
+| `platform_operator` | none — platform-only, no workspace role |
+
+The role-change response reports every membership row: `changed`, with `previous_role` and `role`, or
+`skipped`, with the reason it was left as it is. An account with no membership row is also reported
+as `skipped`; a bare success is never returned for a change that moved nothing.
+
+A change that would demote a workspace-owner (`OWNER`) row is **refused**: that row is left as
+`OWNER` and reported as `skipped` ("Workspace ownership is not changed by a platform role change;
+change it on the Assistants screen"). The last owner of a workspace therefore cannot be demoted this
+way. `PLATFORM_OWNER` rows are protected for the same reason. Ownership changes only as an explicit
+workspace role change on the Assistants screen.
+
+The other direction keeps the claim in step too: a workspace role change writes `supervisor` for
+`TEACHER`, `assistant` for `REVIEWER` and `viewer` for `VIEWER`, while `OWNER` (no platform spelling)
+and `ADMIN` (its platform spelling would carry platform authority) leave `app_metadata.aetrix_role`
+alone, and a platform `owner` or `platform_operator` claim is never overwritten. Both halves are
+recorded in the same `member.role_changed` audit event.
 
 ## 3. Permission keys
 

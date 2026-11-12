@@ -76,6 +76,27 @@ export type PlatformAccountDetail = PlatformAccount & {
   audit: AccountAuditEntry[]
 }
 
+/**
+ * What a platform-role change did to one workspace membership row. The engine
+ * reports rows it left alone too, so the screen never says "succeeded" when the
+ * account's shell role cannot have moved.
+ */
+export type MembershipEffect = {
+  state: 'changed' | 'skipped'
+  reason: string
+  workspace_name: string | null
+  workspace_slug: string | null
+  user_row_id: string | null
+  previous_role: string | null
+  role: string | null
+}
+
+/** The role-change result: the account after the change, plus every row. */
+export type AccountRoleChange = {
+  account: PlatformAccountDetail
+  memberships: MembershipEffect[]
+}
+
 export type AccountPage = {
   items: PlatformAccount[]
   total: number
@@ -141,8 +162,8 @@ export function updateAccountRole(
   role: ManageableRole,
   reason: string,
   options?: RequestOptions,
-): Promise<ApiResult<PlatformAccountDetail>> {
-  return apiPatch<PlatformAccountDetail>(
+): Promise<ApiResult<AccountRoleChange>> {
+  return apiPatch<AccountRoleChange>(
     `${BASE}/${encodeURIComponent(accountId)}/role`,
     { role, reason: reason.trim() || null },
     options,

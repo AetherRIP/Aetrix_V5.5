@@ -17,8 +17,10 @@ import {
   updateAccountStatus,
   type AccountCapability,
   type AccountPage,
+  type AccountRoleChange,
   type AccountStatus,
   type ManageableRole,
+  type MembershipEffect,
   type PlatformAccountDetail,
   type PlatformRole,
 } from '../lib/api/accounts'
@@ -201,6 +203,36 @@ function PlatformAccountManagement() {
       return true
     },
     [reloadDetail, reloadList],
+  )
+
+  // A role change answers with its membership effect, so this handler does not
+  // reuse `run`: a success notice must say whether any workspace row moved.
+  const changeRole = useCallback(
+    async (accountId: string, nextRole: ManageableRole, reason: string) => {
+      setBusy('Role change')
+      const result = await updateAccountRole(accountId, nextRole, reason, { token })
+      setBusy(null)
+      if (result.status === 'ok') {
+        const effects = Array.isArray(result.data.memberships) ? result.data.memberships : []
+        const moved = effects.filter((effect) => effect.state === 'changed').length
+        setNotice({
+          tone: 'ok',
+          message:
+            moved > 0
+              ? `Platform role saved; ${moved} workspace membership ${
+                  moved === 1 ? 'row' : 'rows'
+                } moved.`
+              : 'Platform role saved, but no workspace membership row moved, so the account’s shell role did not change.',
+        })
+        announcePlatformOverviewChanged()
+        reloadList()
+        reloadDetail()
+      } else {
+        setNotice(noticeFor('Role change', result))
+      }
+      return result
+    },
+    [reloadDetail, reloadList, token],
   )
 
   const resetPage = useCallback(() => {
@@ -461,6 +493,7 @@ function PlatformAccountManagement() {
             token={token}
             busy={busy}
             run={run}
+            changeRole={changeRole}
             onClose={() => setSelectedId(null)}
           />
         ) : null}
@@ -526,7 +559,7 @@ function PlatformAccountManagement() {
             {
               label: 'supervisor · assistant · viewer',
               detail:
-                'Workspace-facing roles. They are platform role values but confer no platform administration.',
+                'Workspace-facing roles. A change also rewrites the workspace membership role the shell reads; neither role confers platform administration.',
               state: 'available',
               icon: 'eye',
             },
@@ -673,6 +706,7 @@ function AccountDetailPanel({
   token,
   busy,
   run,
+  changeRole,
   onClose,
 }: {
   state: Read<PlatformAccountDetail>
@@ -685,20 +719,32 @@ function AccountDetailPanel({
     action: () => Promise<ApiResult<unknown>>,
     options?: { refreshDetail?: boolean },
   ) => Promise<boolean>
+  changeRole: (
+    accountId: string,
+    role: ManageableRole,
+    reason: string,
+  ) => Promise<ApiResult<AccountRoleChange>>
   onClose: () => void
 }) {
   const [nextRole, setNextRole] = useState<ManageableRole | ''>('')
   const [reason, setReason] = useState('')
+  const [roleEffect, setRoleEffect] = useState<MembershipEffect[] | null>(null)
   const [deleteEmail, setDeleteEmail] = useState('')
   const [deleteReason, setDeleteReason] = useState('')
   const panelRef = useRef<HTMLElement | null>(null)
   const scrolledAccount = useRef<string | null>(null)
+  const lastAccountId = useRef<string | null>(null)
 
   const accountId = state.state === 'ok' ? state.data.id : null
 
   useEffect(() => {
+    // A detail reload passes through a null id; that is not a change of account
+    // and must not clear the role-change effect the operator just asked for.
+    if (!accountId || accountId === lastAccountId.current) return
+    lastAccountId.current = accountId
     setNextRole('')
     setReason('')
+    setRoleEffect(null)
     setDeleteEmail('')
     setDeleteReason('')
   }, [accountId])
@@ -896,13 +942,15 @@ function AccountDetailPanel({
             ) {
               return
             }
-            void run('Role change', () =>
-              updateAccountRole(account.id, nextRole, reason, { token }),
-            ).then((ok) => {
-              if (ok) {
-                setNextRole('')
-                setReason('')
-              }
+            void changeRole(account.id, nextRole, reason).then((result) => {
+              if (result.status !== 'ok') return
+              setNextRole('')
+              setReason('')
+              // An engine that predates the membership report returns no list;
+              // an empty list then means the screen must not claim a move.
+              setRoleEffect(
+                Array.isArray(result.data.memberships) ? result.data.memberships : [],
+              )
             })
           }}
         >
@@ -937,6 +985,37 @@ function AccountDetailPanel({
             {busy === 'Role change' ? 'Saving…' : 'Change role'}
           </button>
         </form>
+      ) : null}
+
+      {roleEffect ? (
+        <div className="account-detail__action" aria-live="polite">
+          <span className="account-detail__action-label">Workspace membership effect</span>
+          {roleEffect.length === 0 ? (
+            <p className="panel-copy">
+              The engine returned no membership rows for this change, so the account’s
+              workspace role did not move.
+            </p>
+          ) : (
+            <ul className="gem-alerts">
+              {roleEffect.map((effect, index) => (
+                <li
+                  className="gem-alerts__row"
+                  key={effect.user_row_id ?? `membership-effect-${index}`}
+                >
+                  <StatusChip tone={effect.state === 'changed' ? 'ok' : 'neutral'}>
+                    {effect.state}
+                  </StatusChip>
+                  <span className="gem-alerts__message">
+                    {effect.workspace_name ? `${effect.workspace_name}: ` : ''}
+                    {effect.state === 'changed'
+                      ? `workspace role ${effect.previous_role} → ${effect.role}`
+                      : effect.reason}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       ) : null}
 
       {canChangeStatus ? (

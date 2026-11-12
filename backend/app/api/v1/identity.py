@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from ...core.config import Settings, get_settings
 from ...core.errors import AppError, ErrorCode
 from ...core.security import (
     Principal,
@@ -90,10 +91,13 @@ def update_member_role(
     payload: MemberRoleUpdate,
     principal: Principal = Depends(get_principal),
     session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> MemberRead:
     if workspace_id != principal.tenant_id:
         raise AppError(ErrorCode.NOT_FOUND, "Workspace not found.")
-    member = IdentityService(session).update_member_role(principal, user_id, payload)
+    member = IdentityService(session, settings.platform_admin).update_member_role(
+        principal, user_id, payload
+    )
     return MemberRead.model_validate(member)
 
 

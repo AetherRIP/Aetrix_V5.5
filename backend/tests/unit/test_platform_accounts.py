@@ -392,6 +392,7 @@ def _membership(subject: str) -> tuple[SimpleNamespace, SimpleNamespace]:
     )
     user_row = SimpleNamespace(
         id=uuid.uuid4(),
+        tenant_id=tenant.id,
         subject=subject,
         role="TEACHER",
         created_at=datetime(2026, 1, 3, tzinfo=UTC),
@@ -478,7 +479,7 @@ def test_role_change_preserves_other_app_metadata_and_is_audited():
     )
     service, client, session = _service([target])
 
-    detail = service.update_role(
+    result = service.update_role(
         _principal("PLATFORM_OWNER", subject="owner-subject"),
         "u-2",
         AccountRoleUpdate(role="assistant", reason="cover"),
@@ -490,9 +491,160 @@ def test_role_change_preserves_other_app_metadata_and_is_audited():
     actions = [event.action for event in session.events]
     assert actions[0] == "account.role_changed"
     assert session.events[0].detail["previous_role"] == "supervisor"
-    assert detail.role == "assistant"
+    assert result.account.role == "assistant"
+    # No membership row exists, and the response says so instead of reporting a
+    # bare success that the account's shell role cannot follow.
+    assert [effect.state for effect in result.memberships] == ["skipped"]
+    assert "no workspace membership row" in result.memberships[0].reason
     # Reading the changed record is recorded too, because it is another account.
     assert "account.inspected" in actions
+
+
+def test_role_change_updates_the_membership_role_the_shell_reads():
+    """The platform role must reach ``users.role``; otherwise /me still says teacher."""
+
+    target = _user("u-2", "bo@example.com", "supervisor")
+    membership = _membership("u-2")
+    member_row = membership[0]
+    assert member_row.role == "TEACHER"
+    service, client, session = _service([target], session=FakeSession([membership]))
+
+    result = service.update_role(
+        _principal("PLATFORM_OWNER", subject="owner-subject"),
+        "u-2",
+        AccountRoleUpdate(role="assistant", reason="cover"),
+    )
+
+    assert member_row.role == "REVIEWER"
+    assert result.account.memberships[0].role == "REVIEWER"
+    assert [effect.state for effect in result.memberships] == ["changed"]
+    assert result.memberships[0].previous_role == "TEACHER"
+    assert result.memberships[0].role == "REVIEWER"
+    assert result.memberships[0].workspace_name == "Alpha"
+    assert session.events[0].detail["membership_roles"] == [
+        {
+            "user_id": str(member_row.id),
+            "previous_role": "TEACHER",
+            "role": "REVIEWER",
+        }
+    ]
+    assert client.updates == [
+        ("u-2", {"app_metadata": {"aetrix_role": "assistant"}})
+    ]
+
+
+def test_a_role_change_reports_a_row_already_at_the_target_role():
+    target = _user("u-2", "bo@example.com", "supervisor")
+    membership = _membership("u-2")
+    member_row, _ = membership
+    assert member_row.role == "TEACHER"
+    service, client, _ = _service([target], session=FakeSession([membership]))
+
+    result = service.update_role(
+        _principal("PLATFORM_OWNER", subject="owner-subject"),
+        "u-2",
+        AccountRoleUpdate(role="supervisor", reason="no change needed"),
+    )
+
+    assert member_row.role == "TEACHER"
+    assert client.updates == [
+        ("u-2", {"app_metadata": {"aetrix_role": "supervisor"}})
+    ]
+    assert [effect.state for effect in result.memberships] == ["skipped"]
+    assert "already TEACHER" in result.memberships[0].reason
+
+
+def test_a_platform_operator_change_leaves_every_membership_row_alone():
+    target = _user("u-2", "bo@example.com", "supervisor")
+    membership = _membership("u-2")
+    member_row, _ = membership
+    service, client, session = _service([target], session=FakeSession([membership]))
+
+    result = service.update_role(
+        _principal("PLATFORM_OWNER", subject="owner-subject"),
+        "u-2",
+        AccountRoleUpdate(role="platform_operator", reason="platform duty"),
+    )
+
+    assert member_row.role == "TEACHER"
+    assert result.account.memberships[0].role == "TEACHER"
+    assert [effect.state for effect in result.memberships] == ["skipped"]
+    assert "platform-only" in result.memberships[0].reason
+    assert client.updates == [
+        ("u-2", {"app_metadata": {"aetrix_role": "platform_operator"}})
+    ]
+    assert session.events[0].detail["membership_roles"] == []
+
+
+def test_a_platform_owner_membership_row_is_never_rewritten():
+    target = _user("u-2", "bo@example.com", "supervisor")
+    membership = _membership("u-2")
+    member_row, _ = membership
+    member_row.role = "PLATFORM_OWNER"
+    service, client, session = _service([target], session=FakeSession([membership]))
+
+    result = service.update_role(
+        _principal("PLATFORM_OWNER", subject="owner-subject"),
+        "u-2",
+        AccountRoleUpdate(role="assistant", reason="cover"),
+    )
+
+    assert member_row.role == "PLATFORM_OWNER"
+    assert result.account.memberships[0].role == "PLATFORM_OWNER"
+    assert [effect.state for effect in result.memberships] == ["skipped"]
+    assert "Platform ownership is not a workspace role" in result.memberships[0].reason
+    assert client.updates == [
+        ("u-2", {"app_metadata": {"aetrix_role": "assistant"}})
+    ]
+    assert session.events[0].detail["membership_roles"] == []
+
+
+def test_a_role_change_for_an_account_with_no_membership_row_is_unaffected():
+    target = _user("u-2", "bo@example.com", "supervisor")
+    service, client, session = _service([target], session=FakeSession())
+
+    result = service.update_role(
+        _principal("PLATFORM_OWNER", subject="owner-subject"),
+        "u-2",
+        AccountRoleUpdate(role="assistant", reason="cover"),
+    )
+
+    assert result.account.memberships == []
+    assert result.account.has_workspace is False
+    assert [effect.state for effect in result.memberships] == ["skipped"]
+    assert "no workspace membership row" in result.memberships[0].reason
+    assert client.updates == [
+        ("u-2", {"app_metadata": {"aetrix_role": "assistant"}})
+    ]
+    assert session.events[0].detail["membership_roles"] == []
+
+
+def test_a_workspace_owner_survives_a_platform_role_round_trip():
+    """The Assistants screen writes ``supervisor`` for an owner; a later
+    "Teacher" save from Account management must not demote that row to TEACHER."""
+
+    target = _user("u-2", "bo@example.com", "supervisor")
+    membership = _membership("u-2")
+    member_row, _ = membership
+    member_row.role = "OWNER"
+    service, client, session = _service([target], session=FakeSession([membership]))
+
+    result = service.update_role(
+        _principal("PLATFORM_OWNER", subject="owner-subject"),
+        "u-2",
+        AccountRoleUpdate(role="supervisor", reason="Teacher"),
+    )
+
+    # The claim moves; the ownership row does not.
+    assert member_row.role == "OWNER"
+    assert result.account.memberships[0].role == "OWNER"
+    assert [effect.state for effect in result.memberships] == ["skipped"]
+    assert "Workspace ownership is not changed" in result.memberships[0].reason
+    assert client.updates == [
+        ("u-2", {"app_metadata": {"aetrix_role": "supervisor"}})
+    ]
+    assert session.events[0].action == "account.role_changed"
+    assert session.events[0].detail["membership_roles"] == []
 
 
 def test_suspension_uses_a_ban_and_reactivation_lifts_it():

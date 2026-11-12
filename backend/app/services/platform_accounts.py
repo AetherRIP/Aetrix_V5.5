@@ -42,10 +42,12 @@ from ..schemas.admin_accounts import (
     AccountCapabilityRead,
     AccountDeletion,
     AccountInvitationRead,
+    AccountMembershipEffectRead,
     AccountMembershipRead,
     AccountOperationRead,
     AccountPage,
     AccountQuery,
+    AccountRoleChangeRead,
     AccountRoleUpdate,
     AccountStatusUpdate,
     PlatformAccountDetail,
@@ -71,6 +73,18 @@ MANAGEABLE_ROLES: frozenset[str] = frozenset(
 
 #: What a platform administrator (not the owner) may grant.
 ADMIN_MANAGEABLE_ROLES: frozenset[str] = frozenset({"supervisor", "assistant", "viewer"})
+
+#: The engine's workspace role for each platform role that is also a workspace
+#: role.  ``/api/v1/me`` derives the shell's role from the membership row, not
+#: from the claim, so a platform-role change has to write that row too; without
+#: it an account the operator made an assistant keeps being shown as a teacher.
+#: ``platform_operator`` is platform-only and ownership is never assignable, so
+#: neither has an entry and neither touches a membership row.
+WORKSPACE_ROLE_BY_ACCOUNT_ROLE: dict[str, str] = {
+    "supervisor": "TEACHER",
+    "assistant": "REVIEWER",
+    "viewer": "VIEWER",
+}
 
 #: Supabase's ``ban_duration`` for an indefinite suspension: 100 years.  The
 #: account cannot sign in again until an administrator reactivates it.
@@ -475,8 +489,9 @@ class PlatformAccountService:
                 AccountOperationRead(
                     name="change platform role",
                     supported=configured,
-                    note="Writes app_metadata.aetrix_role. Platform ownership is "
-                    "never assignable here.",
+                    note="Writes app_metadata.aetrix_role and the matching workspace "
+                    "membership role the shell reads. Platform ownership is never "
+                    "assignable here.",
                 ),
                 AccountOperationRead(
                     name="suspend and reactivate",
@@ -718,9 +733,118 @@ class PlatformAccountService:
         )
 
     # -- mutations -------------------------------------------------------
+    def _planned_membership_roles(
+        self, subject: str, account_role: str
+    ) -> tuple[list[tuple[User, str]], list[AccountMembershipEffectRead]]:
+        """The membership rows a platform-role change would rewrite, and the rest.
+
+        The shell takes its role from ``/api/v1/me``, which derives ``ui_role``
+        from ``users.role`` and is final once the engine answers.  A change that
+        stopped at App Metadata would leave the account with its old experience
+        while the platform directory said otherwise.  A membership row that
+        carries platform ownership is never rewritten: ownership is not a
+        workspace role.
+
+        Every row the change did *not* move is returned with the reason it was
+        left alone, so the caller can report what actually happened instead of a
+        bare success.  An account with no membership row is reported the same
+        way, because that is the case where the shell role cannot change at all.
+
+        Workspace ownership is never rewritten here.  A workspace ``OWNER`` is
+        not the same concept as the account's platform role: the Assistants
+        screen writes ``supervisor`` for an owner, so treating a "Teacher" save
+        as a demotion would quietly strip that owner's member-management rights.
+        A ``PLATFORM_OWNER`` row is protected for the same reason.  Ownership
+        therefore survives every round trip; changing it is an explicit action on
+        the Assistants screen.
+        """
+
+        engine_role = WORKSPACE_ROLE_BY_ACCOUNT_ROLE.get(account_role)
+        if engine_role is None:
+            return [], [
+                AccountMembershipEffectRead(
+                    state="skipped",
+                    reason="A platform operator is platform-only, so no workspace "
+                    "membership row was touched.",
+                )
+            ]
+        rows = self.session.execute(
+            select(User, Tenant)
+            .join(Tenant, User.tenant_id == Tenant.id)
+            .where(User.subject == subject)
+            .order_by(Tenant.name)
+        ).all()
+        planned: list[tuple[User, str]] = []
+        effects: list[AccountMembershipEffectRead] = []
+        for member, tenant in rows:
+            if member.role == "PLATFORM_OWNER":
+                effects.append(
+                    AccountMembershipEffectRead(
+                        state="skipped",
+                        reason="Platform ownership is not a workspace role, so this "
+                        "row was left unchanged.",
+                        workspace_name=tenant.name,
+                        workspace_slug=tenant.slug,
+                        user_row_id=str(member.id),
+                        previous_role=member.role,
+                        role=member.role,
+                    )
+                )
+                continue
+            if member.role == "OWNER":
+                effects.append(
+                    AccountMembershipEffectRead(
+                        state="skipped",
+                        reason="Workspace ownership is not changed by a platform role "
+                        "change; change it on the Assistants screen.",
+                        workspace_name=tenant.name,
+                        workspace_slug=tenant.slug,
+                        user_row_id=str(member.id),
+                        previous_role=member.role,
+                        role=member.role,
+                    )
+                )
+                continue
+            if member.role == engine_role:
+                effects.append(
+                    AccountMembershipEffectRead(
+                        state="skipped",
+                        reason=f"The workspace role is already {engine_role}.",
+                        workspace_name=tenant.name,
+                        workspace_slug=tenant.slug,
+                        user_row_id=str(member.id),
+                        previous_role=member.role,
+                        role=member.role,
+                    )
+                )
+                continue
+            planned.append((member, engine_role))
+            effects.append(
+                AccountMembershipEffectRead(
+                    state="changed",
+                    reason=f"Workspace membership moved from {member.role} to "
+                    f"{engine_role}.",
+                    workspace_name=tenant.name,
+                    workspace_slug=tenant.slug,
+                    user_row_id=str(member.id),
+                    previous_role=member.role,
+                    role=engine_role,
+                )
+            )
+        if not rows:
+            effects.append(
+                AccountMembershipEffectRead(
+                    state="skipped",
+                    reason="This account has no workspace membership row, so its "
+                    "shell role did not change. Invite it to a workspace to give it "
+                    "one.",
+                )
+            )
+        return planned, effects
+
     def update_role(
         self, actor: Principal, account_id: str, payload: AccountRoleUpdate
-    ) -> PlatformAccountDetail:
+    ) -> AccountRoleChangeRead:
         ensure_platform_admin(actor)
         with self._client() as client:
             target = client.get_user(account_id)
@@ -733,18 +857,38 @@ class PlatformAccountService:
             current_role=current,
             new_role=payload.role,
         )
+        # Plan the membership rewrite first: a refusal must leave both the claim
+        # and every membership row untouched.
+        planned, effects = self._planned_membership_roles(str(target["id"]), payload.role)
+        membership_roles = [
+            {
+                "user_id": str(member.id),
+                "previous_role": member.role,
+                "role": engine_role,
+            }
+            for member, engine_role in planned
+        ]
         metadata = dict(target.get("app_metadata") or {})
         metadata["aetrix_role"] = payload.role
         with self._client() as client:
             client.update_user(account_id, {"app_metadata": metadata})
+        for member, engine_role in planned:
+            member.role = engine_role
         self._record(
             actor,
             "account.role_changed",
             account_id,
             target.get("email"),
-            {"previous_role": current, "role": payload.role, "reason": payload.reason},
+            {
+                "previous_role": current,
+                "role": payload.role,
+                "reason": payload.reason,
+                "membership_roles": membership_roles,
+            },
         )
-        return self.get_account(actor, account_id)
+        return AccountRoleChangeRead(
+            account=self.get_account(actor, account_id), memberships=effects
+        )
 
     def set_status(
         self, actor: Principal, account_id: str, payload: AccountStatusUpdate

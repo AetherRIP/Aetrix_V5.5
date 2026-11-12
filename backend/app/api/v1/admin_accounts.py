@@ -27,6 +27,7 @@ from ...schemas.admin_accounts import (
     AccountDeletion,
     AccountPage,
     AccountQuery,
+    AccountRoleChangeRead,
     AccountRoleUpdate,
     AccountStatusUpdate,
     PlatformAccountDetail,
@@ -99,13 +100,13 @@ def get_account(
     return service.get_account(principal, account_id.strip())
 
 
-@router.patch("/{account_id}/role", response_model=PlatformAccountDetail)
+@router.patch("/{account_id}/role", response_model=AccountRoleChangeRead)
 def update_role(
     account_id: str,
     payload: AccountRoleUpdate,
     principal: Principal = Depends(require_platform_admin),
     service: PlatformAccountService = Depends(get_platform_accounts),
-) -> PlatformAccountDetail:
+) -> AccountRoleChangeRead:
     return service.update_role(principal, account_id.strip(), payload)
 
 

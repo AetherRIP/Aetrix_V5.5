@@ -82,6 +82,30 @@ class PlatformAccountDetail(PlatformAccountRead):
     audit: list[AccountAuditRead] = Field(default_factory=list)
 
 
+class AccountMembershipEffectRead(BaseModel):
+    """One membership row a role change moved, or one it deliberately left.
+
+    ``state`` is ``changed`` when the row now carries the new workspace role and
+    ``skipped`` when it was left as it is; ``reason`` always says which, so an
+    operator is never told only that the request succeeded.
+    """
+
+    state: Literal["changed", "skipped"]
+    reason: str
+    workspace_name: str | None = None
+    workspace_slug: str | None = None
+    user_row_id: str | None = None
+    previous_role: str | None = None
+    role: str | None = None
+
+
+class AccountRoleChangeRead(BaseModel):
+    """The role-change result: the account after the change, plus every row."""
+
+    account: PlatformAccountDetail
+    memberships: list[AccountMembershipEffectRead] = Field(default_factory=list)
+
+
 class AccountPage(BaseModel):
     items: list[PlatformAccountRead]
     total: int
