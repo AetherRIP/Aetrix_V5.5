@@ -1,4 +1,5 @@
-import { expect, test, type Page, type Route } from '@playwright/test'
+import { expect, test } from './support/fixtures'
+import type { Page, Route } from '@playwright/test'
 
 /**
  * Google Classroom connection screen.

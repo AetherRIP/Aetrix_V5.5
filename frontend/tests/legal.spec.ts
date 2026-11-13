@@ -47,7 +47,7 @@ test.describe('legal documents', () => {
       await expect(
         page.getByText('Pre-release pilot · pending legal review').first(),
       ).toBeVisible()
-      await expect(page.getByText('2026-11-13').first()).toBeVisible()
+      await expect(page.locator('.legal__meta')).toContainText('1.0')
       await expect(page.locator('time').first()).toHaveAttribute('datetime', '2026-11-13')
     })
   }
@@ -117,44 +117,24 @@ test.describe('legal documents', () => {
   })
 })
 
-test.describe('sign-in acknowledgement', () => {
-  test('is unchecked by default and blocks a provider request until accepted', async ({
-    page,
-  }) => {
+test.describe('sign-in legal notice', () => {
+  test('links the documents and explains the recorded acceptance step', async ({ page }) => {
     await page.goto('/sign-in')
 
-    const acknowledgement = page.getByRole('checkbox', { name: /I have read and agree/i })
-    await expect(acknowledgement).toBeVisible()
-    await expect(acknowledgement).not.toBeChecked()
-
-    let authorizeRequests = 0
-    await page.route('**/auth/v1/authorize**', async (route) => {
-      authorizeRequests += 1
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/html',
-        body: '<!doctype html><title>provider stub</title><p>provider stub</p>',
-      })
-    })
-
-    await page.getByRole('button', { name: 'Continue with Google' }).click()
-    await expect(
-      page.getByRole('alert').filter({ hasText: /accept the Terms of Service/i }),
-    ).toBeVisible()
-    expect(authorizeRequests).toBe(0)
-
-    await acknowledgement.check()
-    await page.getByRole('button', { name: 'Continue with Google' }).click()
-    await expect.poll(() => authorizeRequests, { timeout: 15_000 }).toBeGreaterThan(0)
-  })
-
-  test('does not claim to record acceptance on the server', async ({ page }) => {
-    await page.goto('/sign-in')
-    await expect(page.locator('.legal-ack')).toContainText(
-      'does not yet record your acceptance',
+    const notice = page.locator('.auth__legal-notice')
+    await expect(notice).toBeVisible()
+    await expect(notice.getByRole('link', { name: 'Terms of Service' })).toHaveAttribute(
+      'href',
+      '/terms',
     )
-    await expect(page.locator('.legal-ack')).toContainText(
-      'sets no advertising or analytics cookies',
+    await expect(notice.getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute(
+      'href',
+      '/privacy',
     )
+    await expect(notice).toContainText('stored against your account')
+
+    // Acceptance is a post-authentication step recorded against the account, not
+    // a checkbox this browser would have to tick again on the next device.
+    await expect(page.getByRole('checkbox')).toHaveCount(0)
   })
 })

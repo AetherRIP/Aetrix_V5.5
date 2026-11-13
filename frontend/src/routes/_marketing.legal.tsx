@@ -1,9 +1,9 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import {
+  LEGAL_DOCUMENTS,
   LEGAL_DOCUMENT_LIST,
   LEGAL_UPDATED,
   LEGAL_UPDATED_ISO,
-  LEGAL_VERSION,
 } from '../lib/legal'
 import { LegalPlaceholder } from '../components/legal/LegalPage'
 
@@ -43,8 +43,11 @@ function LegalCentre() {
               <dd>Pre-release pilot · pending legal review</dd>
             </div>
             <div>
-              <dt>Version</dt>
-              <dd className="mono">{LEGAL_VERSION}</dd>
+              <dt>Acceptance versions</dt>
+              <dd className="mono">
+                Terms {LEGAL_DOCUMENTS.terms.version} · Privacy{' '}
+                {LEGAL_DOCUMENTS.privacy.version}
+              </dd>
             </div>
             <div>
               <dt>Last updated</dt>

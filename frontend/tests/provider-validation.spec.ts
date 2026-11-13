@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from './support/fixtures'
+import type { Page } from '@playwright/test'
 
 /**
  * The Validate action on the Gemini fleet screen.

@@ -1,4 +1,5 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test } from './support/fixtures'
+import type { BrowserContext, Page } from '@playwright/test'
 
 /**
  * Engine status.

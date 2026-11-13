@@ -418,7 +418,120 @@
   color: var(--text-3);
 }
 
-/* ── Sign-in acknowledgement ──────────────────────────────────────────── */
+/* ── Legal acceptance gate ────────────────────────────────────────────── */
+
+.legal-gate {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: clamp(1.5rem, 5vw, 4rem) var(--gutter, 1.25rem);
+  background:
+    radial-gradient(circle at 20% 0%, var(--surface-2), transparent 60%),
+    var(--bg);
+}
+
+.legal-gate__panel {
+  display: grid;
+  gap: var(--s-3);
+  width: min(720px, 100%);
+  padding: clamp(1.5rem, 4vw, 2.75rem);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.legal-gate__eyebrow {
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.legal-gate__title {
+  font-size: clamp(1.6rem, 3.4vw, 2.4rem);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.legal-gate__body,
+.legal-gate__note {
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.legal-gate__note {
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line-soft);
+  font-size: 0.75rem;
+  color: var(--text-3);
+}
+
+.legal-gate__note a,
+.legal-gate__body a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.legal-gate__form {
+  display: grid;
+  gap: var(--s-4);
+  margin-top: var(--s-2);
+}
+
+.legal-gate__docs {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.legal-gate__version {
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.legal-gate__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+.legal-gate__alert {
+  padding: var(--s-3) var(--s-4);
+  border-left: 2px solid var(--text);
+  background: var(--surface-2);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.auth__legal-notice {
+  max-width: 62ch;
+  margin-top: var(--s-5);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.auth__legal-notice a {
+  color: var(--text-2);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.auth__legal-notice a:hover {
+  color: var(--text);
+}
+
+/* ── Acceptance rows (shared with the gate) ───────────────────────────── */
 
 .legal-ack {
   display: grid;

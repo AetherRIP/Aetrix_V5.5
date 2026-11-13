@@ -350,8 +350,8 @@ function PrivacyPolicy() {
 
         <p>
           Consent is not the basis for the core service: an account cannot function without the
-          processing described above, and acknowledging the privacy notice on the sign-in page is
-          not consent to optional processing. Where special-category data is involved — for
+          processing described above, and accepting the Privacy Policy in order to open the
+          workspace is not consent to optional processing. Where special-category data is involved — for
           example, health information visible on a script — the pilot does not seek it and the
           institution must identify its own condition for processing it.
         </p>

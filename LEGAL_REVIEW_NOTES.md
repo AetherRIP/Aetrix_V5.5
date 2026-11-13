@@ -2,8 +2,9 @@
 
 > **Amended 13 November 2026.** The legal surface was expanded from `/privacy` and `/terms` to eight
 documents plus a `/legal` centre: Cookie Policy, Acceptable Use, AI Use Disclosure, Copyright and IP,
-Security and Vulnerability Disclosure, and Account Deletion and Data Requests. Sign-in is now gated on
-an explicit, unchecked acknowledgement. The 9 November sections below remain the record of the first
+Security and Vulnerability Disclosure, and Account Deletion and Data Requests. The workspace is now
+gated on an explicit acceptance of the current Terms of Service and Privacy Policy versions, recorded
+against the signed-in account in `public.legal_acceptances` rather than in the browser. The 9 November sections below remain the record of the first
 two pages; the current audit, regulatory assessment, gaps and verification are in
 `docs/legal/LEGAL_COMPLIANCE_REPORT.md`. The placeholders and open decisions in sections 3–6 are
 still unresolved.

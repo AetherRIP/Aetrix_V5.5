@@ -14,6 +14,7 @@ import { useEngineSession } from '../lib/api/session'
 import { identityService } from '../lib/services'
 import { Icon } from '../components/ui/Icons'
 import { StatePanel } from '../components/app/StatePanel'
+import { LegalAcceptanceGate } from '../components/legal/LegalAcceptanceGate'
 
 export const Route = createFileRoute('/_app')({
   component: AppLayout,
@@ -447,13 +448,16 @@ function AppLayout() {
   const meta = pageMeta(routePath)
   const permitted = allowsPath(role, routePath)
 
+  // Every authenticated route sits behind the legal acceptance gate, which
+  // reads the account's recorded acceptance from the database on each load.
   return (
-    <AppShell
-      title={meta.title}
+    <LegalAcceptanceGate>
+      <AppShell
+        title={meta.title}
       eyebrow={meta.eyebrow}
-      description={meta.description}
-      role={role}
-    >
+                description={meta.description}
+        role={role}
+      >
       {permitted ? (
         <Outlet />
       ) : (
@@ -476,6 +480,7 @@ function AppLayout() {
           </StatePanel>
         </div>
       )}
-    </AppShell>
+      </AppShell>
+    </LegalAcceptanceGate>
   )
 }

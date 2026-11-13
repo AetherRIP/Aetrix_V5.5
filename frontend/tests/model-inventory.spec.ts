@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from './support/fixtures'
+import type { Page } from '@playwright/test'
 
 const OWNER_ID = '00000000-0000-4000-8000-000000000001'
 const TENANT_ID = '00000000-0000-4000-8000-000000000010'

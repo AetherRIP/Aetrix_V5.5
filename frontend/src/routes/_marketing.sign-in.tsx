@@ -6,10 +6,7 @@ import { useScrollReveal } from '../lib/hooks'
 import { AmbientField } from '../components/site/AmbientField'
 import { HandshakeTrace } from '../components/site/HandshakeTrace'
 import { Icon } from '../components/ui/Icons'
-import {
-  LegalAcknowledgement,
-  useLegalAcknowledgement,
-} from '../components/legal/LegalAcknowledgement'
+import { LEGAL_DOCUMENTS } from '../lib/legal'
 
 export const Route = createFileRoute('/_marketing/sign-in')({
   head: () => ({
@@ -70,9 +67,6 @@ function SignIn() {
   const [formError, setFormError] = useState<string | null>(null)
   const [formBusy, setFormBusy] = useState(false)
   const passwordInput = useRef<HTMLInputElement>(null)
-  // Accounts are provisioned elsewhere, so sign-in is the first action a person
-  // can take. It is gated on an explicit acknowledgement of the legal documents.
-  const acknowledgement = useLegalAcknowledgement()
   useScrollReveal()
 
   useEffect(() => {
@@ -84,7 +78,6 @@ function SignIn() {
   const canAuthenticate = status !== 'unconfigured'
 
   async function startGoogle() {
-    if (!acknowledgement.confirmAccepted()) return
     setBusy(true)
     setFormError(null)
     await signInWithGoogle(next)
@@ -99,7 +92,6 @@ function SignIn() {
       setFormError('Enter both an email address and a password.')
       return
     }
-    if (!acknowledgement.confirmAccepted()) return
     setFormBusy(true)
     const result = await signInWithPassword(email.trim(), password)
     setFormBusy(false)
@@ -154,7 +146,15 @@ function SignIn() {
                 </p>
               ) : null}
 
-              <LegalAcknowledgement ack={acknowledgement} />
+              <p className="auth__legal-notice">
+                By signing in you agree to the{' '}
+                <Link to={LEGAL_DOCUMENTS.terms.path}>Terms of Service</Link> and
+                acknowledge the <Link to={LEGAL_DOCUMENTS.privacy.path}>Privacy Policy</Link>,{' '}
+                <Link to={LEGAL_DOCUMENTS.cookies.path}>Cookie Policy</Link> and{' '}
+                <Link to={LEGAL_DOCUMENTS['ai-disclosure'].path}>AI Use Disclosure</Link>. If
+                this account has not accepted their current versions, you will be asked once
+                after signing in, and the acceptance is stored against your account.
+              </p>
 
               <div className="auth__actions">
                 <button

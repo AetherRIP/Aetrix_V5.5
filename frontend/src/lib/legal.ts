@@ -1,11 +1,19 @@
 /**
  * The public legal documents, in one place.
  *
- * Every legal route, the footer, the legal centre and the sign-in
- * acknowledgement read from here, so a version bump or a corrected date changes
- * one value rather than eight pages. The version is the ISO date the document
- * was last changed; it is shown to the reader and is what the acknowledgement
- * refers to.
+ * Every legal route, the footer, the legal centre and the acceptance gate read
+ * from here, so a version bump or a corrected date changes one value rather than
+ * nine pages.
+ *
+ * VERSIONS AND RE-ACCEPTANCE
+ * `version` is the acceptance version, not the publication date. It is bumped
+ * only when the document changes materially — a new obligation, a different data
+ * use, a new provider, a different liability position. A typo, a broken link or a
+ * layout fix must not bump it, because a bump asks every signed-in person to
+ * accept the document again.
+ *
+ * Each document is versioned separately: bumping the Terms to 1.1 requires the
+ * Terms to be accepted again and leaves an accepted Privacy Policy 1.0 alone.
  */
 
 export type LegalDocumentId =
@@ -36,12 +44,15 @@ export type LegalDocument = {
   summary: string
   updated: string
   updatedIso: string
+  /** Acceptance version. Bump only for a material change. */
   version: string
 }
 
 export const LEGAL_UPDATED = '13 November 2026'
 export const LEGAL_UPDATED_ISO = '2026-11-13'
-export const LEGAL_VERSION = '2026-11-13'
+
+/** Version of the first published set; every document starts at 1.0. */
+export const LEGAL_INITIAL_VERSION = '1.0'
 
 export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
   terms: {
@@ -53,7 +64,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'The agreement for using the pilot: eligibility, roles, acceptable use, AI marking limits, intellectual property, liability and governing law.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
   privacy: {
     id: 'privacy',
@@ -64,7 +75,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'What Aetrix collects, why it is processed, the legal bases relied on, the providers involved, retention, transfers and your rights.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
   cookies: {
     id: 'cookies',
@@ -75,7 +86,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'Every cookie and browser-storage key the site actually uses, why it exists, how long it lasts and how to remove it.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
   'acceptable-use': {
     id: 'acceptable-use',
@@ -86,7 +97,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'The conduct that is prohibited on the service, including access abuse, malicious uploads, content misuse and attempts to manipulate AI output.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
   'ai-disclosure': {
     id: 'ai-disclosure',
@@ -97,7 +108,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'Which features use AI, what content is sent to a provider, what the output can get wrong, and why a human must review it.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
   copyright: {
     id: 'copyright',
@@ -108,7 +119,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'Who owns the platform and the uploaded content, the licence needed to operate the service, and how to report infringing material.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
   security: {
     id: 'security',
@@ -119,7 +130,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'The controls the pilot actually implements, the limitations it does not hide, and how to report a vulnerability responsibly.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
   'account-deletion': {
     id: 'account-deletion',
@@ -130,8 +141,18 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {
       'How to ask for access, correction or deletion while self-service controls do not exist, and what the pilot can and cannot remove.',
     updated: LEGAL_UPDATED,
     updatedIso: LEGAL_UPDATED_ISO,
-    version: LEGAL_VERSION,
+    version: LEGAL_INITIAL_VERSION,
   },
+}
+
+/**
+ * The documents a signed-in account must accept, keyed by the `document_type`
+ * stored in `public.legal_acceptances`. This mapping is the single place where
+ * the stored identifier and the published document meet.
+ */
+export const LEGAL_REQUIRED_DOCUMENTS: Record<string, LegalDocumentId> = {
+  terms_of_service: 'terms',
+  privacy_policy: 'privacy',
 }
 
 /** Registry order, used by the legal centre, the footer and the policy sidebar. */

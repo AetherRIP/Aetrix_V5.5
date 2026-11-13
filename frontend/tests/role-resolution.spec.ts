@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './support/fixtures'
 import { ENGINE_ROLE, resolveRole, ROLE_META } from '../src/lib/auth/roles'
 
 /**

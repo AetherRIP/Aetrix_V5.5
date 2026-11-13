@@ -73,10 +73,12 @@ function TermsOfService() {
           use the service.
         </p>
         <p>
-          The sign-in page requires you to acknowledge these terms and the privacy documents
-          before it will start a sign-in. The pilot does not yet record that acknowledgement
-          against your account on the server; it is enforced in the browser on each visit, and
-          the legal review notes record the missing versioned record as an open item.
+          After you sign in, the service asks you to accept these terms and the Privacy Policy
+          before it opens a workspace, and it does not open one if you have not. Each acceptance
+          is recorded against your account — the document, its version, and a server-generated
+          time — so it is asked once and not on every visit, refresh or device. You are asked
+          again only when a document you accepted is published at a new version. If the record
+          cannot be read, or cannot be written when you accept, the workspace stays closed.
         </p>
       </LegalSection>
 

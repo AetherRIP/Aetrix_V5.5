@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from './support/fixtures'
+import type { Page } from '@playwright/test'
 
 /**
  * The Google quota tab. The report is intercepted, so this checks that Google's
