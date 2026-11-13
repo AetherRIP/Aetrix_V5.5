@@ -1,5 +1,13 @@
 # Aetrix legal pages — review notes
 
+> **Amended 13 November 2026.** The legal surface was expanded from `/privacy` and `/terms` to eight
+documents plus a `/legal` centre: Cookie Policy, Acceptable Use, AI Use Disclosure, Copyright and IP,
+Security and Vulnerability Disclosure, and Account Deletion and Data Requests. Sign-in is now gated on
+an explicit, unchecked acknowledgement. The 9 November sections below remain the record of the first
+two pages; the current audit, regulatory assessment, gaps and verification are in
+`docs/legal/LEGAL_COMPLIANCE_REPORT.md`. The placeholders and open decisions in sections 3–6 are
+still unresolved.
+
 Status: **pre-release draft, published for review on 9 November 2026.**
 Pages: `/privacy` and `/terms` on `https://aetrix.pages.dev`.
 These notes record what the source code actually supports, what remains unverified, and what must be decided before the pages are treated as final. They are not legal advice.

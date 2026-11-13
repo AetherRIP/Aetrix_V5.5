@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { Link, createFileRoute, useRouter } from '@tanstack/react-router'
 import { StatePanel } from '../components/app/StatePanel'
 import { ThemeSwitch } from '../components/site/ThemeSwitch'
 import { displayName, useAuth } from '../lib/auth/AuthProvider'
@@ -94,6 +94,30 @@ function Settings() {
           </button>
         </section>
       </div>
+
+      <section className="app-card" aria-labelledby="legal-title">
+        <h2 className="app-card__title" id="legal-title">
+          Privacy and legal
+        </h2>
+        <p className="app-card__body">
+          These documents describe what this build actually does. They are pre-release drafts,
+          not legal advice, and the operator’s legal identity is still marked as unconfirmed.
+        </p>
+        <p className="app-card__body">
+          <Link to="/privacy">Privacy Policy</Link> · <Link to="/terms">Terms of Service</Link> ·{' '}
+          <Link to="/cookies">Cookie Policy</Link> ·{' '}
+          <Link to="/ai-disclosure">AI Use Disclosure</Link> ·{' '}
+          <Link to="/acceptable-use">Acceptable Use</Link> ·{' '}
+          <Link to="/copyright">Copyright and IP</Link> · <Link to="/security">Security</Link> ·{' '}
+          <Link to="/account-deletion">Deletion and data requests</Link> ·{' '}
+          <Link to="/legal">All legal documents</Link>
+        </p>
+        <p className="app-card__body">
+          This build has no self-service deletion or export. The deletion page explains the
+          manual request process and what may remain in audit records, backups and provider
+          logs. Signing out removes this device’s session; it does not delete your account.
+        </p>
+      </section>
 
       <StatePanel
         tone="wip"

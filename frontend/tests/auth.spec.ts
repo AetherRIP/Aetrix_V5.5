@@ -63,6 +63,19 @@ test.describe('sign-in page', () => {
     await expect(page.getByRole('heading', { name: 'Sign in to Aetrix' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled()
 
+    // Sign-in is the first action an invited account can take, so the legal
+    // acknowledgement is mandatory, starts unchecked and names the documents.
+    const acknowledgement = page.getByRole('checkbox', {
+      name: /I have read and agree to the Terms of Service/i,
+    })
+    await expect(acknowledgement).toBeVisible()
+    await expect(acknowledgement).not.toBeChecked()
+    await expect(page.locator('.legal-ack a[href="/terms"]')).toBeVisible()
+    await expect(page.locator('.legal-ack a[href="/privacy"]')).toBeVisible()
+    await expect(page.locator('.legal-ack')).toContainText(
+      'does not yet record your acceptance',
+    )
+
     // There is no separate signup form, and the page says so.
     await expect(page.getByText(/no separate sign-up form/i)).toBeVisible()
 
@@ -76,6 +89,33 @@ test.describe('sign-in page', () => {
     )
 
     // Nothing is signed in at this point.
+    expect(await storedSession(page)).toBeNull()
+  })
+
+  test('a sign-in cannot start before the terms are acknowledged', async ({ context }) => {
+    const page = await open(context, '/sign-in')
+
+    let authorizeRequests = 0
+    await page.route('**/auth/v1/authorize**', async (route) => {
+      authorizeRequests += 1
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<!doctype html><title>provider stub</title><p>provider stub</p>',
+      })
+    })
+
+    await page.getByRole('button', { name: 'Continue with Google' }).click()
+
+    // The refusal is explained, focus moves to the control that is missing, and
+    // no provider request is made.
+    await expect(
+      page.getByRole('alert').filter({ hasText: /accept the Terms of Service/i }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('checkbox', { name: /I have read and agree/i }),
+    ).toBeFocused()
+    expect(authorizeRequests).toBe(0)
     expect(await storedSession(page)).toBeNull()
   })
 
@@ -93,6 +133,9 @@ test.describe('sign-in page', () => {
       })
     })
 
+    await page
+      .getByRole('checkbox', { name: /I have read and agree/i })
+      .check()
     await page.getByRole('button', { name: 'Continue with Google' }).click()
     await expect.poll(() => authorizeUrl, { timeout: 15_000 }).toContain('/auth/v1/authorize')
 

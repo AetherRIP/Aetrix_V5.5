@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
+import { LEGAL_DOCUMENT_LIST, type LegalDocument } from '../../lib/legal'
 
 export type LegalTocItem = { id: string; label: string }
 
 type LegalPageProps = {
+  doc: LegalDocument
   eyebrow: string
   title: string
   lede: string
-  updated: string
   toc: LegalTocItem[]
   children: ReactNode
 }
@@ -16,8 +17,11 @@ type LegalPageProps = {
  * Shared shell for the public legal pages. It is deliberately not behind the
  * application shell or the session gate: Google's OAuth review and any visitor
  * must be able to read these pages without an account.
+ *
+ * The version and last-updated date come from the document registry, so they
+ * cannot drift between the page and the legal centre.
  */
-export function LegalPage({ eyebrow, title, lede, updated, toc, children }: LegalPageProps) {
+export function LegalPage({ doc, eyebrow, title, lede, toc, children }: LegalPageProps) {
   return (
     <article className="legal" id="legal-top">
       <div className="shell">
@@ -32,9 +36,13 @@ export function LegalPage({ eyebrow, title, lede, updated, toc, children }: Lega
               <dd>Pre-release pilot · pending legal review</dd>
             </div>
             <div>
+              <dt>Version</dt>
+              <dd className="mono">{doc.version}</dd>
+            </div>
+            <div>
               <dt>Last updated</dt>
               <dd>
-                <time dateTime="2026-11-09">{updated}</time>
+                <time dateTime={doc.updatedIso}>{doc.updated}</time>
               </dd>
             </div>
             <div>
@@ -68,8 +76,13 @@ export function LegalPage({ eyebrow, title, lede, updated, toc, children }: Lega
               ))}
             </ol>
             <div className="legal__toc-links">
-              <Link to="/privacy">Privacy Policy</Link>
-              <Link to="/terms">Terms of Service</Link>
+              <span className="legal__toc-links-title mono">Legal documents</span>
+              {LEGAL_DOCUMENT_LIST.filter((item) => item.id !== doc.id).map((item) => (
+                <Link key={item.id} to={item.path}>
+                  {item.title}
+                </Link>
+              ))}
+              <Link to="/legal">Legal centre</Link>
               <Link to="/">Back to Aetrix</Link>
               <a href="#legal-top">Back to top</a>
             </div>

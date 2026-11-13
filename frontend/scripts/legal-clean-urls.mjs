@@ -10,7 +10,17 @@ import { fileURLToPath } from 'node:url'
 
 const clientRoot = fileURLToPath(new URL('../dist/client/', import.meta.url))
 
-for (const route of ['privacy', 'terms']) {
+for (const route of [
+  'legal',
+  'privacy',
+  'terms',
+  'cookies',
+  'acceptable-use',
+  'ai-disclosure',
+  'copyright',
+  'security',
+  'account-deletion',
+]) {
   const source = `${clientRoot}${route}/index.html`
   const target = `${clientRoot}${route}.html`
   await copyFile(source, target)

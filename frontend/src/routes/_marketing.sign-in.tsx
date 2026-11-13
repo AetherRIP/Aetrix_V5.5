@@ -6,6 +6,10 @@ import { useScrollReveal } from '../lib/hooks'
 import { AmbientField } from '../components/site/AmbientField'
 import { HandshakeTrace } from '../components/site/HandshakeTrace'
 import { Icon } from '../components/ui/Icons'
+import {
+  LegalAcknowledgement,
+  useLegalAcknowledgement,
+} from '../components/legal/LegalAcknowledgement'
 
 export const Route = createFileRoute('/_marketing/sign-in')({
   head: () => ({
@@ -66,6 +70,9 @@ function SignIn() {
   const [formError, setFormError] = useState<string | null>(null)
   const [formBusy, setFormBusy] = useState(false)
   const passwordInput = useRef<HTMLInputElement>(null)
+  // Accounts are provisioned elsewhere, so sign-in is the first action a person
+  // can take. It is gated on an explicit acknowledgement of the legal documents.
+  const acknowledgement = useLegalAcknowledgement()
   useScrollReveal()
 
   useEffect(() => {
@@ -77,6 +84,7 @@ function SignIn() {
   const canAuthenticate = status !== 'unconfigured'
 
   async function startGoogle() {
+    if (!acknowledgement.confirmAccepted()) return
     setBusy(true)
     setFormError(null)
     await signInWithGoogle(next)
@@ -91,6 +99,7 @@ function SignIn() {
       setFormError('Enter both an email address and a password.')
       return
     }
+    if (!acknowledgement.confirmAccepted()) return
     setFormBusy(true)
     const result = await signInWithPassword(email.trim(), password)
     setFormBusy(false)
@@ -144,6 +153,8 @@ function SignIn() {
                   <span>Signed in. Opening your workspace…</span>
                 </p>
               ) : null}
+
+              <LegalAcknowledgement ack={acknowledgement} />
 
               <div className="auth__actions">
                 <button

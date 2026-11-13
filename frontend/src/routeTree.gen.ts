@@ -26,7 +26,14 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppStudentsRouteImport } from './routes/_app.students'
 import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
 import { Route as MarketingIndexRouteImport } from './routes/_marketing.index'
+import { Route as MarketingAcceptableUseRouteImport } from './routes/_marketing.acceptable-use'
+import { Route as MarketingAccountDeletionRouteImport } from './routes/_marketing.account-deletion'
+import { Route as MarketingAiDisclosureRouteImport } from './routes/_marketing.ai-disclosure'
+import { Route as MarketingCookiesRouteImport } from './routes/_marketing.cookies'
+import { Route as MarketingCopyrightRouteImport } from './routes/_marketing.copyright'
+import { Route as MarketingLegalRouteImport } from './routes/_marketing.legal'
 import { Route as MarketingPrivacyRouteImport } from './routes/_marketing.privacy'
+import { Route as MarketingSecurityRouteImport } from './routes/_marketing.security'
 import { Route as MarketingSignInRouteImport } from './routes/_marketing.sign-in'
 import { Route as MarketingTermsRouteImport } from './routes/_marketing.terms'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
@@ -130,9 +137,45 @@ const MarketingIndexRoute = MarketingIndexRouteImport.update({
   path: '/',
   getParentRoute: () => MarketingRoute,
 } as any)
+const MarketingAcceptableUseRoute = MarketingAcceptableUseRouteImport.update({
+  id: '/acceptable-use',
+  path: '/acceptable-use',
+  getParentRoute: () => MarketingRoute,
+} as any)
+const MarketingAccountDeletionRoute =
+  MarketingAccountDeletionRouteImport.update({
+    id: '/account-deletion',
+    path: '/account-deletion',
+    getParentRoute: () => MarketingRoute,
+  } as any)
+const MarketingAiDisclosureRoute = MarketingAiDisclosureRouteImport.update({
+  id: '/ai-disclosure',
+  path: '/ai-disclosure',
+  getParentRoute: () => MarketingRoute,
+} as any)
+const MarketingCookiesRoute = MarketingCookiesRouteImport.update({
+  id: '/cookies',
+  path: '/cookies',
+  getParentRoute: () => MarketingRoute,
+} as any)
+const MarketingCopyrightRoute = MarketingCopyrightRouteImport.update({
+  id: '/copyright',
+  path: '/copyright',
+  getParentRoute: () => MarketingRoute,
+} as any)
+const MarketingLegalRoute = MarketingLegalRouteImport.update({
+  id: '/legal',
+  path: '/legal',
+  getParentRoute: () => MarketingRoute,
+} as any)
 const MarketingPrivacyRoute = MarketingPrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
+  getParentRoute: () => MarketingRoute,
+} as any)
+const MarketingSecurityRoute = MarketingSecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
   getParentRoute: () => MarketingRoute,
 } as any)
 const MarketingSignInRoute = MarketingSignInRouteImport.update({
@@ -249,7 +292,14 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRoute
   '/students': typeof AppStudentsRoute
   '/workspace': typeof AppWorkspaceRoute
+  '/acceptable-use': typeof MarketingAcceptableUseRoute
+  '/account-deletion': typeof MarketingAccountDeletionRoute
+  '/ai-disclosure': typeof MarketingAiDisclosureRoute
+  '/cookies': typeof MarketingCookiesRoute
+  '/copyright': typeof MarketingCopyrightRoute
+  '/legal': typeof MarketingLegalRoute
   '/privacy': typeof MarketingPrivacyRoute
+  '/security': typeof MarketingSecurityRoute
   '/sign-in': typeof MarketingSignInRoute
   '/terms': typeof MarketingTermsRoute
   '/auth/callback': typeof AuthCallbackRoute
@@ -286,7 +336,14 @@ export interface FileRoutesByTo {
   '/settings': typeof AppSettingsRoute
   '/students': typeof AppStudentsRoute
   '/workspace': typeof AppWorkspaceRoute
+  '/acceptable-use': typeof MarketingAcceptableUseRoute
+  '/account-deletion': typeof MarketingAccountDeletionRoute
+  '/ai-disclosure': typeof MarketingAiDisclosureRoute
+  '/cookies': typeof MarketingCookiesRoute
+  '/copyright': typeof MarketingCopyrightRoute
+  '/legal': typeof MarketingLegalRoute
   '/privacy': typeof MarketingPrivacyRoute
+  '/security': typeof MarketingSecurityRoute
   '/sign-in': typeof MarketingSignInRoute
   '/terms': typeof MarketingTermsRoute
   '/auth/callback': typeof AuthCallbackRoute
@@ -325,7 +382,14 @@ export interface FileRoutesById {
   '/_app/settings': typeof AppSettingsRoute
   '/_app/students': typeof AppStudentsRoute
   '/_app/workspace': typeof AppWorkspaceRoute
+  '/_marketing/acceptable-use': typeof MarketingAcceptableUseRoute
+  '/_marketing/account-deletion': typeof MarketingAccountDeletionRoute
+  '/_marketing/ai-disclosure': typeof MarketingAiDisclosureRoute
+  '/_marketing/cookies': typeof MarketingCookiesRoute
+  '/_marketing/copyright': typeof MarketingCopyrightRoute
+  '/_marketing/legal': typeof MarketingLegalRoute
   '/_marketing/privacy': typeof MarketingPrivacyRoute
+  '/_marketing/security': typeof MarketingSecurityRoute
   '/_marketing/sign-in': typeof MarketingSignInRoute
   '/_marketing/terms': typeof MarketingTermsRoute
   '/auth/callback': typeof AuthCallbackRoute
@@ -365,7 +429,14 @@ export interface FileRouteTypes {
     | '/settings'
     | '/students'
     | '/workspace'
+    | '/acceptable-use'
+    | '/account-deletion'
+    | '/ai-disclosure'
+    | '/cookies'
+    | '/copyright'
+    | '/legal'
     | '/privacy'
+    | '/security'
     | '/sign-in'
     | '/terms'
     | '/auth/callback'
@@ -402,7 +473,14 @@ export interface FileRouteTypes {
     | '/settings'
     | '/students'
     | '/workspace'
+    | '/acceptable-use'
+    | '/account-deletion'
+    | '/ai-disclosure'
+    | '/cookies'
+    | '/copyright'
+    | '/legal'
     | '/privacy'
+    | '/security'
     | '/sign-in'
     | '/terms'
     | '/auth/callback'
@@ -440,7 +518,14 @@ export interface FileRouteTypes {
     | '/_app/settings'
     | '/_app/students'
     | '/_app/workspace'
+    | '/_marketing/acceptable-use'
+    | '/_marketing/account-deletion'
+    | '/_marketing/ai-disclosure'
+    | '/_marketing/cookies'
+    | '/_marketing/copyright'
+    | '/_marketing/legal'
     | '/_marketing/privacy'
+    | '/_marketing/security'
     | '/_marketing/sign-in'
     | '/_marketing/terms'
     | '/auth/callback'
@@ -591,11 +676,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MarketingIndexRouteImport
       parentRoute: typeof MarketingRoute
     }
+    '/_marketing/acceptable-use': {
+      id: '/_marketing/acceptable-use'
+      path: '/acceptable-use'
+      fullPath: '/acceptable-use'
+      preLoaderRoute: typeof MarketingAcceptableUseRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/_marketing/account-deletion': {
+      id: '/_marketing/account-deletion'
+      path: '/account-deletion'
+      fullPath: '/account-deletion'
+      preLoaderRoute: typeof MarketingAccountDeletionRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/_marketing/ai-disclosure': {
+      id: '/_marketing/ai-disclosure'
+      path: '/ai-disclosure'
+      fullPath: '/ai-disclosure'
+      preLoaderRoute: typeof MarketingAiDisclosureRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/_marketing/cookies': {
+      id: '/_marketing/cookies'
+      path: '/cookies'
+      fullPath: '/cookies'
+      preLoaderRoute: typeof MarketingCookiesRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/_marketing/copyright': {
+      id: '/_marketing/copyright'
+      path: '/copyright'
+      fullPath: '/copyright'
+      preLoaderRoute: typeof MarketingCopyrightRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/_marketing/legal': {
+      id: '/_marketing/legal'
+      path: '/legal'
+      fullPath: '/legal'
+      preLoaderRoute: typeof MarketingLegalRouteImport
+      parentRoute: typeof MarketingRoute
+    }
     '/_marketing/privacy': {
       id: '/_marketing/privacy'
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof MarketingPrivacyRouteImport
+      parentRoute: typeof MarketingRoute
+    }
+    '/_marketing/security': {
+      id: '/_marketing/security'
+      path: '/security'
+      fullPath: '/security'
+      preLoaderRoute: typeof MarketingSecurityRouteImport
       parentRoute: typeof MarketingRoute
     }
     '/_marketing/sign-in': {
@@ -801,14 +935,28 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface MarketingRouteChildren {
+  MarketingAcceptableUseRoute: typeof MarketingAcceptableUseRoute
+  MarketingAccountDeletionRoute: typeof MarketingAccountDeletionRoute
+  MarketingAiDisclosureRoute: typeof MarketingAiDisclosureRoute
+  MarketingCookiesRoute: typeof MarketingCookiesRoute
+  MarketingCopyrightRoute: typeof MarketingCopyrightRoute
+  MarketingLegalRoute: typeof MarketingLegalRoute
   MarketingPrivacyRoute: typeof MarketingPrivacyRoute
+  MarketingSecurityRoute: typeof MarketingSecurityRoute
   MarketingSignInRoute: typeof MarketingSignInRoute
   MarketingTermsRoute: typeof MarketingTermsRoute
   MarketingIndexRoute: typeof MarketingIndexRoute
 }
 
 const MarketingRouteChildren: MarketingRouteChildren = {
+  MarketingAcceptableUseRoute: MarketingAcceptableUseRoute,
+  MarketingAccountDeletionRoute: MarketingAccountDeletionRoute,
+  MarketingAiDisclosureRoute: MarketingAiDisclosureRoute,
+  MarketingCookiesRoute: MarketingCookiesRoute,
+  MarketingCopyrightRoute: MarketingCopyrightRoute,
+  MarketingLegalRoute: MarketingLegalRoute,
   MarketingPrivacyRoute: MarketingPrivacyRoute,
+  MarketingSecurityRoute: MarketingSecurityRoute,
   MarketingSignInRoute: MarketingSignInRoute,
   MarketingTermsRoute: MarketingTermsRoute,
   MarketingIndexRoute: MarketingIndexRoute,
