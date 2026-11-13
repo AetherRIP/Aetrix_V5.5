@@ -197,11 +197,34 @@ Every path in `backend/` (engine, prompts, migrations, tests), `benchmark/`, `ex
 | `tsc --noEmit` (worktree at the committed tree) | Passed |
 | `vite build` incl. prerender and clean-URL artifacts | Passed; nine legal URLs emitted |
 | `tests/legal.spec.ts` | 16 passed (routes, cross-links, footer, consent gate, 390px overflow, axe) |
-| `tests/auth.spec.ts` + `tests/marketing.spec.ts` | 52 passed, 1 failed — the failure is a stale assertion at `auth.spec.ts:87` that also fails on unmodified HEAD (`#access` text concatenates `<dt>`/`<dd>` without whitespace); the uncommitted working tree already contains the fix, which was not included here |
+| `tests/auth.spec.ts` + `tests/marketing.spec.ts` | 52 passed, 1 failed — the failure is a stale assertion at `auth.spec.ts:87` on unmodified HEAD (the `#access` text concatenates `<dt>`/`<dd>` without whitespace); the uncommitted working tree already contains the fix, which was not included here |
 | `tests/responsive.spec.ts` + `tests/roles.spec.ts` | 116 passed |
 
-Deployment and post-deployment checks are recorded in the delivery message and in the commit that
-follows this one.
+**Deployment**
+
+| Item | Value |
+|---|---|
+| Branch | `feat/legal-compliance` |
+| Commit | `d0177f2` — `feat(legal): add website legal documentation and compliance pages` |
+| Production branch | `main`, fast-forwarded from `72c6801` to `d0177f2` (no merge commit, no unrelated commit) |
+| Cloudflare Pages project | `aetrix` |
+| Production deployment | `3516f3d8-b26b-47f6-99d0-e43cc7ba7368`, source `d0177f2`, status Active |
+| Canonical host | `https://aetrix.pages.dev` |
+| Immutable host | `https://3516f3d8.aetrix.pages.dev` |
+
+Every legal route returned HTTP 200 on the canonical host with its own `<title>`:
+`/legal`, `/terms`, `/privacy`, `/cookies`, `/acceptable-use`, `/ai-disclosure`, `/copyright`,
+`/security`, `/account-deletion`. The immutable deployment host also returned 200 for `/legal`. The
+footer on `/` links `/cookies` and `/legal`, and `/sign-in` serves the acknowledgement markup.
+
+**Live browser check.** On `https://aetrix.pages.dev/sign-in`, clicking “Continue with Google” with the
+box unchecked produced the inline alert, moved focus to the checkbox and did not start an OAuth
+request. The console showed one pre-existing `400` from a Supabase `refresh_token` call (that browser
+held no valid session) and a font-preload warning; neither is caused by this change.
+
+**Not performed on production:** a real Google sign-in round trip (no test account available), the
+authenticated settings page, and a mobile visual review. Those paths are covered by the local suites
+and by unchanged code, not by a production observation.
 
 ## 12. Honest limits of this work
 
