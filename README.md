@@ -6,13 +6,18 @@ benchmark and the product record in one repository.
 
 <p>
   <a href="https://aetrix.pages.dev"><img alt="Frontend live" src="https://img.shields.io/badge/frontend-live-2ea44f?style=flat-square&logo=cloudflarepages&logoColor=white"></a>
-  <a href="https://arthur-rip-zn02.tail06bb75.ts.net/health"><img alt="Engine demo online" src="https://img.shields.io/badge/engine_demo-online-2ea44f?style=flat-square&logo=tailscale&logoColor=white"></a>
+  <a href="#engine-status"><img alt="Engine demo offline" src="https://img.shields.io/badge/engine_demo-offline-d9534f?style=flat-square&logo=tailscale&logoColor=white"></a>
   <a href="https://github.com/AetherRIP/Aetrix_V5.5/actions/workflows/ci.yml"><img alt="CI passing" src="https://github.com/AetherRIP/Aetrix_V5.5/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <img alt="Status pre-release" src="https://img.shields.io/badge/status-pre--release_checkpoint-d9a441?style=flat-square">
   <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white">
   <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black">
   <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Supabase-4169E1?style=flat-square&logo=postgresql&logoColor=white">
 </p>
+
+> **Production deployment:** <https://aetrix.pages.dev>, built from `main` by the
+> Cloudflare Pages GitHub integration. **Last verified:** 2026-11-15. The exact
+> serving commit is recorded in the Pages deployment and the production
+> verification run.
 
 > **Status: pre-release integration checkpoint.** The engine's tenancy, job lifecycle,
 > marking pipeline, results and review APIs are covered by automated tests. The public
@@ -25,8 +30,8 @@ benchmark and the product record in one repository.
 | Surface | URL | What is there |
 |---|---|---|
 | Frontend | <https://aetrix.pages.dev> | Cloudflare Pages build of the marketing site and authenticated application shell |
-| Engine | <https://arthur-rip-zn02.tail06bb75.ts.net> | FastAPI demo engine published through a Tailscale Funnel; `/health` and `/ready` are public |
-| API schema | <https://arthur-rip-zn02.tail06bb75.ts.net/docs> | Development-only OpenAPI documentation; disabled in a production posture |
+| Engine (on demand) | — | FastAPI demo engine on the maintainer's workstation, previously exposed through a Tailscale Funnel. `arthur-rip-zn02.tail06bb75.ts.net` does not resolve as of 2026-11-15; see [Engine status](#engine-status). |
+| API schema | — | Development-only OpenAPI documentation; unreachable while the demo hostname is offline |
 
 The demo backend runs on the maintainer's workstation, not an always-on cloud service.
 The Funnel is beta infrastructure and the instance can be offline when the machine is
@@ -37,6 +42,16 @@ issued with it, creates a membership. A deployment may instead enable
 `AETRIX_AUTH__OPEN_ACCESS=true` to admit any Google-verified account to one shared
 workspace, which never widens tenancy — reads stay scoped to that workspace — and every
 admission is audited.
+
+### Engine status
+
+**Offline as of 2026-11-15.** The demo hostname `arthur-rip-zn02.tail06bb75.ts.net`
+currently fails DNS resolution, so its `/health` and `/ready` endpoints cannot be
+reached. The Pages frontend remains available and renders explicit unavailable states
+for engine-backed data; it does not substitute sample rows or zeros. Start the stack
+with `START_AETRIX.bat` and check it with `STATUS_AETRIX.bat` before expecting marking,
+queue or account data to load. A successful local start does not make the workstation a
+24/7 production service.
 
 ## Product preview
 
@@ -138,14 +153,15 @@ has been exercised against a live provider.
 | Engine CI | GitHub Actions: full pytest against a disposable PostgreSQL service | **passed** |
 | Schema and RLS | Live `alembic check`; `pg_class` scan | **head 0022; no drift; 44/44 public tables RLS** |
 | Frontend typecheck | `cd frontend && ../.tools/node/node.exe node_modules/typescript/bin/tsc --noEmit` | **exit 0** |
-| Production build | `cd frontend && ../.tools/node/node.exe node_modules/vite/bin/vite.js build` | **exit 0** |
-| Account browser tests | Playwright `tests/accounts.spec.ts` against a production preview and the deployed Pages build | **8 passed in both runs** |
-| Marketing and sign-in | Playwright `tests/marketing.spec.ts tests/auth.spec.ts` against a production preview | **38 passed** |
-| Browser suite, this change | Playwright `tests/responsive.spec.ts` + `tests/queue.spec.ts` against a production preview | **95 passed** |
-| Live engine probes | `GET /health`, `GET /ready` | **200, 200** |
+| Production build | `cd frontend && npm run build` (client, SSR, dev-var strip and legal clean URLs) | **exit 0** |
+| Full browser suite | Playwright against a production preview, including legal acceptance and whole-route layout coverage | **282 passed, 2 skipped (284 tests)** |
+| Production legal routes | `curl` all nine public legal URLs | **TBD after publish** |
+| Production smoke check | Pages deployment matching the pushed commit; home title and routes | **TBD after publish** |
+| Live engine probes | `GET /health`, `GET /ready` | **offline — DNS unresolved** |
 
-The two skipped browser tests are live-engine DOM probes that require
-`VITE_AETRIX_API_URL` in the test process; they are reported as skipped, not as passes.
+The full merged suite ran 284 tests: 282 passed and 2 were skipped in 3m36s. The two
+skipped browser tests are live-engine DOM probes that require `VITE_AETRIX_API_URL` in
+the test process; they are reported as skipped, not as passes.
 The local backend integration suite was not run for this gate because
 `AETRIX_TEST_DATABASE_URL` was unset. That suite truncates its target database by design,
 so it is never pointed at the shared development database. The GitHub CI job runs the
@@ -156,6 +172,37 @@ scrolls inside its surface, the sticky action column remains reachable, the deta
 opens and closes without leaving the directory, and the empty, loading and error states
 all stay inside the Accounts surface. The screenshot above was captured at 1440 px from
 a Playwright fixture using synthetic rows.
+
+## Deployment
+
+Production is the existing Cloudflare Pages project **`aetrix`**, at
+<https://aetrix.pages.dev>. It is a static TanStack Start client, not a Workers upload
+and not a Freebuff Sites deployment. The canonical path is:
+
+```text
+push to main → Cloudflare Pages GitHub integration → npm ci && npm run build → dist/client
+```
+
+- **Pages project:** `aetrix`, production branch `main`, source `AetherRIP/Aetrix_V5.5`.
+- **Build root:** `frontend`; **build command:** `npm ci && npm run build`; **output:** `dist/client`.
+- **Public build variables (set in Pages, values never committed):** `VITE_SUPABASE_URL`,
+  `VITE_SUPABASE_ANON_KEY`, `VITE_AETRIX_API_URL`.
+- **Verification:** [`.github/workflows/verify-production.yml`](.github/workflows/verify-production.yml)
+  waits for the Pages deployment for the pushed commit, then checks the home page and
+  all legal routes. It does not deploy, so it cannot race the GitHub integration.
+- **Runbook:** [`docs/deployment/PRODUCTION.md`](docs/deployment/PRODUCTION.md).
+- **Pages dashboard:** <https://dash.cloudflare.com/?to=/:account/pages/view/aetrix>.
+
+Routine releases must go through `main`. `npm run deploy:manual` is an emergency
+fallback only: it builds and uses `wrangler pages deploy` against the same project. It
+requires Cloudflare credentials in the local environment and must not be used to bypass
+a failed verification. `wrangler deploy` (Workers) is not the deployment path for this
+frontend.
+
+To roll back, first revert the offending commit on `main` and let Pages rebuild; if the
+integration is unavailable, use the Pages dashboard to roll back to the last known-good
+deployment and still land a Git revert so the next push does not reintroduce it. No
+custom domain is attached; `aetrix.pages.dev` is the production origin.
 
 ## Quick start
 
@@ -192,7 +239,8 @@ npm run dev
 
 Set `VITE_AETRIX_API_URL` to an HTTPS engine origin before building a deployed bundle.
 It is compiled into the client and must not be a loopback address. `npm run test:e2e`
-expects a running preview and Playwright browsers.
+expects a running preview and Playwright browsers. Production builds are created by
+Cloudflare Pages on every push to `main`; see [Deployment](#deployment).
 
 ### One-command Windows stack
 
