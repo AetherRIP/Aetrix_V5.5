@@ -188,8 +188,9 @@ push to main → Cloudflare Pages GitHub integration → npm ci && npm run build
 - **Public build variables (set in Pages, values never committed):** `VITE_SUPABASE_URL`,
   `VITE_SUPABASE_ANON_KEY`, `VITE_AETRIX_API_URL`.
 - **Verification:** [`.github/workflows/verify-production.yml`](.github/workflows/verify-production.yml)
-  waits for the Pages deployment for the pushed commit, then checks the home page and
-  all legal routes. It does not deploy, so it cannot race the GitHub integration.
+  waits for the Cloudflare Pages check run for the pushed commit, then checks the home
+  page and all legal routes. It does not deploy and needs no Cloudflare API credential
+  of its own, so it cannot race the GitHub integration.
 - **Runbook:** [`docs/deployment/PRODUCTION.md`](docs/deployment/PRODUCTION.md).
 - **Pages dashboard:** <https://dash.cloudflare.com/?to=/:account/pages/view/aetrix>.
 

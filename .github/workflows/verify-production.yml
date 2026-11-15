@@ -1,14 +1,11 @@
 name: Verify production deployment
 
-# Cloudflare Pages builds `frontend/` from `main` through the GitHub
-# integration. This workflow does not deploy: it waits for the Pages deployment
-# for the pushed commit and then checks the public site. Keeping deployment in
-# one place prevents this workflow and the GitHub integration racing to publish
-# different builds of the same commit.
+# Cloudflare Pages builds `frontend/` from `main` through the GitHub integration.
+# Cloudflare also publishes a check run named "Cloudflare Pages" for the exact
+# commit it built, so this workflow waits on that check and then checks the public
+# site. It does not deploy and needs no Cloudflare API credential of its own.
 #
-# Required repository secrets:
-#   CLOUDFLARE_API_TOKEN   - token with Cloudflare Pages read access
-#   CLOUDFLARE_ACCOUNT_ID  - 02c57cead9762baa7ac2d44a10c93fdc
+# The repository's automatic GITHUB_TOKEN only needs read access to checks.
 
 on:
   push:
@@ -20,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: pages-verify
@@ -30,76 +28,61 @@ jobs:
     name: Verify the live Pages build
     runs-on: ubuntu-latest
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GH_TOKEN: ${{ github.token }}
       PRODUCTION_URL: https://aetrix.pages.dev
     steps:
-      - name: Wait for the Pages deployment for this commit
+      - name: Wait for the Cloudflare Pages check for this commit
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required to verify the Pages deployment."
-            exit 1
-          fi
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100"
+          check=""
 
-          api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/aetrix/deployments?per_page=50"
-          deployment=""
+          for attempt in $(seq 1 80); do
+            response=$(curl -fsS --retry 4 --retry-delay 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "$api")
 
-          for attempt in $(seq 1 60); do
-            response=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$api")
-
-            if ! jq -e '.success == true' >/dev/null <<<"$response"; then
-              echo "::error::Cloudflare Pages did not return a successful deployment list."
-              jq -r '.errors // empty' <<<"$response" || true
+            if ! jq -e '.check_runs' >/dev/null <<<"$response"; then
+              echo "::error::GitHub did not return check runs for ${GITHUB_SHA}."
               exit 1
             fi
 
-            deployment=$(jq -c --arg sha "$GITHUB_SHA" '
-              [.result[]
-                | select(.environment == "production")
-                | select((.deployment_trigger.metadata.commit_hash // "") == $sha)]
-              | sort_by(.created_on)
+            check=$(jq -c '
+              [.check_runs[] | select(.name == "Cloudflare Pages")]
+              | sort_by(.id)
               | last // empty
             ' <<<"$response")
 
-            if [ -n "$deployment" ]; then
-              stage_status=$(jq -r '.latest_stage.status // "unknown"' <<<"$deployment")
-              stage_name=$(jq -r '.latest_stage.name // "unknown"' <<<"$deployment")
-              echo "Deployment ${stage_name}: ${stage_status} (attempt ${attempt}/60)"
+            if [ -n "$check" ]; then
+              status=$(jq -r '.status // "unknown"' <<<"$check")
+              conclusion=$(jq -r '.conclusion // ""' <<<"$check")
+              echo "Cloudflare Pages: status=${status} conclusion=${conclusion:-pending} (attempt ${attempt}/80)"
 
-              case "$stage_status" in
-                success)
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" = "success" ]; then
                   break
-                  ;;
-                failure|canceled|skipped)
-                  echo "::error::Cloudflare Pages deployment did not succeed."
-                  jq -r '.stages[]? | "stage=\(.name) status=\(.status)"' <<<"$deployment"
-                  exit 1
-                  ;;
-              esac
+                fi
+                echo "::error::Cloudflare Pages did not deploy ${GITHUB_SHA} successfully."
+                jq -r '.output.title // "Deployment failed", .output.summary // "", .details_url // ""' <<<"$check"
+                exit 1
+              fi
             else
-              echo "Waiting for Cloudflare Pages to register this commit (attempt ${attempt}/60)."
+              echo "Waiting for Cloudflare Pages to report a check for ${GITHUB_SHA} (attempt ${attempt}/80)."
             fi
 
             sleep 15
           done
 
-          if [ -z "$deployment" ]; then
-            echo "::error::No production Pages deployment appeared for ${GITHUB_SHA} within 15 minutes."
-            jq -r '.result[:5][] | "\(.created_on) \(.environment) \(.deployment_trigger.metadata.commit_hash // "unknown") \(.latest_stage.status // "unknown")"' <<<"$response"
+          if [ -z "$check" ] || [ "$(jq -r '.status // ""' <<<"$check")" != "completed" ]; then
+            echo "::error::Cloudflare Pages did not report a completed check for ${GITHUB_SHA} within 20 minutes."
+            jq -r '.check_runs[] | "\(.name): \(.status) \(.conclusion // "")"' <<<"$response"
             exit 1
           fi
 
-          stage_status=$(jq -r '.latest_stage.status // "unknown"' <<<"$deployment")
-          if [ "$stage_status" != "success" ]; then
-            echo "::error::The Pages deployment for ${GITHUB_SHA} ended in ${stage_status}."
-            jq -r '.stages[]? | "stage=\(.name) status=\(.status)"' <<<"$deployment"
-            exit 1
-          fi
-
-          echo "Verified Pages deployment for ${GITHUB_SHA}: $(jq -r '.url // "URL not reported"' <<<"$deployment")"
+          echo "Cloudflare Pages deployed ${GITHUB_SHA} successfully: $(jq -r '.details_url // ""' <<<"$check")"
 
       - name: Smoke-test the public site
         shell: bash
@@ -107,15 +90,15 @@ jobs:
           set -euo pipefail
 
           for path in / /sign-in /legal /terms /privacy /cookies /acceptable-use /ai-disclosure /copyright /security /account-deletion; do
-            code=$(curl -sS --retry 4 --retry-delay 5 -o /tmp/aetrix-response.html -w '%{http_code}' "${PRODUCTION_URL}${path}")
+            code=$(curl -sSL --retry 4 --retry-delay 5 -o /tmp/aetrix-response.html -w '%{http_code}' "${PRODUCTION_URL}${path}")
             printf '%-24s %s\n' "$path" "$code"
             if [ "$code" != "200" ]; then
-              echo "::error::${PRODUCTION_URL}${path} returned ${code}"
+              echo "::error::${PRODUCTION_URL}${path} returned ${code} after redirects"
               exit 1
             fi
           done
 
-          curl -fsS --retry 4 --retry-delay 5 "${PRODUCTION_URL}/" -o /tmp/aetrix-home.html
+          curl -fsSL --retry 4 --retry-delay 5 "${PRODUCTION_URL}/" -o /tmp/aetrix-home.html
           grep -q '<title>Aetrix V5.5' /tmp/aetrix-home.html || {
             echo "::error::The production home page is not the Aetrix application shell."
             exit 1
