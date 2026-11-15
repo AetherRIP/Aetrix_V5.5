@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ApiResult } from './client'
+import { useAuth } from '../auth/AuthProvider'
 import { statusService, type SystemStatus } from '../services'
 
 /** How often an open screen re-reads the engine's status. */
@@ -18,8 +19,14 @@ export type SystemStatusState =
  * so a status card cannot stay green after the engine has gone away — and cannot
  * stay red after it has come back. A hidden tab pauses the poll and resumes on
  * visibility change, so a background tab does not hold a stale answer.
+ *
+ * `/status` is a platform surface: the bearer token is required, and the engine
+ * answers 403 for an account without platform authority. The token is read from
+ * the current session rather than passed in, so a signed-out tab polls nothing.
  */
 export function useSystemStatus(): [SystemStatusState, () => void, Date | null] {
+  const { session } = useAuth()
+  const token = session?.access_token ?? null
   const [value, setValue] = useState<SystemStatusState>({ state: 'loading' })
   const [checkedAt, setCheckedAt] = useState<Date | null>(null)
   const [tick, setTick] = useState(0)
@@ -33,6 +40,7 @@ export function useSystemStatus(): [SystemStatusState, () => void, Date | null] 
     const read = async () => {
       const started = performance.now()
       const result: ApiResult<SystemStatus> = await statusService.read({
+        token,
         signal: controller.signal,
       })
       if (!live) return
@@ -65,7 +73,7 @@ export function useSystemStatus(): [SystemStatusState, () => void, Date | null] 
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [tick])
+  }, [tick, token])
 
   return [value, refresh, checkedAt]
 }

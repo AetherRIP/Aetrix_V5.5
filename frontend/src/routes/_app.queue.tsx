@@ -109,7 +109,8 @@ function Queue() {
   )
 
   const active = FILTERS.find((entry) => entry.id === filter) ?? FILTERS[0]
-  const allJobs = jobsState.state === 'ok' ? jobsState.data : []
+  const jobsLoaded = jobsState.state === 'ok'
+  const allJobs = jobsLoaded ? jobsState.data : []
   const jobs = allJobs.filter(active.match)
   const activeCount = allJobs.filter((job) => !TERMINAL.includes(job.state)).length
   const reviewCount = allJobs.filter((job) => job.state === 'REVIEW_REQUIRED').length
@@ -160,14 +161,24 @@ function Queue() {
           {/* The shell renders the route h1; this is the record line. */}
           <p className="rd-hero__kicker mono">Queue</p>
           <p className="rd-hero__ref">
-            {jobs.length} job{jobs.length === 1 ? '' : 's'} shown
+            {jobsLoaded
+              ? `${jobs.length} job${jobs.length === 1 ? '' : 's'} shown`
+              : jobsState.state === 'loading'
+                ? 'Reading the queue…'
+                : 'Queue unavailable'}
           </p>
           <p className="rd-hero__sub">
-            <span>{active.label}</span>
-            <span aria-hidden="true">·</span>
-            <span className="mono">{activeCount} active</span>
-            <span aria-hidden="true">·</span>
-            <span className="mono">{reviewCount} awaiting review</span>
+            {jobsLoaded ? (
+              <>
+                <span>{active.label}</span>
+                <span aria-hidden="true">·</span>
+                <span className="mono">{activeCount} active</span>
+                <span aria-hidden="true">·</span>
+                <span className="mono">{reviewCount} awaiting review</span>
+              </>
+            ) : (
+              <span>Counts are withheld until the engine answers.</span>
+            )}
           </p>
         </div>
         <div className="rd-hero__actions">

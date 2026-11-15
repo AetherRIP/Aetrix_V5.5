@@ -216,9 +216,21 @@ export type JobDetail = Job & {
   review_reasons: string[]
 }
 
+export type BlueprintCriterion = {
+  code: string
+  marks: number
+  description: string
+  expected_answer: string | null
+  award_when: string | null
+  withhold_when: string | null
+  source_page: number | null
+  source_quote: string | null
+}
+
 export type BlueprintQuestion = {
   question_id: string
   label: string | null
+  question_text: string | null
   max_marks: number
   answer_type: string | null
   excluded: boolean
@@ -226,6 +238,7 @@ export type BlueprintQuestion = {
   subquestions: BlueprintQuestion[]
   special_instructions: string[]
   criteria_refs: string[]
+  criteria: BlueprintCriterion[]
 }
 
 export type BlueprintStructure = {
@@ -258,7 +271,27 @@ export type SchemeVersion = {
   source: string
   content_hash: string
   approved_at: string | null
+  criteria_blueprint_version_id: string | null
+  criteria_blueprint_hash: string | null
+  criteria_approved_at: string | null
+  criteria_approval_reason: string | null
   created_at: string
+}
+
+export type SchemeCriterion = {
+  id: string
+  question_id: string
+  code: string
+  marks: number
+  ordinal: number
+  description: string
+  question_text: string | null
+  expected_answer: string | null
+  award_conditions: string | null
+  withhold_conditions: string | null
+  source_page: number | null
+  source_quote: string | null
+  blueprint_version_id: string | null
 }
 
 export type SchemeUpload = {

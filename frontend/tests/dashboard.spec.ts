@@ -144,6 +144,36 @@ test.describe('teacher dashboard Classroom allocations', () => {
     await expect(allocationCount(page)).toHaveText('2')
   })
 
+  test('states the marking flow with the dashboard’s own counts', async ({ page }) => {
+    await open(page, ALLOCATIONS)
+
+    const section = page.getByRole('region', { name: 'Marking flow' })
+    await expect(section).toContainText('Current state counts, not conversion')
+
+    const flow = section.getByRole('group', { name: 'Marking flow' })
+    await expect(flow).toBeVisible()
+    const stages = flow.locator('.dash-flow__stage')
+    await expect(stages.filter({ hasText: 'Assignments' }).locator('.dash-flow__value')).toHaveText(
+      '3',
+    )
+    await expect(
+      stages.filter({ hasText: 'Submissions' }).locator('.dash-flow__value'),
+    ).toHaveText('5')
+    await expect(stages.filter({ hasText: 'Active jobs' }).locator('.dash-flow__value')).toHaveText(
+      '1',
+    )
+    await expect(
+      stages.filter({ hasText: 'Awaiting review' }).locator('.dash-flow__value'),
+    ).toHaveText('0')
+    await expect(stages.filter({ hasText: 'Approved' }).locator('.dash-flow__value')).toHaveText(
+      '2',
+    )
+    await expect(page.getByRole('link', { name: /Awaiting review/ })).toHaveAttribute(
+      'href',
+      '/inbox',
+    )
+  })
+
   test('shows a measured zero with an explicit no-classes state', async ({ page }) => {
     await open(page, [])
 

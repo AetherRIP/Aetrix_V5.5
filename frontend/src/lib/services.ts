@@ -26,6 +26,7 @@ import type {
   Notification,
   PageMeta,
   ReportRow,
+  SchemeCriterion,
   SchemeUpload,
   SchemeVersion,
   SchoolClass,
@@ -123,6 +124,12 @@ export const workspaceService = {
   },
 }
 
+/** Platform-level reads that are not workspace-scoped. */
+export const platformService = {
+  audit: (options?: Opts): Promise<ApiResult<AuditEvent[]>> =>
+    apiGet<AuditEvent[]>('/api/v1/admin/audit', options),
+}
+
 export const rosterService = {
   classes: (workspaceId: string, options?: Opts): Promise<ApiResult<SchoolClass[]>> =>
     apiGet<SchoolClass[]>(`/api/v1/workspaces/${workspaceId}/classes`, options),
@@ -203,6 +210,21 @@ export const examService = {
 
   approveScheme: (versionId: string, reason: string, options?: Opts): Promise<ApiResult<SchemeVersion>> =>
     apiPost<SchemeVersion>(`/api/v1/schemes/${versionId}/approve`, { reason }, options),
+
+  schemeCriteria: (versionId: string, options?: Opts): Promise<ApiResult<SchemeCriterion[]>> =>
+    apiGet<SchemeCriterion[]>(`/api/v1/schemes/${versionId}/criteria`, options),
+
+  approveSchemeCriteria: (
+    versionId: string,
+    blueprintVersionId: string,
+    reason: string,
+    options?: Opts,
+  ): Promise<ApiResult<SchemeVersion>> =>
+    apiPost<SchemeVersion>(
+      `/api/v1/schemes/${versionId}/criteria/approval`,
+      { blueprint_version_id: blueprintVersionId, reason },
+      options,
+    ),
 
   extract: (
     examId: string,

@@ -78,9 +78,17 @@ test.describe('sign-in page', () => {
     // with open access, invitation-only otherwise.
     await expect(page.locator('#access')).toContainText('Google OAuth · enabled')
     await expect(page.locator('#access')).toContainText('Workspace provisioning')
-    await expect(page.locator('#access')).toContainText(
-      /Workspace provisioning\s+(Automatic · shared pilot workspace|Invitation required)/,
-    )
+    // Scoped to the value element rather than the panel: Playwright compares the
+    // locator's textContent, where a <dt> label and its <dd> value are
+    // concatenated without a separator, while the rendered innerText puts them
+    // on separate lines. The assertion is about the policy value, so it names
+    // the value.
+    await expect(
+      page
+        .locator('#access dl > div')
+        .filter({ hasText: 'Workspace provisioning' })
+        .locator('dd'),
+    ).toHaveText(/^(Automatic · shared pilot workspace|Invitation required)$/)
 
     // Nothing is signed in at this point.
     expect(await storedSession(page)).toBeNull()

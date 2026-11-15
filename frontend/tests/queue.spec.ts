@@ -405,6 +405,25 @@ test.describe('correction job actions', () => {
     await expect(jobRow(page, FAILED_ID).getByText('VALIDATING', { exact: true })).toBeVisible()
   })
 
+  test('an unavailable queue withholds counts instead of showing zeros', async ({ page }) => {
+    await signIn(page)
+    await page.route('**/api/v1/me', (route) =>
+      json(route, { detail: 'The correction engine is not available.' }, 503),
+    )
+
+    const response = await page.goto('/queue', { waitUntil: 'load' })
+    expect(response?.status()).toBe(200)
+
+    await expect(page.locator('.rd-hero__ref')).toHaveText('Queue unavailable')
+    await expect(page.locator('.rd-hero__sub')).toContainText(
+      'Counts are withheld until the engine answers.',
+    )
+    await expect(page.locator('.rd-hero')).not.toContainText('0 jobs shown')
+    await expect(page.locator('.rd-hero')).not.toContainText('0 active')
+    await expect(page.getByText('The engine did not answer this screen')).toBeVisible()
+    await expect(page.getByText('A workspace session is required.')).toBeVisible()
+  })
+
   test('an engine refusal is shown as an error and leaves the state unchanged', async ({ page }) => {
     await openQueue(page, { failCancel: true })
 

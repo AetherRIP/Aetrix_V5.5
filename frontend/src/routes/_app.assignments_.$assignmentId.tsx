@@ -5,7 +5,14 @@ import { Panel } from '../components/app/PageBlocks'
 import { StatePanel } from '../components/app/StatePanel'
 import { useEngineSession } from '../lib/api/session'
 import { useResource } from '../lib/api/useResource'
-import type { Assignment, Blueprint, Job, SchemeVersion, Submission } from '../lib/api/types'
+import type {
+  Assignment,
+  Blueprint,
+  Job,
+  SchemeCriterion,
+  SchemeVersion,
+  Submission,
+} from '../lib/api/types'
 import {
   assignmentService,
   examService,
@@ -50,6 +57,17 @@ function AssignmentDetail() {
     examId ?? 'none',
     examId && session.token
       ? (signal) => examService.schemeVersions(examId, { token: session.token, signal })
+      : null,
+  )
+  const reviewScheme =
+    schemesState.state === 'ok'
+      ? (schemesState.data.find((version) => version.status === 'DRAFT') ??
+        schemesState.data.find((version) => version.status === 'APPROVED'))
+      : undefined
+  const [criteriaState, reloadCriteria] = useResource<SchemeCriterion[]>(
+    reviewScheme?.id ?? 'none',
+    reviewScheme && session.token
+      ? (signal) => examService.schemeCriteria(reviewScheme.id, { token: session.token, signal })
       : null,
   )
   const [submissionsState, reloadSubmissions] = useResource<Submission[]>(
@@ -119,6 +137,29 @@ function AssignmentDetail() {
     if (result.status === 'ok') {
       setMessage('Mark scheme approved. It can now be used by an assignment.')
       reloadSchemes()
+    } else {
+      setMessage(result.reason)
+    }
+  }
+
+  async function approveCriteria() {
+    if (!session.token || !reviewScheme || !blueprint || !approvalReason.trim()) return
+    setBusy(true)
+    setMessage(null)
+    const result = await examService.approveSchemeCriteria(
+      reviewScheme.id,
+      blueprint.id,
+      approvalReason.trim(),
+      { token: session.token },
+    )
+    setBusy(false)
+    if (result.status === 'ok') {
+      setMessage(
+        `Criteria approved against blueprint v${blueprint.version}. ` +
+          'Marking can now use the scheme answers.',
+      )
+      reloadSchemes()
+      reloadCriteria()
     } else {
       setMessage(result.reason)
     }
@@ -456,6 +497,98 @@ function AssignmentDetail() {
                 </button>
                 <span className="mono app-hint">
                   {blueprint ? `Current: ${blueprint.status} v${blueprint.version}` : 'No blueprint yet'}
+                </span>
+              </div>
+            </Panel>
+
+            <Panel
+              title="Extracted criteria"
+              note={
+                reviewScheme?.criteria_approved_at
+                  ? `Approved against blueprint ${reviewScheme.criteria_blueprint_hash?.slice(0, 12) ?? ''}`
+                  : 'Not approved — marking is refused until these are reviewed'
+              }
+            >
+              <p className="app-card__body">
+                These are the marks the engine may award and the scheme answers it checks the
+                student's final answer against. Approving the blueprint does not approve them:
+                they need their own approval, tied to this exact blueprint version.
+              </p>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <caption className="visually-hidden">Extracted marking criteria</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Question</th>
+                      <th scope="col">Code</th>
+                      <th scope="col">Marks</th>
+                      <th scope="col">Expected answer</th>
+                      <th scope="col">Award / withhold</th>
+                      <th scope="col">Scheme text</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {criteriaState.state === 'ok' && criteriaState.data.length > 0 ? (
+                      criteriaState.data.map((criterion) => (
+                        <tr key={criterion.id}>
+                          <td className="mono">{criterion.question_id}</td>
+                          <td className="mono">{criterion.code}</td>
+                          <td className="mono">{criterion.marks}</td>
+                          <td>{criterion.expected_answer ?? '—'}</td>
+                          <td>
+                            <span className="app-upload-list__detail">
+                              {criterion.description}
+                              {criterion.award_conditions
+                                ? ` Award when: ${criterion.award_conditions}.`
+                                : ''}
+                              {criterion.withhold_conditions
+                                ? ` Withhold when: ${criterion.withhold_conditions}.`
+                                : ''}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="app-upload-list__detail">
+                              {criterion.source_quote ?? criterion.question_text ?? '—'}
+                            </span>
+                            {criterion.source_page ? (
+                              <span className="mono app-hint">p.{criterion.source_page}</span>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={6} className="data-table__empty">
+                          {reviewScheme
+                            ? 'No criteria were extracted for this scheme version. Re-extract the blueprint.'
+                            : 'Upload and approve a scheme, then extract the blueprint.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="app-inline-actions">
+                <button
+                  type="button"
+                  className="btn btn--small btn--outline"
+                  disabled={
+                    busy ||
+                    !reviewScheme ||
+                    !blueprint ||
+                    blueprint.status !== 'APPROVED' ||
+                    !approvalReason.trim() ||
+                    Boolean(reviewScheme.criteria_approved_at)
+                  }
+                  onClick={() => void approveCriteria()}
+                  title="Approve the approved blueprint first, then give a reason"
+                >
+                  Approve criteria
+                </button>
+                <span className="mono app-hint">
+                  {reviewScheme?.criteria_approved_at
+                    ? 'Criteria approved'
+                    : 'Criteria not approved'}
                 </span>
               </div>
             </Panel>

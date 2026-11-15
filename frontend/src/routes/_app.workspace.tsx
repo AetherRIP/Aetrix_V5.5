@@ -142,7 +142,12 @@ function WorkspaceHub() {
       ) : null}
 
       <DataState state={membersState} capability="GET /api/v1/workspaces/{id}/members">
-        <Panel title="Members" note={`${members.length} account(s)`}>
+        <Panel
+          title="Members"
+          note={
+            membersState.state === 'ok' ? `${members.length} account(s)` : 'Engine has not reported'
+          }
+        >
           <div className="table-scroll">
             <table className="data-table">
               <caption className="visually-hidden">Members of this workspace</caption>
@@ -274,7 +279,14 @@ function WorkspaceHub() {
       )}
 
       <DataState state={invitationsState} capability="GET /api/v1/invitations">
-        <Panel title="Invitations" note={`${invitations.length} record(s)`}>
+        <Panel
+          title="Invitations"
+          note={
+            invitationsState.state === 'ok'
+              ? `${invitations.length} record(s)`
+              : 'Engine has not reported'
+          }
+        >
           <div className="table-scroll">
             <table className="data-table">
               <caption className="visually-hidden">Invitations for this workspace</caption>

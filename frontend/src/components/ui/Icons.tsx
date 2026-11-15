@@ -25,6 +25,7 @@ export type IconName =
   | 'moon'
   | 'sun'
   | 'chevron'
+  | 'search'
   | 'logout'
 
 const PATHS: Record<IconName, ReactNode> = {
@@ -120,6 +121,12 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   chevron: <path d="m9 5.5 6.5 6.5L9 18.5" />,
+  search: (
+    <>
+      <circle cx="10.8" cy="10.8" r="6.8" />
+      <path d="m16 16 4.5 4.5" />
+    </>
+  ),
   logout: (
     <>
       <path d="M14.5 3.5h4a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5h-4" />

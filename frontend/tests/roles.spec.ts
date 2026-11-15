@@ -474,6 +474,40 @@ test.describe('shell behaviour', () => {
     await expect(page.getByRole('button', { name: 'Expand navigation' })).toBeVisible()
   })
 
+  test('the command palette jumps with the keyboard and stays inside the role', async ({
+    context,
+  }) => {
+    const page = await open(context, '/dashboard', { role: 'supervisor' })
+    await expect(page.getByRole('button', { name: 'Jump to a page' })).toBeVisible()
+    // The global shortcut listener is attached in a passive effect, so give the
+    // first paint a turn before pressing the key.
+    await page.waitForTimeout(100)
+
+    await page.keyboard.press('Control+k')
+    const palette = page.getByRole('dialog', { name: 'Jump to a page' })
+    await expect(palette).toBeVisible()
+    await expect(palette.getByRole('combobox', { name: 'Search pages' })).toBeFocused()
+
+    await page.keyboard.type('gradebook')
+    await expect(palette.getByRole('option', { name: /Gradebook/ })).toBeVisible()
+    await page.keyboard.press('Enter')
+
+    await expect(page).toHaveURL(/\/gradebook\/?$/, { timeout: 20_000 })
+    await expect(page.getByRole('heading', { level: 1, name: 'Gradebook' })).toBeVisible()
+    await expect(page.getByRole('dialog', { name: 'Jump to a page' })).toHaveCount(0)
+
+    await page.keyboard.press('Control+k')
+    await expect(page.getByRole('dialog', { name: 'Jump to a page' })).toBeVisible()
+    await expect(palette.getByRole('combobox', { name: 'Search pages' })).toBeFocused()
+    await page.keyboard.type('account management')
+    // The platform directory is not in a teacher's palette, so the search is
+    // answered by an empty state rather than a hidden destination.
+    await expect(page.getByText(/No page matches/)).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('dialog', { name: 'Jump to a page' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Jump to a page' })).toBeFocused()
+  })
+
   test('the phone layout keeps the tab bar and never scrolls sideways', async ({ context }) => {
     const page = await open(context, '/assistant', { role: 'assistant', width: 390 })
 

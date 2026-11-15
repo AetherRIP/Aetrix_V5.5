@@ -13,7 +13,7 @@ export const Route = createRootRoute({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { name: 'theme-color', content: '#08090a' },
+      { name: 'theme-color', content: '#0B0D0F' },
       { title: TITLE },
       { name: 'description', content: DESCRIPTION },
     ],
@@ -24,7 +24,14 @@ export const Route = createRootRoute({
       { rel: 'stylesheet', href: hubCss },
       {
         rel: 'preload',
-        href: '/fonts/schibsted-grotesk.woff2',
+        href: '/fonts/geist-sans.woff2',
+        as: 'font',
+        type: 'font/woff2',
+        crossOrigin: 'anonymous',
+      },
+      {
+        rel: 'preload',
+        href: '/fonts/geist-mono.woff2',
         as: 'font',
         type: 'font/woff2',
         crossOrigin: 'anonymous',

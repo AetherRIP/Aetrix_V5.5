@@ -7,6 +7,7 @@ import { ThemeSwitch } from '../site/ThemeSwitch'
 import { Brand } from '../ui/Brand'
 import { Icon } from '../ui/Icons'
 import { AccountSwitcher } from './AccountSwitcher'
+import { CommandPalette } from './CommandPalette'
 
 /** Trailing slashes are normal on static hosting, so the comparison strips them. */
 function useActivePath() {
@@ -291,7 +292,8 @@ function AccountSheet({
   role,
 }: {
   open: boolean
-  onClose: () => void
+  /** `true` when the close should return focus to the control that opened it. */
+  onClose: (restoreFocus?: boolean) => void
   path: string
   nav: RoleNav
   role: keyof typeof ROLE_META | null
@@ -308,10 +310,48 @@ function AccountSheet({
 
   useEffect(() => {
     if (!open) return
+
+    // The sheet behaves as a modal on a phone: the page beneath must not scroll,
+    // Tab must stay inside it, and Escape must put the reader back on the control
+    // that opened it. Route navigation closes it without stealing focus back.
+    const body = document.body
+    const previousOverflow = body.style.overflow
+    const previousPadding = body.style.paddingRight
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth
+    body.style.overflow = 'hidden'
+    if (scrollbar > 0) body.style.paddingRight = `${scrollbar}px`
+
+    const focusables = () =>
+      Array.from(
+        panel.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.offsetParent !== null)
+
+    const first = focusables()[0]
+    const focusFrame = window.requestAnimationFrame(() => {
+      first?.focus({ preventScroll: true })
+    })
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        onClose()
+        onClose(true)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (items.length === 0) return
+      const firstItem = items[0]
+      const lastItem = items[items.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      const inside = active ? panel.current?.contains(active) : false
+      if (event.shiftKey && (!inside || active === firstItem)) {
+        event.preventDefault()
+        lastItem.focus()
+      } else if (!event.shiftKey && (!inside || active === lastItem)) {
+        event.preventDefault()
+        firstItem.focus()
       }
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -323,13 +363,24 @@ function AccountSheet({
     document.addEventListener('keydown', onKeyDown)
     document.addEventListener('pointerdown', onPointerDown)
     return () => {
+      window.cancelAnimationFrame(focusFrame)
+      body.style.overflow = previousOverflow
+      body.style.paddingRight = previousPadding
       document.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('pointerdown', onPointerDown)
     }
   }, [open, onClose])
 
   return (
-    <div className="hub-sheet" id="hub-sheet" ref={panel} hidden={!open}>
+    <div
+      className="hub-sheet"
+      id="hub-sheet"
+      ref={panel}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Account and more sections"
+      hidden={!open}
+    >
       <div className="hub-sheet__identity">
         <span className="hub-avatar" aria-hidden="true">
           {initials(name) || 'A'}
@@ -349,13 +400,13 @@ function AccountSheet({
             className="hub-sheet__link"
             data-active={isActive(path, item) ? '' : undefined}
             aria-current={isActive(path, item) ? 'page' : undefined}
-            onClick={onClose}
+            onClick={() => onClose()}
           >
             <Icon name={item.icon} size={16} />
             <span>{item.label}</span>
           </Link>
         ))}
-        <Link to="/" className="hub-sheet__link" onClick={onClose}>
+        <Link to="/" className="hub-sheet__link" onClick={() => onClose()}>
           <Icon name="arrow" size={16} />
           <span>Marketing site</span>
         </Link>
@@ -421,18 +472,57 @@ export function AppShell({
 }) {
   const path = useActivePath()
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const sheetTrigger = useRef<HTMLElement | null>(null)
+  const paletteTrigger = useRef<HTMLButtonElement | null>(null)
   const { user } = useAuth()
   const { nav, y } = useNavMarker(path)
   const { collapsed, toggle } = useRailCollapsed()
   const name = displayName(user)
 
+  const closeSheet = useCallback((restoreFocus = false) => {
+    setSheetOpen(false)
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => sheetTrigger.current?.focus({ preventScroll: true }))
+    }
+  }, [])
+
+  const closePalette = useCallback(() => {
+    setPaletteOpen(false)
+    window.requestAnimationFrame(() => paletteTrigger.current?.focus({ preventScroll: true }))
+  }, [])
+
+  const openPalette = useCallback(() => {
+    setSheetOpen(false)
+    setPaletteOpen(true)
+  }, [])
+
+  // ⌘K / Ctrl+K is the one shortcut that works from anywhere in the workspace.
+  // It only opens the same role-scoped destinations the rail already offers.
+  useEffect(() => {
+    if (!role) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || !(event.metaKey || event.ctrlKey)) return
+      if (event.key.toLowerCase() !== 'k') return
+      event.preventDefault()
+      if (paletteOpen) {
+        closePalette()
+      } else {
+        openPalette()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [closePalette, openPalette, paletteOpen, role])
+
   const meta = role ? ROLE_META[role] : null
   const layout = role ? NAV_BY_ROLE[role] : NAV_BY_ROLE.supervisor
   const home: AppPath = meta ? meta.home : '/dashboard'
 
-  // A navigation is a complete answer to the sheet, so it closes with the route.
+  // A navigation is a complete answer to overlays, so they close with the route.
   useEffect(() => {
     setSheetOpen(false)
+    setPaletteOpen(false)
   }, [path])
 
   return (
@@ -507,6 +597,22 @@ export function AppShell({
           <p className="app-topbar__crumb mono">{eyebrow}</p>
 
           <div className="app-topbar__actions">
+            {role ? (
+              <button
+                ref={paletteTrigger}
+                type="button"
+                className="app-topbar__search"
+                aria-label="Jump to a page"
+                aria-keyshortcuts="Control+K Meta+K"
+                aria-haspopup="dialog"
+                aria-expanded={paletteOpen}
+                onClick={openPalette}
+              >
+                <Icon name="search" size={15} />
+                <span className="app-topbar__search-label">Jump to</span>
+                <kbd className="app-topbar__search-key">⌘K</kbd>
+              </button>
+            ) : null}
             {meta ? <span className="app-topbar__role mono">{meta.label}</span> : null}
             <span className="app-topbar__theme">
               <ThemeSwitch />
@@ -517,7 +623,10 @@ export function AppShell({
               aria-expanded={sheetOpen}
               aria-controls="hub-sheet"
               aria-label={sheetOpen ? 'Close account menu' : 'Open account menu'}
-              onClick={() => setSheetOpen((value) => !value)}
+              onClick={(event) => {
+                sheetTrigger.current = event.currentTarget
+                setSheetOpen((value) => !value)
+              }}
             >
               <span className="hub-avatar" aria-hidden="true">
                 {initials(name) || 'A'}
@@ -562,7 +671,10 @@ export function AppShell({
             className="hub-tab hub-tab--more"
             aria-expanded={sheetOpen}
             aria-controls="hub-sheet"
-            onClick={() => setSheetOpen((value) => !value)}
+            onClick={(event) => {
+              sheetTrigger.current = event.currentTarget
+              setSheetOpen((value) => !value)
+            }}
           >
             <Icon name="menu" size={19} />
             <span>More</span>
@@ -571,10 +683,17 @@ export function AppShell({
 
         <AccountSheet
           open={sheetOpen}
-          onClose={() => setSheetOpen(false)}
+          onClose={closeSheet}
           path={path}
           nav={layout}
           role={role}
+        />
+
+        <CommandPalette
+          open={paletteOpen}
+          onClose={closePalette}
+          role={role}
+          path={path}
         />
       </div>
     </div>

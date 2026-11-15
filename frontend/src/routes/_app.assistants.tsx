@@ -103,13 +103,24 @@ function Assistants() {
 
   return (
     <div className="app-stack">
-      {session.status === 'error' ? (
-        <StatePanel tone="error" title="The engine refused this account" capability="/api/v1/me">
-          <p>{session.reason}</p>
+      {session.status !== 'ready' ? (
+        <StatePanel
+          tone={session.status === 'loading' ? 'wip' : 'empty'}
+          title={
+            session.status === 'loading'
+              ? 'Reading membership capabilities'
+              : 'Membership capabilities are unavailable'
+          }
+          capability="GET /api/v1/me"
+        >
+          <p>
+            {session.status === 'loading'
+              ? 'The engine has not yet confirmed which membership actions this account may take.'
+              : session.reason ??
+                'The engine did not report this account’s capabilities, so this page does not claim a role limit that has not been observed.'}
+          </p>
         </StatePanel>
-      ) : null}
-
-      {canManage ? (
+      ) : canManage ? (
         <Panel title="Invite a colleague" note="The engine emails nothing; share the code">
           <form className="app-form" onSubmit={invite}>
             <div className="app-form__row">
@@ -210,15 +221,20 @@ function Assistants() {
             },
             {
               label: 'Invite or remove assistants',
-              detail: 'Available to owners and administrators above; the engine enforces the rule.',
-              state: 'available',
+              detail: 'Refused: only an owner or administrator may invite or remove people.',
+              state: 'blocked',
               icon: 'eye',
             },
           ]}
         />
       </Panel>
 
-      <Panel title="Members" note={`${memberRows.length} account(s)`}>
+      <Panel
+        title="Members"
+        note={
+          members.state === 'ok' ? `${memberRows.length} account(s)` : 'Engine has not reported'
+        }
+      >
         <DataState state={members} capability="GET /api/v1/workspaces/{id}/members">
           {memberRows.length > 0 ? (
             <div className="table-scroll">
@@ -271,7 +287,14 @@ function Assistants() {
       </Panel>
 
       {canManage ? (
-        <Panel title="Pending invitations" note={`${invitationRows.length} awaiting acceptance`}>
+        <Panel
+          title="Pending invitations"
+          note={
+            invitations.state === 'ok'
+              ? `${invitationRows.length} awaiting acceptance`
+              : 'Engine has not reported'
+          }
+        >
           <div className="app-form__row">
             <label className="app-form__label" htmlFor="revoke-reason">
               Revocation reason (used for every revoke below)

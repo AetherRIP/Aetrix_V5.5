@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { DataState } from '../components/app/DataState'
 import { Panel } from '../components/app/PageBlocks'
+import { StatePanel } from '../components/app/StatePanel'
 import { useEngineSession } from '../lib/api/session'
 import { useResource } from '../lib/api/useResource'
 import type { Assignment, Blueprint, Exam, SchemeVersion } from '../lib/api/types'
@@ -96,7 +97,34 @@ function Assignments() {
 
   return (
     <div className="app-stack">
-      {canManageExams ? (
+      {session.status !== 'ready' ? (
+        <StatePanel
+          tone={session.status === 'loading' ? 'wip' : 'error'}
+          title={
+            session.status === 'loading'
+              ? 'Reading account capabilities'
+              : 'The engine did not return account capabilities'
+          }
+          capability="GET /api/v1/me"
+        >
+          <p>
+            {session.status === 'loading'
+              ? 'The assignment controls appear once the engine confirms what this account may do.'
+              : session.reason ??
+                'Upload and assignment controls are withheld until the engine confirms this account’s capabilities.'}
+          </p>
+          <div className="app-inline-actions">
+            <button
+              type="button"
+              className="btn btn--small btn--outline"
+              onClick={session.reload}
+              disabled={session.status === 'loading'}
+            >
+              Retry session
+            </button>
+          </div>
+        </StatePanel>
+      ) : canManageExams ? (
       <Panel title="New assignment" note="Needs an approved blueprint and scheme">
         <form className="app-form" onSubmit={createAssignment}>
           <div className="app-form__row">
@@ -214,8 +242,9 @@ function Assignments() {
         </Panel>
       )}
 
-      <DataState state={list} capability="GET /api/v1/workspaces/{id}/assignments">
-        <Panel title="Assignment list" note="One row per cohort assignment">
+      {session.status === 'ready' ? (
+        <DataState state={list} capability="GET /api/v1/workspaces/{id}/assignments">
+          <Panel title="Assignment list" note="One row per cohort assignment">
           <div className="table-scroll">
             <table className="data-table">
               <caption className="visually-hidden">Assignments in this workspace</caption>
@@ -258,8 +287,9 @@ function Assignments() {
               </tbody>
             </table>
           </div>
-        </Panel>
-      </DataState>
+          </Panel>
+        </DataState>
+      ) : null}
     </div>
   )
 }

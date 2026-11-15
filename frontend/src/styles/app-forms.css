@@ -50,8 +50,16 @@
 }
 
 .app-input:disabled {
-  opacity: 0.6;
+  opacity: 1;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-color: var(--line);
   cursor: not-allowed;
+}
+
+.app-input:disabled::placeholder {
+  color: var(--text-3);
+  opacity: 1;
 }
 
 .app-form--inline .app-input,
@@ -1414,5 +1422,652 @@ input[type='file'].app-input::file-selector-button {
 
   .rd-job__fact dt {
     padding-top: 0;
+  }
+}
+/* ── design layer: the correction desk ────────────────────────────────────
+ *
+ * The reviewer's surface is the instrument's closest view: one script pane and
+ * one evidence ledger over a deep obsidian stage. Emerald marks what has been
+ * confirmed; amber marks what is waiting for a person. Nothing here changes
+ * structure or state — the engine's words stay exactly as they are.
+ */
+
+.app-input {
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.8125rem;
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
+}
+
+.app-input::placeholder {
+  color: var(--text-3);
+}
+
+.app-input:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+}
+
+.app-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input[type='file'].app-input::file-selector-button {
+  border-radius: var(--r-sm);
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* A native select keeps its own platform chrome unless both the control and
+   its option list are told otherwise; otherwise it is the one white box on an
+   obsidian desk. */
+select.app-input {
+  appearance: none;
+  padding-right: 34px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 17px) calc(50% + 1px),
+    calc(100% - 12px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+select.app-input option {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+textarea.app-input {
+  min-height: 88px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.app-form__label {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.app-form__error {
+  padding-left: 10px;
+  border-left: 2px solid var(--danger);
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.app-message {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.app-message[data-tone='error'] {
+  border-color: rgba(240, 138, 138, 0.24);
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--text);
+}
+
+.app-message code {
+  border-color: var(--line);
+  border-radius: var(--r-xs);
+  background: var(--bg);
+  color: var(--accent);
+}
+
+/* the desk light behind the record */
+.rd-desk::before {
+  height: 520px;
+  background:
+    radial-gradient(52% 76% at 14% 0%, rgba(69, 214, 160, 0.17), transparent 72%),
+    radial-gradient(40% 62% at 90% 0%, rgba(69, 214, 160, 0.07), transparent 74%),
+    repeating-linear-gradient(90deg, transparent 0 79px, var(--grid-line) 79px 80px);
+}
+
+/* ── record header ───────────────────────────────────────────────────── */
+
+.rd-hero {
+  position: relative;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rd-hero::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: min(220px, 42%);
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.rd-hero__kicker {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.rd-hero__ref {
+  margin-top: 8px;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  line-height: 1.02;
+}
+
+.rd-hero__sub {
+  gap: 8px var(--s-3);
+  margin-top: 12px;
+  color: var(--text-3);
+  font-size: 0.75rem;
+}
+
+.rd-hero__sub .mono {
+  color: var(--text-2);
+}
+
+/* ── panes ───────────────────────────────────────────────────────────── */
+
+.rd-pane {
+  position: relative;
+  padding: clamp(18px, 2.4vw, 26px);
+  border-radius: var(--r-xl);
+  border-color: var(--glass-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 44%),
+    var(--glass);
+  box-shadow:
+    var(--shadow-1),
+    0 0 0 1px rgba(69, 214, 160, 0.035),
+    0 30px 80px -60px rgba(0, 0, 0, 0.95);
+}
+
+.rd-pane::before {
+  content: '';
+  position: absolute;
+  left: var(--s-5);
+  right: var(--s-5);
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-line), transparent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.rd-pane__head {
+  align-items: center;
+}
+
+.rd-pane__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.rd-pane__title::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.rd-pane__note {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+/* ── the tally ───────────────────────────────────────────────────────── */
+
+.rd-tally {
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.rd-tally__awarded {
+  font-weight: 500;
+  letter-spacing: -0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.rd-tally__of {
+  color: var(--text-3);
+}
+
+.rd-tally__track {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--tally-track);
+}
+
+.rd-tally__fill {
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--emerald-600), var(--emerald-300));
+  box-shadow: 0 0 18px -2px rgba(69, 214, 160, 0.55);
+}
+
+.rd-facts {
+  gap: 0;
+  margin-top: 20px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.rd-facts > div {
+  padding: 12px 14px 12px 0;
+  border-top: 0;
+  border-right: 1px solid var(--line-soft);
+}
+
+.rd-facts > div:last-child {
+  border-right: 0;
+}
+
+.rd-facts dt {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-facts dd {
+  color: var(--text);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+/* ── script viewer ───────────────────────────────────────────────────── */
+
+.rd-stage {
+  border-radius: var(--r-lg);
+  border-color: var(--line);
+  background:
+    radial-gradient(80% 60% at 50% 0%, rgba(255, 255, 255, 0.04), transparent 70%),
+    #07090a;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.015);
+}
+
+.rd-stage__image {
+  filter: saturate(0.96) contrast(1.02);
+}
+
+.rd-stage__placeholder {
+  color: var(--stage-text);
+  font-size: 0.8125rem;
+}
+
+.rd-pager {
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 14px;
+}
+
+.rd-pager__count {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-2);
+}
+
+/* ── evidence ledger ─────────────────────────────────────────────────── */
+
+.rd-list {
+  gap: 2px;
+  margin-top: 16px;
+}
+
+.rd-row {
+  grid-template-columns: 78px minmax(0, 1fr);
+  padding: 16px 14px;
+  border-top: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+/* The desktop rail cannot hold the number, mark, meter and state side by side;
+   below tablet width the row stacks and those four share one compact line. */
+@media (max-width: 700px) {
+  .rd-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 14px 12px;
+  }
+
+  /* A criterion or check label beside a long explanation leaves the words a
+     two-word-wide column on a phone; let the label sit above its reason. */
+  .rd-criteria__row,
+  .rd-verifications__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .rd-criteria__row .app-chip,
+  .rd-verifications__row .app-chip {
+    justify-self: start;
+    width: fit-content;
+  }
+
+  .rd-row__gutter {
+    grid-auto-flow: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .rd-row__meter {
+    width: 56px;
+  }
+
+  .rd-row__state {
+    margin-left: auto;
+  }
+}
+
+.rd-row:first-child {
+  border-top: 0;
+}
+
+.rd-row:hover {
+  background: var(--accent-softer);
+}
+
+.rd-row[data-review='true'] {
+  border-left: 2px solid var(--warn);
+  padding-left: 13px;
+  background:
+    linear-gradient(90deg, var(--warn-soft), transparent 42%),
+    transparent;
+}
+
+.rd-row__id {
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  color: var(--text);
+}
+
+.rd-row__marks {
+  font-size: 0.75rem;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.rd-row__meter {
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--tally-track);
+}
+
+.rd-row__meter > span {
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--emerald-600), var(--emerald-300));
+}
+
+.rd-row__state {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+
+.rd-row__answer {
+  color: var(--text);
+  font-size: 0.90625rem;
+  line-height: 1.55;
+}
+
+.rd-row__label {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-row__empty,
+.rd-row__raw {
+  color: var(--text-3);
+}
+
+.rd-criteria,
+.rd-concerns,
+.rd-verifications {
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.rd-criteria__row,
+.rd-verifications__row {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.rd-concerns {
+  padding: 10px 12px;
+  border-left: 2px solid rgba(232, 180, 101, 0.42);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--warn-soft);
+}
+
+/* the verification chain: each independent check hangs off one rail */
+.rd-verifications {
+  position: relative;
+  padding-left: 14px;
+}
+
+.rd-verifications::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: linear-gradient(180deg, var(--accent-line), var(--line-soft));
+}
+
+.rd-verifications__row {
+  position: relative;
+}
+
+.rd-verifications__row::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 8px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: 50%;
+  background: var(--bg);
+}
+
+/* ── override control ────────────────────────────────────────────────── */
+
+.rd-override {
+  border-top-color: var(--line-soft);
+}
+
+.rd-override__summary {
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rd-override__summary:hover {
+  color: var(--accent);
+}
+
+.rd-override[open] .rd-override__summary {
+  color: var(--accent);
+}
+
+.rd-override__form {
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+/* The base input rule is full-bleed; a mark out of N is a short field, and the
+   reason beside it should take the remaining room on one line. */
+.rd-override__form .app-input--narrow {
+  flex: none;
+  width: 5.25rem;
+}
+
+/* Grid forms stretch their children by default; a submit is an action, not a
+   full-width banner. */
+.app-form > .btn {
+  justify-self: start;
+  width: fit-content;
+}
+
+.rd-override__form .app-input:not(.app-input--narrow) {
+  flex: 1 1 14rem;
+  width: auto;
+}
+
+@media (max-width: 559px) {
+  .rd-override__form .app-input:not(.app-input--narrow) {
+    flex-basis: 100%;
+  }
+}
+
+/* ── queue ───────────────────────────────────────────────────────────── */
+
+.rd-queue {
+  gap: 16px;
+}
+
+.rd-seg {
+  padding: 3px;
+  border-color: var(--glass-line);
+  border-radius: var(--r-pill);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  backdrop-filter: blur(16px) saturate(1.1);
+  box-shadow: var(--shadow-1);
+}
+
+.rd-seg__btn {
+  border-radius: var(--r-pill);
+  font-size: 0.75rem;
+  color: var(--text-3);
+}
+
+.rd-seg__btn:hover {
+  color: var(--text);
+  background: var(--sheen);
+}
+
+.rd-seg__btn[aria-pressed='true'] {
+  background: linear-gradient(180deg, var(--emerald-300), var(--emerald-500));
+  color: var(--accent-fill-ink);
+  font-weight: 500;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.rd-queue__row {
+  border-top-color: var(--line-soft);
+  border-radius: var(--r-md);
+  padding: 14px 12px;
+  transition: background-color var(--dur) var(--ease);
+}
+
+.rd-queue__row:hover {
+  background: var(--accent-softer);
+}
+
+.rd-queue__row[data-attention='true'] {
+  border-left: 2px solid var(--warn);
+  padding-left: 11px;
+  background: linear-gradient(90deg, var(--warn-soft), transparent 46%);
+}
+
+.rd-queue__id > .mono:first-child {
+  color: var(--text);
+  font-size: 0.8125rem;
+}
+
+.rd-queue__ref,
+.rd-queue__hint {
+  color: var(--text-3);
+}
+
+.rd-meter {
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--tally-track);
+}
+
+.rd-meter > span {
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--emerald-600), var(--emerald-300));
+  animation: rd-meter-in 720ms var(--ease-out) both;
+}
+
+.rd-queue__note {
+  color: var(--text-3);
+}
+
+@keyframes rd-meter-in {
+  from {
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  to {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+}
+
+/* the job detail modal keeps the desk's material */
+.app-modal__panel.rd-modal {
+  border-radius: var(--r-xl);
+  border-color: var(--glass-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 40%),
+    var(--glass-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-meter > span {
+    animation: none !important;
   }
 }

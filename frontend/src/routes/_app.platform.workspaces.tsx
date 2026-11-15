@@ -178,7 +178,14 @@ function WorkspaceAllocation() {
         </StatePanel>
       ) : null}
 
-      <Panel title="Teacher workspaces" note={`${workspaceRows.length} active`}>
+      <Panel
+        title="Teacher workspaces"
+        note={
+          workspaces.state === 'ok'
+            ? `${workspaceRows.length} active`
+            : 'Engine has not reported'
+        }
+      >
         {workspaces.state === 'ok' ? (
           workspaceRows.length === 0 ? (
             <EmptyTable

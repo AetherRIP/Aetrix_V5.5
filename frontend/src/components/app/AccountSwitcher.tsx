@@ -5,12 +5,13 @@ import { allowsPath, homeFor, type AccountRole } from '../../lib/auth/roles'
 import { Icon } from '../ui/Icons'
 
 /**
- * The accounts signed in on this device, and the way to add or use another one.
+ * The accounts this device has seen, and the way to add or resume one.
  *
- * Switching hands a saved session back to Supabase and lets the rest of the app
- * re-resolve from that token: the shell's role, the engine's `/me` answer and
- * every tenant-scoped query all follow the active account, so nothing is carried
- * across from the account that was left behind.
+ * The device keeps each account's name and picture, never its tokens: resuming
+ * an account therefore means signing in to it again, with the address filled in
+ * as a hint. Nothing is carried across from the account that was left behind —
+ * the shell's role, the engine's `/me` answer and every tenant-scoped query
+ * follow whichever verified session is in use.
  */
 export function AccountSwitcher({
   onSwitched,
@@ -55,13 +56,15 @@ export function AccountSwitcher({
   async function choose(id: string) {
     setBusyId(id)
     setMessage(null)
+    // Resuming a saved account starts a sign-in round-trip: the browser leaves
+    // for the identity provider, so the message below only shows if it does not.
     const result = await switchAccount(id)
     setBusyId(null)
     if (result.ok) {
       await land(result.role)
       onSwitched?.()
     } else {
-      setMessage(result.message ?? 'That account could not be opened.')
+      setMessage(result.message ?? 'That account needs to sign in again.')
     }
   }
 
@@ -121,7 +124,11 @@ export function AccountSwitcher({
                   data-active={current ? '' : undefined}
                   aria-current={current ? 'true' : undefined}
                   disabled={current || busyId !== null}
-                  title={current ? 'This account is in use' : `Use ${account.email || account.name}`}
+                  title={
+                    current
+                      ? 'This account is in use'
+                      : `Sign in again as ${account.email || account.name}`
+                  }
                   onClick={() => void choose(account.id)}
                 >
                   <span className="hub-avatar" aria-hidden="true">
@@ -132,7 +139,7 @@ export function AccountSwitcher({
                     <span className="account-switch__email">{account.email || 'No email on session'}</span>
                   </span>
                   <span className="account-switch__flag mono">
-                    {current ? 'In use' : busy ? 'Opening…' : 'Use'}
+                    {current ? 'In use' : busy ? 'Signing in…' : 'Sign in'}
                   </span>
                 </button>
                 {current ? null : (
@@ -203,8 +210,8 @@ export function AccountSwitcher({
       <p className="account-switch__note">
         {authUnavailableReason ??
           (otherAccounts.length > 0
-            ? 'Switching reopens that account’s own session. Workspace and role come from the engine for whichever account is in use.'
-            : 'A second account stays signed in on this device until you sign out of it or remove it here.')}
+            ? 'This device stores only the name and picture of each account, so using another one signs you in again. Workspace and role come from the engine for whichever account is in use.'
+            : 'Only the signed-in account has a session here. Adding another keeps its name for next time — never its password or token.')}
       </p>
 
       {message ? (

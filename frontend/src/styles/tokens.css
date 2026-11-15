@@ -1,47 +1,81 @@
 /*
- * Aetrix V5.5 — public marketing surface tokens.
+ * Aetrix V5.5 — design tokens for both surfaces.
  *
- * Three layers, as specified in docs/design/DESIGN_SYSTEM.md §1:
- *   primitive  → raw monochrome values, no meaning
+ * Three layers:
+ *   primitive  → raw values, no meaning
  *   semantic   → purpose in the product
  *   component  → a component's own decisions (declared beside the component)
  *
- * Components consume semantic tokens only. There is no hue anywhere on this
- * surface: status is carried by word + shape + weight, which is the encoding
- * docs/design/ACCESSIBILITY.md §4 already requires of the application.
+ * Components consume semantic tokens only. The dark theme is the product's own
+ * surface: an obsidian desk lit from above, with emerald used the way a
+ * verification instrument uses green — for confirmation, never decoration.
+ * The light theme is the same instrument under daylight: paper, graphite ink,
+ * and the same emerald reserved for state and action.
  */
 
 @font-face {
-  font-family: 'Schibsted Grotesk';
-  src: url('/fonts/schibsted-grotesk.woff2') format('woff2');
-  font-weight: 400 900;
+  font-family: 'Geist';
+  src: url('/fonts/geist-sans.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/fonts/geist-mono.woff2') format('woff2');
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 
 :root {
   /* ── primitive: type ───────────────────────────────────────────────── */
-  --font-display: 'Schibsted Grotesk', ui-sans-serif, system-ui, -apple-system,
+  --font-display: 'Geist', 'Inter', ui-sans-serif, system-ui, -apple-system,
     'Segoe UI', Roboto, sans-serif;
   --font-body: var(--font-display);
-  /* Data voice comes from the same family: tabular figures and open tracking
-     carry the ledger role, so the page ships one webfont instead of two. */
-  --font-mono: 'Schibsted Grotesk', ui-monospace, monospace;
+  /* Data voice: labels, identifiers, telemetry. Geist Mono keeps figures on a
+     fixed grid so a column of marks can be compared by shape, not read word by
+     word. */
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
 
-  /* ── primitive: monochrome ramp ────────────────────────────────────── */
+  /* ── primitive: obsidian ramp ──────────────────────────────────────── */
   --grey-000: #ffffff;
-  --grey-050: #f7f7f5;
-  --grey-100: #f1f1ef;
-  --grey-150: #e6e7e4;
-  --grey-200: #d9dad7;
-  --grey-400: #8f9498;
-  --grey-500: #6b7176;
-  --grey-600: #4b5155;
-  --grey-700: #2c3134;
-  --grey-800: #191c1e;
-  --grey-850: #131618;
-  --grey-900: #0d1011;
-  --grey-950: #08090a;
+  --grey-025: #f8faf9;
+  --grey-050: #f2f5f3;
+  --grey-100: #e9eeeb;
+  --grey-150: #dde4e0;
+  --grey-200: #c9d2cd;
+  --grey-300: #a6b2ac;
+  --grey-400: #8a968f;
+  --grey-500: #6f7b75;
+  --grey-600: #56615c;
+  --grey-700: #3b4441;
+  --grey-750: #2a3230;
+  --grey-800: #1d2422;
+  --grey-850: #161c1b;
+  --grey-900: #111615;
+  --grey-925: #0e1211;
+  --grey-950: #0b0d0f;
+
+  /* ── primitive: emerald ────────────────────────────────────────────── */
+  --emerald-100: #d9fbee;
+  --emerald-200: #a9f3d6;
+  --emerald-300: #6be8b8;
+  --emerald-400: #45d6a0;
+  --emerald-500: #2cc28b;
+  --emerald-600: #17a97b;
+  --emerald-700: #0f8260;
+  --emerald-800: #0b6249;
+  --emerald-950: #04110c;
+
+  /* ── primitive: signal (state only, never ambient) ─────────────────── */
+  --amber-300: #f0cf9a;
+  --amber-400: #e8b465;
+  --amber-600: #a8701d;
+  --rose-300: #f4b4b4;
+  --rose-400: #f08a8a;
+  --rose-600: #a83232;
 
   /* ── primitive: space (4px base) ───────────────────────────────────── */
   --s-1: 4px;
@@ -56,21 +90,24 @@
   --s-10: 128px;
 
   /* ── primitive: radii ──────────────────────────────────────────────── */
-  --r-xs: 2px;
-  --r-sm: 3px;
-  --r-md: 6px;
-  /* Hub controls: one step larger than the marketing surface, because the
-     workspace is made of panels and rail rows rather than flat bands. */
-  --r-lg: 10px;
-  --r-xl: 14px;
-  --r-2xl: 20px;
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  /* Surfaces are one step larger than controls: the workspace is made of panes
+     and rows, and a pane should read as a sheet laid on the desk. */
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-2xl: 24px;
+  --r-pill: 999px;
 
   /* ── primitive: motion ─────────────────────────────────────────────── */
   --dur-fast: 140ms;
   --dur: 220ms;
   --dur-slow: 420ms;
+  --dur-reveal: 700ms;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
   /* ── semantic: type scale ──────────────────────────────────────────── */
   --fs-micro: 0.6875rem;
@@ -84,71 +121,144 @@
 
   /* ── semantic: dark theme (default) ────────────────────────────────── */
   --bg: var(--grey-950);
-  --bg-soft: var(--grey-900);
-  --surface: var(--grey-900);
-  --surface-2: var(--grey-850);
-  --surface-3: var(--grey-800);
-  --line: rgba(255, 255, 255, 0.1);
-  --line-soft: rgba(255, 255, 255, 0.06);
-  --line-strong: rgba(255, 255, 255, 0.22);
-  --text: #f2f4f5;
-  --text-2: #a6adb2;
-  --text-3: #8a9197;
-  --accent: #e9edef;
-  --accent-ink: #08090a;
-  --focus: #ffffff;
-  --sheen: rgba(255, 255, 255, 0.14);
-  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04);
-  --shadow-2: 0 40px 90px -50px rgba(0, 0, 0, 0.95);
-  --glow: rgba(255, 255, 255, 0.1);
-  /* The lamp that follows the pointer: brighter than the ambient pools because
-     it is a reading tool, not weather. */
-  --lamp: rgba(255, 255, 255, 0.24);
-  --grid-line: rgba(255, 255, 255, 0.045);
+  --bg-soft: #0d1012;
+  --surface: var(--grey-925);
+  --surface-2: #141a1c;
+  --surface-3: #1a2224;
+  --line: rgba(226, 244, 237, 0.085);
+  --line-soft: rgba(226, 244, 237, 0.05);
+  --line-strong: rgba(226, 244, 237, 0.18);
+  --text: #eef4f1;
+  --text-2: #a5b2ac;
+  --text-3: #7e8c86;
+  /* The document stage stays dark in both themes, so its empty state cannot
+     inherit the page's ink; it needs a light label of its own. */
+  --stage-text: #b6c2bc;
+  --accent: var(--emerald-400);
+  --accent-bright: var(--emerald-300);
+  --accent-deep: var(--emerald-600);
+  --accent-ink: #04130d;
+  /* The primary action and active segments keep a bright emerald fill in both
+     themes, so their ink stays dark; `--accent-ink` follows the theme because
+     it also sits on the deep accent used by links and selection. */
+  --accent-fill-ink: #04130d;
+  --accent-soft: rgba(69, 214, 160, 0.1);
+  --accent-softer: rgba(69, 214, 160, 0.055);
+  --accent-line: rgba(69, 214, 160, 0.34);
+  --accent-glow: rgba(69, 214, 160, 0.2);
+  --focus: var(--emerald-400);
+  --ok: var(--emerald-400);
+  --ok-soft: rgba(69, 214, 160, 0.1);
+  --warn: var(--amber-400);
+  --warn-soft: rgba(232, 180, 101, 0.1);
+  --danger: var(--rose-400);
+  --danger-soft: rgba(240, 138, 138, 0.1);
+  --sheen: rgba(255, 255, 255, 0.06);
+  --sheen-strong: rgba(255, 255, 255, 0.12);
+  --shadow-1: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --shadow-2:
+    0 1px 0 rgba(255, 255, 255, 0.02),
+    0 12px 32px -18px rgba(0, 0, 0, 0.8),
+    0 36px 90px -52px rgba(0, 0, 0, 0.95);
+  --shadow-3:
+    0 0 0 1px rgba(69, 214, 160, 0.08),
+    0 18px 48px -26px rgba(0, 0, 0, 0.9),
+    0 0 44px -22px rgba(69, 214, 160, 0.22);
+  --glow: rgba(69, 214, 160, 0.12);
+  /* The lamp that follows the pointer is a reading tool, so it is cooler and
+     broader than the static pools above. */
+  --lamp: rgba(120, 235, 192, 0.16);
+  --grid-line: rgba(190, 235, 218, 0.045);
+  --noise-opacity: 0.028;
 
-  /* ── semantic: glass (review desk) ─────────────────────────────────── */
-  /* The script is read on top of the workspace, so its panes are
-     translucent and let the surface's grain through. */
-  --glass: rgba(19, 23, 25, 0.62);
-  --glass-2: rgba(32, 37, 40, 0.5);
-  --glass-line: rgba(255, 255, 255, 0.13);
-  --glass-sheen: rgba(255, 255, 255, 0.09);
-  --glass-blur: 22px;
-  --tally-track: rgba(255, 255, 255, 0.11);
+  /* ── semantic: glass ───────────────────────────────────────────────── */
+  /* Panes are sheets laid over the desk: translucent enough to catch the
+     ambient light, opaque enough that an 11px label never fights a glow. */
+  --glass: rgba(17, 23, 24, 0.66);
+  --glass-2: rgba(26, 34, 35, 0.56);
+  --glass-3: rgba(9, 13, 14, 0.72);
+  --glass-line: rgba(214, 240, 230, 0.1);
+  --glass-sheen: rgba(255, 255, 255, 0.055);
+  --glass-blur: 18px;
+  --tally-track: rgba(226, 244, 237, 0.09);
+
+  /* A pane's top edge is a lit hairline; surfaces use it instead of a border
+     on every side, which keeps depth from turning into chrome. */
+  --pane-top: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.14) 18%,
+    rgba(69, 214, 160, 0.34) 50%,
+    rgba(255, 255, 255, 0.14) 82%,
+    transparent
+  );
+  --pane-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%);
 
   color-scheme: dark;
 }
 
 :root[data-theme='light'] {
-  --bg: var(--grey-100);
-  --bg-soft: var(--grey-050);
-  --surface: var(--grey-000);
-  --surface-2: #fafaf8;
-  --surface-3: var(--grey-100);
-  --line: rgba(16, 18, 20, 0.13);
-  --line-soft: rgba(16, 18, 20, 0.07);
-  --line-strong: rgba(16, 18, 20, 0.34);
-  --text: #141618;
-  --text-2: #51575b;
-  --text-3: #646a6f;
-  --accent: #16181a;
-  --accent-ink: #f7f7f5;
-  --focus: #141618;
-  --sheen: rgba(16, 18, 20, 0.08);
-  --shadow-1: 0 1px 0 rgba(16, 18, 20, 0.04);
-  --shadow-2: 0 40px 90px -60px rgba(16, 18, 20, 0.35);
-  --glow: rgba(16, 18, 20, 0.07);
-  --lamp: rgba(16, 18, 20, 0.14);
-  --grid-line: rgba(16, 18, 20, 0.06);
+  --bg: #f5f7f6;
+  --bg-soft: #eef2f0;
+  --surface: #ffffff;
+  --surface-2: #f9fbfa;
+  --surface-3: #eff4f2;
+  --line: rgba(11, 13, 15, 0.11);
+  --line-soft: rgba(11, 13, 15, 0.065);
+  --line-strong: rgba(11, 13, 15, 0.24);
+  --text: #0b0d0f;
+  --text-2: #46514c;
+  /* Muted ink has to clear 4.5:1 on the tinted emerald and warn chips too, not
+     only on white; this is the darkest tint those chips can sit on. */
+  --text-3: #59655f;
+  /* Deepened so emerald text clears AA on `--accent-soft` chips (4.25:1 before)
+     while staying recognisably the same instrument green. */
+  --accent: #087153;
+  --accent-bright: #0f9c74;
+  --accent-deep: #075c44;
+  --accent-ink: #f3fbf7;
+  --accent-soft: rgba(10, 125, 93, 0.09);
+  --accent-softer: rgba(10, 125, 93, 0.05);
+  --accent-line: rgba(10, 125, 93, 0.32);
+  --accent-glow: rgba(10, 125, 93, 0.14);
+  --focus: #087153;
+  --ok: #087153;
+  --ok-soft: rgba(10, 125, 93, 0.09);
+  --warn: #8a5a00;
+  --warn-soft: rgba(138, 90, 0, 0.09);
+  --danger: #a83232;
+  --danger-soft: rgba(168, 50, 50, 0.08);
+  --sheen: rgba(11, 13, 15, 0.045);
+  --sheen-strong: rgba(11, 13, 15, 0.09);
+  --shadow-1: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow-2:
+    0 1px 2px rgba(11, 13, 15, 0.04),
+    0 10px 26px -20px rgba(11, 13, 15, 0.28),
+    0 32px 70px -54px rgba(11, 13, 15, 0.3);
+  --shadow-3:
+    0 0 0 1px rgba(10, 125, 93, 0.1),
+    0 16px 40px -30px rgba(11, 13, 15, 0.3);
+  --glow: rgba(10, 125, 93, 0.09);
+  --lamp: rgba(10, 125, 93, 0.08);
+  --grid-line: rgba(11, 13, 15, 0.05);
+  --noise-opacity: 0.018;
 
-  --glass: rgba(255, 255, 255, 0.62);
-  --glass-2: rgba(255, 255, 255, 0.5);
-  --glass-line: rgba(16, 18, 20, 0.15);
-  /* A near-opaque sheen turns the pane into a white card and hides the desk
-     beneath it; this stays light enough that the measure grid reads through. */
-  --glass-sheen: rgba(255, 255, 255, 0.5);
-  --glass-blur: 20px;
-  --tally-track: rgba(16, 18, 20, 0.12);
+  --glass: rgba(255, 255, 255, 0.74);
+  --glass-2: rgba(249, 251, 250, 0.66);
+  --glass-3: rgba(255, 255, 255, 0.9);
+  --glass-line: rgba(11, 13, 15, 0.1);
+  --glass-sheen: rgba(255, 255, 255, 0.75);
+  --glass-blur: 16px;
+  --tally-track: rgba(11, 13, 15, 0.1);
+  --pane-top: linear-gradient(
+    90deg,
+    transparent,
+    rgba(11, 13, 15, 0.06) 24%,
+    rgba(10, 125, 93, 0.28) 50%,
+    rgba(11, 13, 15, 0.06) 76%,
+    transparent
+  );
+  --pane-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.85), transparent 46%);
 
   color-scheme: light;
 }

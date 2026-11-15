@@ -19,7 +19,6 @@ import {
   rememberAccount,
   summarise,
   type AccountRecord,
-  type SavedAccount,
   type SavedAccountSummary,
 } from './accounts'
 import { readRole, type AccountRole } from './roles'
@@ -117,7 +116,7 @@ export function takeNextPath(): string {
   return value
 }
 
-/** A session in the shape the vault stores. */
+/** A session in the shape the vault stores: identity only, never a credential. */
 function toRecord(session: Session): AccountRecord {
   const meta = (session.user.user_metadata ?? {}) as Record<string, unknown>
   return {
@@ -125,9 +124,6 @@ function toRecord(session: Session): AccountRecord {
     email: session.user.email ?? '',
     name: displayName(session.user),
     avatarUrl: typeof meta.avatar_url === 'string' ? meta.avatar_url : null,
-    accessToken: session.access_token,
-    refreshToken: session.refresh_token ?? '',
-    expiresAt: session.expires_at ?? null,
   }
 }
 
@@ -136,11 +132,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [status, setStatus] = useState<AuthStatus>(supabase ? 'loading' : 'unconfigured')
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState<SavedAccount[]>([])
+  const [saved, setSaved] = useState<SavedAccountSummary[]>([])
   const [addingAccount, setAddingAccount] = useState(false)
-  // A handover is a load, not an absence: the guard must not bounce the browser
-  // to /sign-in between revoking one session and opening the next.
-  const [handover, setHandover] = useState(false)
 
   // The vault is device state, so it is read after mount rather than during
   // rendering. Until then the menu simply has no saved accounts to list.
@@ -149,8 +142,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const remember = useCallback((next: Session | null) => {
-    // Only a session with a refresh token can be reopened later.
-    if (!next?.refresh_token) return
+    if (!next) return
+    // The vault keeps the identity, so the switcher can list the account. The
+    // session itself stays in Supabase's own store, which is the only place a
+    // refresh token is written.
     setSaved(rememberAccount(toRecord(next)))
   }, [])
 
@@ -229,7 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [supabase, remember])
 
   const signInWithGoogle = useCallback(
-    async (nextPath?: string) => {
+    async (nextPath?: string, loginHint?: string) => {
       setError(null)
       if (!supabase || typeof window === 'undefined') {
         setError(AUTH_UNAVAILABLE_REASON)
@@ -241,11 +236,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       markAddingAccount(session?.user.id ?? null)
       setAddingAccount(true)
 
+      // ``login_hint`` only pre-selects an address at Google; it grants nothing
+      // and the engine still decides which workspace the result may join.
+      const queryParams: Record<string, string> = { prompt: 'select_account' }
+      if (loginHint) queryParams.login_hint = loginHint
+
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}${AUTH_CALLBACK_PATH}`,
-          queryParams: { prompt: 'select_account' },
+          queryParams,
         },
       })
 
@@ -273,39 +273,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [supabase],
   )
 
-  /**
-   * Hands one saved session back to the client. Shared by switching and sign-out.
-   *
-   * `dead` means the identity provider rejected the token (revoked, or rotated by
-   * another browser), so the entry is dropped. `unavailable` means it could not
-   * be reached at all: that is retryable, so the account stays saved.
-   */
-  const openSaved = useCallback(
-    async (
-      account: SavedAccount,
-    ): Promise<{ status: 'ok'; role: AccountRole | null } | { status: 'dead' | 'unavailable' }> => {
-      if (!supabase) return { status: 'unavailable' }
-      const { data, error: failure } = await supabase.auth.setSession({
-        access_token: account.accessToken,
-        refresh_token: account.refreshToken,
-      })
-      if (!failure && data.session) {
-        setSession(data.session)
-        setStatus('authenticated')
-        remember(data.session)
-        return { status: 'ok', role: readRole(data.session.user) }
-      }
-      const rejected =
-        !failure || failure.status === 400 || failure.status === 401 || failure.status === 403
-      if (rejected) {
-        setSaved(forgetAccount(account.id))
-        return { status: 'dead' }
-      }
-      return { status: 'unavailable' }
-    },
-    [supabase, remember],
-  )
-
   const switchAccount = useCallback(
     async (id: string): Promise<SwitchAccountResult> => {
       if (!supabase) return { ok: false, message: AUTH_UNAVAILABLE_REASON }
@@ -315,19 +282,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { ok: false, message: 'That account is no longer saved on this device.' }
       }
       setError(null)
-      setHandover(true)
-      const opened = await openSaved(account)
-      setHandover(false)
-      if (opened.status === 'ok') return { ok: true, role: opened.role }
+      // This build keeps no credential for a saved account, so resuming one means
+      // signing in to it again. Sending the address as a hint only saves typing:
+      // the identity provider still authenticates the person.
+      await signInWithGoogle(undefined, account.email)
       return {
         ok: false,
-        message:
-          opened.status === 'dead'
-            ? 'That account has to sign in again before it can be used here.'
-            : 'The identity provider could not be reached, so that account was not opened. Try again.',
+        message: `Sign in as ${account.email || account.name} to use that account here.`,
       }
     },
-    [supabase, session, openSaved],
+    [supabase, session, signInWithGoogle],
   )
 
   const forgetSaved = useCallback((id: string) => {
@@ -341,30 +305,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!supabase) return false
 
     const leaving = session?.user.id ?? null
-    // The account being signed out is revoked below, so its saved tokens are
-    // dead: drop the entry and continue with whatever remains.
-    const remaining = leaving ? forgetAccount(leaving) : readAccounts()
-    setSaved(remaining)
+    // The identity is listed while the person is signed in here, so the entry
+    // goes with the session. What remains for other accounts is a name and a
+    // picture — never a token, and never a session this request could renew.
+    if (leaving) setSaved(forgetAccount(leaving))
 
-    const next = remaining[0] ?? null
-    setHandover(Boolean(next))
+    // Supabase revokes the refresh token and clears its persisted session
+    // (`aetrix:auth`). The vault holds identities only, so nothing else on this
+    // device has to be erased to leave.
     await supabase.auth.signOut()
-
-    let opened = false
-    if (next) {
-      opened = (await openSaved(next)).status === 'ok'
-      if (!opened) {
-        setSession(null)
-        setStatus('anonymous')
-      }
-    }
-    setHandover(false)
-    return opened
-  }, [supabase, session, openSaved])
+    setSession(null)
+    setStatus('anonymous')
+    return false
+  }, [supabase, session])
 
   const value = useMemo<AuthValue>(
     () => ({
-      status: handover ? 'loading' : status,
+      status,
       session,
       user: session?.user ?? null,
       error,
@@ -379,7 +336,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       dismissError: () => setError(null),
     }),
     [
-      handover,
       status,
       session,
       error,

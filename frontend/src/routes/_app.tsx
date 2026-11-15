@@ -54,6 +54,16 @@ function pageMeta(pathname: string): PageMeta {
       eyebrow: 'Attention',
       description: 'Exceptions raised by the correction pipeline that need a person.',
     },
+    '/notifications': {
+      title: 'Notifications',
+      eyebrow: 'Attention',
+      description: 'Stored job and membership events addressed to this account.',
+    },
+    '/history': {
+      title: 'Marking history',
+      eyebrow: 'Outcomes',
+      description: 'Correction jobs, their marks and the approval state of each.',
+    },
     '/queue': {
       title: 'Marking queue',
       eyebrow: 'Correction jobs',
