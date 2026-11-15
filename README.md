@@ -15,9 +15,9 @@ benchmark and the product record in one repository.
 </p>
 
 > **Production deployment:** <https://aetrix.pages.dev>, built from `main` by the
-> Cloudflare Pages GitHub integration. **Last verified:** 2026-11-15. The exact
-> serving commit is recorded in the Pages deployment and the production
-> verification run.
+> Cloudflare Pages GitHub integration. **Last verified:** 2026-11-15 against Pages
+> deployment `4717e76`; the frontend changes it serves are from `65a479d`. See the
+> [production verification run](https://github.com/AetherRIP/Aetrix_V5.5/actions/runs/43725473948).
 
 > **Status: pre-release integration checkpoint.** The engine's tenancy, job lifecycle,
 > marking pipeline, results and review APIs are covered by automated tests. The public
@@ -155,8 +155,8 @@ has been exercised against a live provider.
 | Frontend typecheck | `cd frontend && ../.tools/node/node.exe node_modules/typescript/bin/tsc --noEmit` | **exit 0** |
 | Production build | `cd frontend && npm run build` (client, SSR, dev-var strip and legal clean URLs) | **exit 0** |
 | Full browser suite | Playwright against a production preview, including legal acceptance and whole-route layout coverage | **282 passed, 2 skipped (284 tests)** |
-| Production legal routes | `curl` all nine public legal URLs | **TBD after publish** |
-| Production smoke check | Pages deployment matching the pushed commit; home title and routes | **TBD after publish** |
+| Production legal routes | `curl` all nine public legal URLs on <https://aetrix.pages.dev> | **9/9 returned 200** |
+| Production smoke check | Cloudflare Pages check `4717e76`; verification workflow home title and routes | **passed** |
 | Live engine probes | `GET /health`, `GET /ready` | **offline — DNS unresolved** |
 
 The full merged suite ran 284 tests: 282 passed and 2 were skipped in 3m36s. The two

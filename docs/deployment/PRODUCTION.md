@@ -4,8 +4,10 @@
 - **Pages project:** `aetrix`
 - **Source:** `AetherRIP/Aetrix_V5.5`, branch `main`
 - **Last verified:** 2026-11-15
-- **Serving commit:** pending the first publish of this runbook; confirm it in the
-  Pages deployment record and the `Verify production deployment` workflow run.
+- **Verified deployment:** `4717e76` — the Cloudflare Pages check and
+  [production verification run](https://github.com/AetherRIP/Aetrix_V5.5/actions/runs/43725473948)
+  both passed. The frontend changes in that build came from `65a479d`; the later
+  commits only changed deployment documentation and CI.
 
 This is the runbook for the public frontend. The FastAPI correction engine is not
 hosted on Cloudflare Pages and has its own deployment and recovery instructions in
@@ -38,9 +40,11 @@ frontend must show its unavailable states rather than fabricated data.
 2. Pushing to `main` lets the Pages GitHub integration build and publish. Do not run
    a second upload for a routine release.
 3. The [Verify production deployment](https://github.com/AetherRIP/Aetrix_V5.5/actions/workflows/verify-production.yml)
-   workflow waits for the Pages deployment whose commit hash matches the pushed
-   commit. It then checks the home page and all nine public legal routes. A failure
-   means the deployment did not build, did not publish, or the live surface is wrong.
+   workflow waits for the Cloudflare Pages check run for the pushed commit, then
+   checks the home page and all nine public legal routes. A failure means the
+   deployment did not build, did not publish, or the live surface is wrong. The
+   workflow uses the repository's automatic token and does not need a Cloudflare API
+   secret.
 4. If the Pages build fails, open the project's deployment record, read the build log,
    fix the cause on `main`, and let Pages rebuild. Do not upload a hand-built `dist/`
    as the normal recovery path.
