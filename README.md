@@ -15,9 +15,12 @@ benchmark and the product record in one repository.
 </p>
 
 > **Production deployment:** <https://aetrix.pages.dev>, built from `main` by the
-> Cloudflare Pages GitHub integration. **Last verified:** 2026-11-15 against Pages
-> deployment `4717e76`; the frontend changes it serves are from `65a479d`. See the
-> [production verification run](https://github.com/AetherRIP/Aetrix_V5.5/actions/runs/43725473948).
+> Cloudflare Pages GitHub integration. **Last verified:** 2026-11-16 against Pages
+> deployment `0fbd162e` (commit `977763a`, the pinned-act landing page): home `200`,
+> `/terms` `200`, `/sign-in` canonical `308`, six pin spacers built, the instrument
+> stage pinned at `top: 0` for the length of its act, the 3D stack rendering at
+> 649×484 in a GPU browser, and a layer click returning `L4 · Implemented`. No failed
+> requests or page errors on load.
 
 > **Status: pre-release integration checkpoint.** The engine's tenancy, job lifecycle,
 > marking pipeline, results and review APIs are covered by automated tests. The public
@@ -178,7 +181,7 @@ The benchmark is frozen and never imported by production code.
 | Assignments, submissions and documents | Implemented | Registration, PDF ingestion, validation, page mapping and local storage |
 | Reviewer manual upload | Implemented and tested | A reviewer may register a script and upload a script or a mark scheme so marking continues while Google Classroom is unavailable; creating an exam, creating an assignment and approving a scheme stay with a teacher or administrator (`Principal.can_upload_documents`) |
 | Correction jobs and worker | Implemented | Idempotency, leases, attempts, cancellation, retry policy and typed failure states |
-| Marking pipeline and results | Tested, live marking unverified | Strict structured output, SymPy verification, question results and evidence; provider reachability is not an accuracy claim |
+| Marking pipeline and results | Tested, live marking unverified | Strict structured output, SymPy verification, question results and evidence, plus independent scheme checks (unknown criterion, missing mark point, over-capacity award, unmet dependency, answer contradictions), page-coverage reporting and cost-aware review sampling; provider reachability is not an accuracy claim |
 | Human review and approval | Implemented and integration-tested | Reviewer decisions, reasoned overrides, approval gate and audit |
 | Roster, classes and CSV import | Implemented | Tenant-owned roster with row-level import diagnostics |
 | Workspace data surfaces | Implemented | Dashboard, assignments, submissions, queue, gradebook, inbox, reports and history |
@@ -203,6 +206,7 @@ has been exercised against a live provider.
 | Frontend typecheck | `cd frontend && ../.tools/node/node.exe node_modules/typescript/bin/tsc --noEmit` | **exit 0** |
 | Production build | `cd frontend && npm run build` (client, SSR, dev-var strip and legal clean URLs) | **exit 0** |
 | Full browser suite | Playwright against a production preview, including legal acceptance and whole-route layout coverage | **282 passed, 2 skipped (284 tests)** |
+| Engine unit suite (engine commit) | `cd backend && .venv/Scripts/python.exe -m ruff check app tests`; `pytest -q` | **ruff clean; 498 passed**; 266 integration tests error at fixture setup because `.env` points at a non-loopback database and `conftest` refuses to truncate it |
 | Marketing scroll suite | `cd frontend && ../.tools/node/node.exe node_modules/@playwright/test/cli.js test tests/marketing.spec.ts` | **20 passed** |
 | Responsive layout suite | `… test tests/responsive.spec.ts` (360–1920 px) | **91 passed** |
 | Instrument in a GPU browser | Visible Chromium, `ANGLE (NVIDIA GTX 1050, Direct3D11)` | 3D at 811×605; stage stays at `top: 0`/`position: fixed` at four scroll offsets inside the pin; drag rotates; layer click sets the readout to `L4 · Implemented` |
