@@ -77,6 +77,54 @@ The public pages share one drafting field: a masked grid, three static pools of 
 translucent panes that refract them. `backdrop-filter` is deliberately absent on this
 surface — the blur was measured as the dominant scroll cost and removed.
 
+### Scroll choreography
+
+The landing page is five pinned acts and one pinned film frame, driven by GSAP
+ScrollTrigger `pin` + `scrub`. An act fixes its stage at the top of the viewport,
+transforms its scenes inside that frame, and releases when the timeline ends:
+
+| Act | Section | Pin | What the scroll drives |
+|---|---|---|---|
+| I | opening (`#opening`) | 220% | hero copy and lattice lift out while the field stays, three paper sheets converge, question brackets and evidence chips resolve |
+| II | transformation (`#transformation`) | 320% | the six stages of one correction, caption track collapsing to the active stage |
+| III | scenes (`#chapters`) | 560% | six scenes hand over inside one frame, with a marker rail and a 01–06 counter |
+| IV | instrument (`#instrument`) | 180% | the eight-layer stack assembles and explodes |
+| V | transparency (`#security`) | 240% | the evidence trail walked node by node |
+| — | platform film (`#platform`) | 110% | the frame assembles from a clip path and holds, then the page continues |
+
+The pinned layout is progressive enhancement, not the page itself. It is enabled by
+`data-cinema="on"`, which `frontend/src/components/marketing/motion.ts` sets only after
+GSAP has loaded and only at ≥900px. Below that width, under
+`prefers-reduced-motion: reduce`, or with no JavaScript, the same markup is an ordinary
+stacked document — every scene readable, nothing pinned, nothing hidden.
+
+Scenes that are not on stage are hidden with `visibility` (GSAP `autoAlpha`), never
+opacity alone, so an invisible scene cannot swallow a click or hold a tab stop. That was
+a real defect: the incoming opening scene sat over the hero's buttons and made them
+unclickable.
+
+### What the motion costs
+
+- The ambient shader draws at 0.68 of its CSS size, at 30fps, and creates its WebGL
+  context only when the canvas comes within 250px of the viewport.
+- The hero glow is a static gradient with one transform drift: no blur filter and no
+  blend mode sits on any animated layer.
+- The 3D instrument imports three only when the section approaches, and renders only
+  while something is moving — at rest the loop stops and costs no frames.
+- Measured over a 3-second idle window at 1440×900 in software-rendered Chromium, before
+  and after that work: idle frame throughput at the top of the page 8.9 → 52.8 fps and
+  long tasks 37 (4.1 s) → 3 (0.37 s); inside the instrument act 1.8 → 60.3 fps and
+  29 (14.1 s) → 9 (0.88 s). WebGL contexts alive at load: 3 → 1.
+
+### Without WebGL2
+
+The instrument needs WebGL2, which Chromium also provides in software when hardware
+acceleration is off. Where no WebGL2 context exists at all, or the GPU context is lost
+mid-session, the section switches to a flat SVG diagram of the same eight layers that
+still assembles with the scroll and isolates a layer on selection, and the hint says so.
+The capability probe runs before three is constructed and the reason is logged to the
+console.
+
 The sign-in page is a clearance desk: a masthead carrying the real access policy, the
 access-status ledger, and a handshake band that names the four steps the OAuth exchange
 actually performs — PKCE challenge in the browser, Google consent, the single-use code
@@ -155,6 +203,9 @@ has been exercised against a live provider.
 | Frontend typecheck | `cd frontend && ../.tools/node/node.exe node_modules/typescript/bin/tsc --noEmit` | **exit 0** |
 | Production build | `cd frontend && npm run build` (client, SSR, dev-var strip and legal clean URLs) | **exit 0** |
 | Full browser suite | Playwright against a production preview, including legal acceptance and whole-route layout coverage | **282 passed, 2 skipped (284 tests)** |
+| Marketing scroll suite | `cd frontend && ../.tools/node/node.exe node_modules/@playwright/test/cli.js test tests/marketing.spec.ts` | **20 passed** |
+| Responsive layout suite | `… test tests/responsive.spec.ts` (360–1920 px) | **91 passed** |
+| Instrument in a GPU browser | Visible Chromium, `ANGLE (NVIDIA GTX 1050, Direct3D11)` | 3D at 811×605; stage stays at `top: 0`/`position: fixed` at four scroll offsets inside the pin; drag rotates; layer click sets the readout to `L4 · Implemented` |
 | Production legal routes | `curl` all nine public legal URLs on <https://aetrix.pages.dev> | **9/9 returned 200** |
 | Production smoke check | Cloudflare Pages check `4717e76`; verification workflow home title and routes | **passed** |
 | Live engine probes | `GET /health`, `GET /ready` | **offline — DNS unresolved** |

@@ -90,7 +90,10 @@ export function useScrollReveal() {
           observer.unobserve(entry.target)
         }
       },
-      { rootMargin: '0px 0px -6% 0px', threshold: 0.06 },
+      /* threshold 0: a tall section that is partly on screen still counts, and
+         a jump (anchor link, End key, restored scroll) cannot skip past an
+         element whose band is narrower than one wheel flick. */
+      { rootMargin: '0px 0px -2% 0px', threshold: 0 },
     )
 
     for (const node of nodes) observer.observe(node)
@@ -99,11 +102,16 @@ export function useScrollReveal() {
 }
 
 export const SECTION_IDS = [
+  'problem',
+  'transformation',
+  'chapters',
+  'workflow',
+  'instrument',
   'platform',
   'signal',
-  'workflow',
-  'features',
   'security',
+  'roles',
+  'start',
 ] as const
 
 /** Highlights the section currently occupying the reading position. */

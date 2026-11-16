@@ -1,24 +1,28 @@
+import { useRef } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useScrollProgress, useScrollReveal } from '../lib/hooks'
 import { AmbientField } from '../components/site/AmbientField'
-import { Hero } from '../components/site/Hero'
-import { ProductPreview } from '../components/product/ProductPreview'
 import { ScoreSignal } from '../components/site/ScoreSignal'
-import { Workflow } from '../components/site/Workflow'
-import { Features } from '../components/site/Features'
-import { Security } from '../components/site/Security'
-import { FinalCta } from '../components/site/FinalCta'
-import { SectionHead } from '../components/site/SectionHead'
+import { useCinematicMotion } from '../components/marketing/motion'
+import { Opening } from '../components/marketing/Opening'
+import { Transformation } from '../components/marketing/Transformation'
+import { Chapters } from '../components/marketing/Chapters'
+import { Instrument } from '../components/marketing/Instrument'
+import { Pipeline } from '../components/marketing/Pipeline'
+import { Showcase } from '../components/marketing/Showcase'
+import { Evidence } from '../components/marketing/Evidence'
+import { RoleStage } from '../components/marketing/RoleStage'
+import { Invitation } from '../components/marketing/Invitation'
 
 const DESCRIPTION =
-  'AI-assisted mathematics marking for Edexcel IGCSE 4MA1, built around examiner-level consistency, transparent corrections and human oversight.'
+  'AI-assisted mathematics marking for Edexcel IGCSE 4MA1, built around a locked marking blueprint, transparent evidence behind every mark and human review of every uncertain answer.'
 
 export const Route = createFileRoute('/_marketing/')({
   head: () => ({
     meta: [
-      { title: 'Aetrix V5.5 — Mark smarter. Trust every mark.' },
+      { title: 'Aetrix V5.5 — Beyond marking. Better understanding.' },
       { name: 'description', content: DESCRIPTION },
-      { property: 'og:title', content: 'Aetrix V5.5 — Mark smarter. Trust every mark.' },
+      { property: 'og:title', content: 'Aetrix V5.5 — Beyond marking. Better understanding.' },
       { property: 'og:description', content: DESCRIPTION },
       { property: 'og:type', content: 'website' },
       { name: 'twitter:card', content: 'summary_large_image' },
@@ -27,32 +31,36 @@ export const Route = createFileRoute('/_marketing/')({
   component: Home,
 })
 
+/**
+ * The landing page, told as five pinned acts in one scroll.
+ *
+ * `useCinematicMotion` owns the choreography: on a wide viewport each act is
+ * pinned and its scenes transform inside one fixed stage; on a phone, with
+ * motion reduced, or without JavaScript the same markup reads as five ordinary
+ * chapters. The interactive sections (3D instrument, pipeline, evidence trail,
+ * account types) hold their own React state, so none of them depends on an
+ * animation frame to be usable.
+ */
 function Home() {
+  const page = useRef<HTMLDivElement>(null)
   useScrollReveal()
   useScrollProgress()
+  useCinematicMotion(page)
 
   return (
-    <div className="landscape">
+    <div className="mk" ref={page}>
       <AmbientField />
 
-      <Hero />
-
-      <section className="section" id="platform" aria-labelledby="platform-title">
-        <div className="shell">
-          <SectionHead
-            id="platform-title"
-            title="A marking console you can read at a glance."
-            note="A designed preview of the interface the rebuild is working toward: assignment state, submission progress, question-level marks and the exceptions that need a person. Every figure below is synthetic demonstration data."
-          />
-          <ProductPreview />
-        </div>
-      </section>
-
+      <Opening />
+      <Transformation />
+      <Chapters />
+      <Instrument />
+      <Pipeline />
+      <Showcase />
       <ScoreSignal />
-      <Workflow />
-      <Features />
-      <Security />
-      <FinalCta />
+      <Evidence />
+      <RoleStage />
+      <Invitation />
     </div>
   )
 }

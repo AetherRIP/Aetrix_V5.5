@@ -16,10 +16,12 @@ export function SiteFooter() {
 
           <nav className="site-footer__col" aria-label="Product">
             <h2 className="site-footer__heading">Product</h2>
-            <Link to="/" hash="platform">Platform preview</Link>
+            <Link to="/" hash="problem">The problem</Link>
+            <Link to="/" hash="transformation">Transformation</Link>
             <Link to="/" hash="workflow">Workflow</Link>
-            <Link to="/" hash="features">Features</Link>
-            <Link to="/" hash="security">Security</Link>
+            <Link to="/" hash="platform">Platform</Link>
+            <Link to="/" hash="security">Transparency</Link>
+            <Link to="/" hash="roles">Account types</Link>
           </nav>
 
           <nav className="site-footer__col" aria-label="Access">

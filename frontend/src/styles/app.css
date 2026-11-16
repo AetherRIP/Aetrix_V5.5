@@ -1,6 +1,9 @@
 @import './tokens.css';
 @import './app-forms.css';
 @import './legal.css';
+/* The landing page's cinematic layer. Prefixed `mk-`; it shares the tokens and
+   touches nothing in the app shell or the legal pages. */
+@import './marketing.css';
 
 /* ══ 1. Base ═══════════════════════════════════════════════════════════ */
 
@@ -475,6 +478,12 @@ svg {
   cursor: pointer;
 }
 
+/*
+ * The panel is present in the DOM on every route so its links are in the
+ * document, but it is only reachable while open. Hiding it with visibility
+ * rather than display keeps the opening transition and leaves the `inert`
+ * button's focus rules intact.
+ */
 .mobile-panel {
   position: absolute;
   left: 0;
@@ -484,6 +493,24 @@ svg {
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   box-shadow: var(--shadow-2);
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition:
+    opacity var(--dur) var(--ease),
+    transform var(--dur) var(--ease),
+    visibility 0s linear var(--dur);
+}
+
+.mobile-panel[data-open='true'] {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition:
+    opacity var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
 }
 
 .mobile-panel__nav {

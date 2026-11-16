@@ -37,7 +37,7 @@ const PROTECTED = [
 type Expectation = { path: string; heading: RegExp }
 
 const ROUTES: Expectation[] = [
-  { path: '/', heading: /Mark smarter/i },
+  { path: '/', heading: /Beyond marking/i },
   { path: '/sign-in', heading: /Sign in to Aetrix/i },
   { path: '/auth/callback', heading: /Sign-in did not complete|Completing sign-in/i },
   ...PROTECTED.map((path) => ({ path, heading: /Sign in to Aetrix/i })),

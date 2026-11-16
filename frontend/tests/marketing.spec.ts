@@ -72,7 +72,7 @@ test.describe('routes', () => {
     await expect(page.getByRole('banner')).toHaveCount(1)
     await expect(page.getByRole('contentinfo')).toHaveCount(1)
     await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(1)
-    await expect(page.locator('h1')).toContainText('Mark smarter')
+    await expect(page.locator('h1')).toContainText('Beyond marking')
   })
 
   test('sign-in page is a real, honest destination', async ({ context }) => {
