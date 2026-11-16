@@ -203,3 +203,55 @@ def test_a_wrong_equation_answer_still_requires_a_person() -> None:
 
     assert outcome.review_required is True
     assert any("not mathematically equivalent" in reason for reason in outcome.reasons)
+
+
+def _zero_mark(**overrides) -> QuestionMark:
+    body = {
+        "awarded_marks": 0,
+        "components": [MarkComponent(code="A1", marks=2, awarded=False)],
+        "confidence": 0.95,
+    }
+    body.update(overrides)
+    return _mark(**body)
+
+
+def test_a_zero_award_contradicted_by_its_own_equivalent_check_requires_review() -> None:
+    """The reply proves the answer is right and awards nothing: that is a conflict."""
+
+    mark = _zero_mark(
+        answer_check={"student_expression": "3/4", "expected_expression": "0.75"}
+    )
+
+    outcome = verify_question(mark, max_marks=2, min_confidence=0.4)
+
+    assert outcome.review_required is True
+    assert any(
+        "contradicts its own answer check" in reason for reason in outcome.reasons
+    )
+    assert outcome.records[0].kind == "INTEGRITY"
+    assert outcome.records[0].status == "REVIEW_REQUIRED"
+
+
+def test_a_zero_with_an_undecidable_check_is_unknown_not_a_contradiction() -> None:
+    mark = _zero_mark(
+        answer_check={"student_expression": "x^2 +", "expected_expression": "4"}
+    )
+
+    outcome = verify_question(mark, max_marks=2, min_confidence=0.4)
+
+    assert any("could not be verified" in reason for reason in outcome.reasons)
+    assert not any(
+        "contradicts its own answer check" in reason for reason in outcome.reasons
+    )
+
+
+def test_an_award_with_a_proven_equivalent_answer_stays_clean() -> None:
+    mark = _mark(
+        answer_check={"student_expression": "0.75", "expected_expression": "3/4"}
+    )
+
+    outcome = verify_question(mark, max_marks=2, min_confidence=0.6)
+
+    assert outcome.review_required is False
+    assert [record.kind for record in outcome.records] == ["INTEGRITY", "MATHEMATICAL"]
+    assert outcome.records[1].status == "EQUIVALENT"

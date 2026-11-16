@@ -421,6 +421,34 @@ def test_page_images_are_served_only_to_the_owning_tenant(
     )
 
 
+def test_a_cancelled_job_is_not_the_submissions_result(
+    client, identity, auth_headers, paper, db_session
+) -> None:
+    """A stopped run is a fragment, not the student's result.
+
+    Its rows stay readable through its own job id, but resolving the submission's
+    result must not return it.
+    """
+
+    headers = auth_headers(identity.user_a)
+    job, _, _ = _completed_job(paper, identity, db_session)
+    job.state = "CANCELLED"
+    job.cancel_requested = True
+    db_session.commit()
+
+    assert (
+        client.get(
+            f"/api/v1/submissions/{paper.submission.id}/results", headers=headers
+        ).status_code
+        == 404
+    )
+    # The cancelled run's own evidence is still readable.
+    assert (
+        client.get(f"/api/v1/corrections/{job.id}/results", headers=headers).status_code
+        == 200
+    )
+
+
 def test_a_cancelled_job_cannot_be_approved_or_changed(
     client, identity, auth_headers, paper, db_session
 ) -> None:

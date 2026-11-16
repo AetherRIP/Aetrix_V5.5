@@ -587,11 +587,14 @@ class VerificationResult(UUIDPrimaryKey, TenantScoped, Base):
     __table_args__ = (
         UniqueConstraint("job_id", "question_id", "kind", name="uq_verification_identity"),
         CheckConstraint(
-            "kind IN ('MATHEMATICAL','INTEGRITY','DOUBLE_CHECK')", name="kind"
+            "kind IN ('MATHEMATICAL','INTEGRITY','DOUBLE_CHECK',"
+            "'SCHEME_MATHEMATICAL','TRANSCRIPTION')",
+            name="kind",
         ),
         CheckConstraint(
             "status IN ('EQUIVALENT','DIFFERENT','UNKNOWN','PASS','FAIL',"
-            "'REVIEW_REQUIRED','AGREES','DISAGREES','UNVERIFIABLE')",
+            "'REVIEW_REQUIRED','AGREES','DISAGREES','UNVERIFIABLE',"
+            "'SKIPPED','DIFFERS','ABSENT')",
             name="status",
         ),
     )

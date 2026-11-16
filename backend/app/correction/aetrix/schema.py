@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from ...providers.json import parse_json_text
+
 MARKING_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -52,15 +54,46 @@ class MarkingResponseInvalid(RuntimeError):
     """The model's answer cannot be turned into a mark without inventing data."""
 
 
+#: Supporting text is clipped, never rejected.  A model that writes a long
+#: quotation, reason or note has still marked the question; discarding that mark
+#: over a size limit would turn a real decision into an unmarked question.  The
+#: unclipped reply is retained in ``raw_response``, so nothing is lost.
+MAX_DESCRIPTION_CHARS = 500
+MAX_REASON_CHARS = 2000
+MAX_EVIDENCE_CHARS = 2000
+MAX_NOTES_CHARS = 2000
+MAX_ANSWER_CHARS = 4000
+MAX_REVIEW_REASONS = 20
+MAX_REVIEW_REASON_CHARS = 500
+
+#: An award at or above this is a parsing failure, not a mark: no question in an
+#: examination paper is worth more, and the blueprint maximum is enforced later.
+AWARD_RESPONSE_CEILING = 200
+
+_TEXT_LIMITS = {
+    "description": MAX_DESCRIPTION_CHARS,
+    "reason": MAX_REASON_CHARS,
+    "evidence": MAX_EVIDENCE_CHARS,
+}
+
+
+def _clip(value: Any, limit: int) -> Any:
+    """Keep a supporting string within its documented limit."""
+
+    if value is None or not isinstance(value, str):
+        return value
+    return value if len(value) <= limit else value[:limit]
+
+
 class MarkComponent(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     code: str = Field(min_length=1, max_length=20)
-    description: str | None = Field(default=None, max_length=500)
-    marks: int = Field(ge=0, le=200)
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_CHARS)
+    marks: int = Field(ge=0, le=AWARD_RESPONSE_CEILING)
     awarded: bool = False
-    reason: str | None = Field(default=None, max_length=2000)
-    evidence: str | None = Field(default=None, max_length=2000)
+    reason: str | None = Field(default=None, max_length=MAX_REASON_CHARS)
+    evidence: str | None = Field(default=None, max_length=MAX_EVIDENCE_CHARS)
 
     @field_validator("code")
     @classmethod
@@ -69,6 +102,11 @@ class MarkComponent(BaseModel):
         if not value:
             raise ValueError("a component code cannot be blank")
         return value
+
+    @field_validator("description", "reason", "evidence", mode="before")
+    @classmethod
+    def _clip_supporting_text(cls, value: Any, info: Any) -> Any:
+        return _clip(value, _TEXT_LIMITS[str(info.field_name)])
 
     @field_validator("evidence")
     @classmethod
@@ -93,13 +131,61 @@ class QuestionMark(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     question_id: str = Field(min_length=1, max_length=40)
-    student_answer: str | None = Field(default=None, max_length=4000)
-    awarded_marks: int = Field(ge=0, le=200)
+    student_answer: str | None = Field(default=None, max_length=MAX_ANSWER_CHARS)
+    awarded_marks: int = Field(ge=0, le=AWARD_RESPONSE_CEILING)
     components: list[MarkComponent] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     review_reasons: list[str] = Field(default_factory=list)
     answer_check: AnswerCheck | None = None
-    notes: str | None = Field(default=None, max_length=2000)
+    notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
+
+    @field_validator("student_answer", "notes", mode="before")
+    @classmethod
+    def _clip_answer_text(cls, value: Any, info: Any) -> Any:
+        limit = MAX_ANSWER_CHARS if str(info.field_name) == "student_answer" else MAX_NOTES_CHARS
+        return _clip(value, limit)
+
+    @field_validator("review_reasons", mode="before")
+    @classmethod
+    def _bound_review_reasons(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return value
+        reasons = [_clip(reason, MAX_REVIEW_REASON_CHARS) for reason in value]
+        return [reason for reason in reasons if isinstance(reason, str)][:MAX_REVIEW_REASONS]
+
+    @field_validator("answer_check", mode="before")
+    @classmethod
+    def _optional_answer_check(cls, value: Any) -> Any:
+        """The mathematical check is advisory; it must not void the award.
+
+        A check this build cannot read (an empty side, an expression beyond the
+        length limit) is dropped.  The marking decision is still fully subject
+        to the integrity checks and is recorded with no mathematical verdict,
+        which is honest: an unreadable check proved nothing.
+        """
+
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            # A blank side is not a check: comparing nothing to something can
+            # only produce "unknown", which would send a good mark to review for
+            # a field the model filled in badly.
+            cleaned = dict(value)
+            for key in ("student_expression", "expected_expression"):
+                raw = cleaned.get(key)
+                if isinstance(raw, str):
+                    cleaned[key] = raw.strip()
+            if not cleaned.get("student_expression") or not cleaned.get(
+                "expected_expression"
+            ):
+                return None
+            value = cleaned
+        try:
+            return AnswerCheck.model_validate(value)
+        except ValidationError:
+            return None
 
     @property
     def component_total(self) -> int | None:
@@ -141,13 +227,17 @@ def _disambiguate_component_codes(components: list[MarkComponent]) -> None:
 
 
 def parse_question_mark(text: str, *, question_id: str) -> QuestionMark:
-    import json
+    import json  # noqa: F401 - re-exported for callers that assemble replies
 
     raw = _strip_fence(text)
     if not raw:
         raise MarkingResponseInvalid("The model returned an empty response.")
+    # A reply wrapped in prose or a fence is still a reply: the provider helper
+    # extracts the balanced JSON object, and the contract below validates its
+    # shape.  This does not repair malformed JSON and does not accept a partial
+    # object.
     try:
-        payload = json.loads(raw)
+        payload = parse_json_text(raw)
     except ValueError as error:
         raise MarkingResponseInvalid(
             f"The model response was not valid JSON: {error}"

@@ -131,12 +131,17 @@ class ResultsService:
         for a reviewer, but presenting them would apply marks the engine itself
         declined to apply.  Falling back to the previous run is the conservative
         choice — the stored result stays visible until a person acts.
+
+        A cancelled run is skipped for the same reason and one more: marking was
+        stopped part-way, so whatever rows it left are a fragment of a paper, not
+        a result.  Its evidence stays readable through its own job id.
         """
         return self.session.scalar(
             select(CorrectionJob)
             .where(
                 CorrectionJob.tenant_id == tenant_id,
                 CorrectionJob.submission_id == submission_id,
+                CorrectionJob.state != JobState.CANCELLED.value,
                 or_(
                     CorrectionJob.result_source.is_(None),
                     CorrectionJob.result_source != RESULT_SOURCE_REFUSED,

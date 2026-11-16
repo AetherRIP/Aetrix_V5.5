@@ -352,6 +352,11 @@ class MarkingSettings(BaseModel):
     double_check_enabled: bool = False
     double_check_min_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     double_check_max_questions: int = Field(default=8, ge=0, le=50)
+    #: A blind second reading of a question's answer, compared with the answer the
+    #: marking pass extracted.  Off by default because it costs a request per
+    #: selected question; a difference goes to a person and never rewrites anything.
+    transcription_enabled: bool = False
+    transcription_max_questions: int = Field(default=4, ge=0, le=20)
 
 
 class WorkerSettings(BaseModel):

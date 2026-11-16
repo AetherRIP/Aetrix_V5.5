@@ -103,6 +103,16 @@ def _parse(expression: str) -> sympy.Expr | None:
         return None
 
 
+def parse_expression(expression: str) -> sympy.Expr | None:
+    """The public form of the parser, for checks that need to read an expression.
+
+    ``None`` means this build cannot read the text as mathematics; callers must
+    treat that as "no opinion", never as a wrong answer.
+    """
+
+    return _parse(expression)
+
+
 def _parse_candidates(expression: str, *, fold_case: bool) -> list[sympy.Expr]:
     """Every form of the expression that SymPy can read, optionally case-folded."""
 
@@ -170,6 +180,16 @@ def verify_question(
         "confidence": mark.confidence,
         "component_total": mark.component_total,
     }
+    # The mathematical verdict is decided first, because it also decides whether
+    # the award contradicts the model's own answer check.
+    math_status: str | None = None
+    if mark.answer_check is not None:
+        decision = equivalent(
+            mark.answer_check.student_expression, mark.answer_check.expected_expression
+        )
+        math_status = (
+            "EQUIVALENT" if decision is True else "DIFFERENT" if decision is False else "UNKNOWN"
+        )
     integrity_ok = True
     if mark.awarded_marks > max_marks:
         integrity_ok = False
@@ -200,6 +220,16 @@ def verify_question(
     if quality.count("LOW_QUALITY") >= 2:
         integrity_ok = False
         reasons.append("Two or more pages are of low quality, so the reading is unreliable.")
+    if math_status == "EQUIVALENT" and mark.awarded_marks == 0 and max_marks > 0:
+        # The model's own answer check proves the final answer is the expected
+        # one, and the same reply awards nothing.  That is a contradiction
+        # inside a single response, and it is the shape of a false deduction on a
+        # correct answer: a person must see it.
+        integrity_ok = False
+        reasons.append(
+            "The final answer is mathematically equivalent to the expected answer, "
+            "but no marks were awarded, so the reply contradicts its own answer check."
+        )
 
     records.append(
         VerificationRecord(
@@ -209,26 +239,19 @@ def verify_question(
         )
     )
 
-    if mark.answer_check is not None:
-        decision = equivalent(
-            mark.answer_check.student_expression, mark.answer_check.expected_expression
-        )
-        if decision is True:
-            status = "EQUIVALENT"
-        elif decision is False:
-            status = "DIFFERENT"
+    if mark.answer_check is not None and math_status is not None:
+        if math_status == "DIFFERENT":
             # A different final answer is worth a person's attention even when
             # the method marks are plausible: it is a real discrepancy.
             reasons.append(
                 "The final answer is not mathematically equivalent to the expected answer."
             )
-        else:
-            status = "UNKNOWN"
+        elif math_status == "UNKNOWN":
             reasons.append("The final answer could not be verified mathematically.")
         records.append(
             VerificationRecord(
                 kind="MATHEMATICAL",
-                status=status,
+                status=math_status,
                 detail={
                     "student_expression": mark.answer_check.student_expression,
                     "expected_expression": mark.answer_check.expected_expression,

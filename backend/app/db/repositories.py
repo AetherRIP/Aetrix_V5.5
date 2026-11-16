@@ -1091,6 +1091,36 @@ class ResultRepository:
             )
         )
 
+    def double_check_disagreements(
+        self,
+        tenant_id: uuid.UUID,
+        question_ids: list[str],
+        *,
+        exclude_job_id: uuid.UUID,
+    ) -> dict[str, int]:
+        """How often each question disagreed with a second examiner before now.
+
+        Only recorded disagreements count: agreement is not evidence of risk, and
+        an unverifiable second opinion says nothing about the question.  The
+        result lets a review mode spend its requests where this question has
+        gone wrong before.
+        """
+
+        if not question_ids:
+            return {}
+        rows = self.session.execute(
+            select(VerificationResult.question_id, func.count())
+            .where(
+                VerificationResult.tenant_id == tenant_id,
+                VerificationResult.job_id != exclude_job_id,
+                VerificationResult.kind == "DOUBLE_CHECK",
+                VerificationResult.status == "DISAGREES",
+                VerificationResult.question_id.in_(question_ids),
+            )
+            .group_by(VerificationResult.question_id)
+        )
+        return {str(question_id): int(count) for question_id, count in rows}
+
     def verifications(self, job_id: uuid.UUID) -> list[VerificationResult]:
         return list(
             self.session.scalars(
