@@ -18,7 +18,16 @@ export function Lattice() {
         focusable="false"
       >
         <defs>
-          <linearGradient id="lt-stroke" x1="0" y1="0" x2="1" y2="1">
+          {/* userSpaceOnUse: an objectBoundingBox gradient on a flat or upright
+              path has a degenerate bounding box, and the stroke is not painted. */}
+          <linearGradient
+            id="lt-stroke"
+            gradientUnits="userSpaceOnUse"
+            x1="28"
+            y1="612"
+            x2="540"
+            y2="44"
+          >
             <stop offset="0%" stopColor="currentColor" stopOpacity="0.16" />
             <stop offset="52%" stopColor="currentColor" stopOpacity="0.5" />
             <stop offset="100%" stopColor="currentColor" stopOpacity="0.9" />
