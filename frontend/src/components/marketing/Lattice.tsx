@@ -52,13 +52,23 @@ export function Lattice() {
 
         {/* The working: five lines, each one a path so it can be drawn. */}
         <g className="lt-source">
-          {[432, 462, 492, 522, 552].map((y, index) => (
-            <path
-              key={y}
-              className="lt-path"
-              d={`M28 ${y} C 70 ${y - 7}, 108 ${y + 7}, 148 ${y}`}
-              strokeWidth={index === 4 ? 2.4 : 1.4}
-            />
+          {[
+            { y: 432, label: '01 · read' },
+            { y: 462, label: '02 · set out' },
+            { y: 492, label: '03 · solve' },
+            { y: 522, label: '04 · answer' },
+            { y: 552, label: '05 · check' },
+          ].map((step, index) => (
+            <g key={step.y}>
+              <path
+                className="lt-path"
+                d={`M28 ${step.y} C 70 ${step.y - 7}, 108 ${step.y + 7}, 148 ${step.y}`}
+                strokeWidth={index === 4 ? 2.4 : 1.4}
+              />
+              <text className="lt-label" x="28" y={step.y - 8}>
+                {step.label}
+              </text>
+            </g>
           ))}
           <path className="lt-path lt-path--faint" d="M28 402h96" strokeWidth="1" />
           <path className="lt-path lt-path--faint" d="M28 585h64" strokeWidth="1" />
