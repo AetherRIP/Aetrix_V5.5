@@ -467,6 +467,7 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/notifications',
     '/history',
     '/submissions',
+    '/preview',
   ],
   platform_operator: ['/platform', '/settings'],
   supervisor: [
@@ -484,6 +485,8 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/analytics',
     '/assistants',
     '/classroom',
+    '/submissions',
+    '/preview',
   ],
   assistant: [
     '/assistant',
@@ -495,6 +498,7 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/settings',
     '/assignments',
     '/submissions',
+    '/preview',
   ],
   viewer: [
     '/dashboard',
@@ -508,6 +512,8 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/students',
     '/gradebook',
     '/analytics',
+    '/submissions',
+    '/preview',
   ],
 }
 

@@ -370,14 +370,44 @@ export type QuestionResult = {
   scheme_concerns: { code?: string; message?: string }[]
   criteria: CriterionResult[]
   evidence: Evidence[]
+  /** Which required checks ran for this question, and how they ended. */
+  verification: QuestionVerification | null
 }
+
+export type VerificationKind =
+  | 'MATHEMATICAL'
+  | 'INTEGRITY'
+  | 'DOUBLE_CHECK'
+  | 'TRANSCRIPTION'
+  | 'SCHEME_MATHEMATICAL'
+  | 'EVIDENCE'
+  /** A kind this build does not know yet is still displayed, never relabelled. */
+  | (string & {})
 
 export type Verification = {
   question_id: string
-  /** `DOUBLE_CHECK` is the independent second marking; it never changes an award. */
-  kind: 'MATHEMATICAL' | 'INTEGRITY' | 'DOUBLE_CHECK'
+  kind: VerificationKind
   status: string
   detail: Record<string, unknown>
+}
+
+/** The engine's derived verification state for one question. */
+export type QuestionVerification = {
+  question_id: string
+  status:
+    | 'FULLY_VERIFIED'
+    | 'PARTIALLY_VERIFIED'
+    | 'REVIEW_REQUIRED'
+    | 'VERIFICATION_FAILED'
+    | 'VERIFICATION_NOT_REQUIRED'
+    | string
+  required: string[]
+  verified: string[]
+  contradicted: string[]
+  unverifiable: string[]
+  missing: string[]
+  not_applicable: string[]
+  reasons: string[]
 }
 
 export type ReviewDecision = {
@@ -396,6 +426,12 @@ export type JobResults = {
   assignment_id: string
   student_ref: string
   job_state: JobState
+  /**
+   * Verification completeness, independent of `job_state`: a `COMPLETED` paper
+   * is normally only `PARTIALLY_VERIFIED` because the expensive checks are
+   * sampled.
+   */
+  verification_status: string | null
   /** `AUTOMATED_REFUSED` means this run is evidence, not the submission's result. */
   result_source: string | null
   /** A newer run was refused by the result guard and is deliberately not shown. */
@@ -428,6 +464,180 @@ export type PageMeta = {
   quality_status: string
   width: number | null
   height: number | null
+}
+
+/* ── Correction preview ──────────────────────────────────────────────────
+ * The three stored sources behind one correction. Every field is a record the
+ * engine already holds; `null` means the record is absent and the preview says
+ * so rather than filling it in.
+ */
+
+export type PreviewDocument = {
+  id: string
+  kind: string
+  original_filename: string
+  sha256: string
+  size_bytes: number
+  page_count: number
+  ordering_status: string
+  ordering_reasons: Record<string, unknown>[]
+  mapping_status: string
+  mapping_reasons: Record<string, unknown>[]
+}
+
+export type PreviewSchemeDocument = {
+  document_id: string | null
+  original_filename: string | null
+  page_count: number
+  content_hash_matches: boolean
+  exam_document_filename: string | null
+  exam_document_size_bytes: number | null
+  note: string
+}
+
+export type PreviewCriterion = {
+  code: string
+  ordinal: number
+  marks: number
+  description: string
+  expected_answer: string | null
+  required_evidence: string | null
+  award_conditions: string | null
+  withhold_conditions: string | null
+  dependencies: string[]
+  alternatives: Record<string, unknown>[]
+  source_page: number | null
+  source_quote: string | null
+}
+
+export type PreviewDecision = {
+  code: string
+  scheme_ordinal: number | null
+  scheme_marks: number | null
+  awarded: boolean | null
+  awarded_marks: number | null
+  reason: string | null
+  evidence: string[]
+  component_description: string | null
+  ambiguous: boolean
+  note: string | null
+}
+
+export type PreviewVerification = {
+  kind: string
+  status: string
+  detail: Record<string, unknown>
+}
+
+export type PreviewArchive = {
+  provider_response_id: string
+  content_sha256: string
+  model: string | null
+  finish_reason: string | null
+  response_source: string
+  created_at: string
+}
+
+export type PreviewLocation = {
+  page_index: number
+  confidence: number
+  method: string
+  quality_status: string
+  width: number | null
+  height: number | null
+}
+
+export type PreviewQuestion = {
+  question_id: string
+  label: string
+  question_text: string | null
+  special_instructions: string[]
+  max_marks: number
+  awarded_marks: number
+  raw_awarded_marks: number | null
+  status: string
+  processing_state: string
+  review_required: boolean
+  student_answer: string | null
+  working_summary: string | null
+  confidence: number | null
+  answer_check: string | null
+  notes: string | null
+  response_source: string | null
+  response_sequence: number | null
+  prompt_version: string | null
+  scheme_criteria: PreviewCriterion[]
+  criteria: PreviewDecision[]
+  scheme_marks: number
+  component_total: number | null
+  component_consistent: boolean | null
+  location: PreviewLocation | null
+  mapping_note: string | null
+  verifications: PreviewVerification[]
+  review_reasons: string[]
+  concerns: { code?: string; message?: string }[]
+  archive: PreviewArchive | null
+}
+
+export type PreviewPaper = {
+  exam_id: string
+  exam_title: string
+  board: string | null
+  paper_code: string | null
+  assignment_id: string
+  assignment_name: string
+  blueprint_version_id: string
+  scheme_version_id: string
+  blueprint_total_marks: number
+  marking_mode: string | null
+  engine_name: string | null
+  engine_version: string | null
+  primary_model: string | null
+  secondary_model: string | null
+  prompt_version: string | null
+  job_state: JobState
+  result_source: string | null
+  guard_decision: string | null
+  guard_reason: string | null
+  questions_reviewed: number
+  attention: number
+  paper_awarded: number
+  paper_total: number
+  decided_awarded: number
+  decided_total: number
+  decided: number
+  scoreable: number
+  undecided: number
+  review_required: number
+  approved: boolean
+  approved_at: string | null
+  approved_by: string | null
+}
+
+export type PreviewStudent = {
+  submission_id: string
+  job_id: string
+  student_ref: string
+  awarded_marks: number
+  total_marks: number
+  review_required: number
+  job_state: string
+  result_source: string | null
+  current: boolean
+}
+
+export type PreviewWarning = { code: string; message: string }
+
+export type CorrectionPreview = {
+  job_id: string
+  submission_id: string
+  student_ref: string
+  paper: PreviewPaper
+  student_document: PreviewDocument | null
+  scheme_document: PreviewSchemeDocument
+  students: PreviewStudent[]
+  questions: PreviewQuestion[]
+  warnings: PreviewWarning[]
 }
 
 export type Dashboard = {

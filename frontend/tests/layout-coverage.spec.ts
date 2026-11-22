@@ -180,6 +180,12 @@ test.describe('authenticated route coverage', () => {
       expect(response?.status()).toBe(200)
       await expect(page.locator('.app-main')).toBeVisible({ timeout: 20_000 })
       await expect(page.locator('.app-content')).toBeVisible()
+      // The session boot skeleton also renders `.app-main` and `.app-content`,
+      // so the first assertion can pass before the route has rendered. Wait for
+      // the shell to replace the skeleton; otherwise the measurement races the
+      // loading state (which correctly has no page heading).
+      await expect(page.locator('.app-sidebar--skeleton')).toHaveCount(0, { timeout: 20_000 })
+      await expect(page.locator('h1').first()).toBeVisible({ timeout: 20_000 })
 
       for (const viewport of WIDTHS) {
         const result = await layout(page, entry.path, viewport.width)

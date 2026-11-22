@@ -52,6 +52,7 @@ import { Route as AppPlatformIntegrationsRouteImport } from './routes/_app.platf
 import { Route as AppPlatformSettingsRouteImport } from './routes/_app.platform.settings'
 import { Route as AppPlatformUsersRouteImport } from './routes/_app.platform.users'
 import { Route as AppPlatformWorkspacesRouteImport } from './routes/_app.platform.workspaces'
+import { Route as AppPreviewSubmissionIdRouteImport } from './routes/_app.preview.$submissionId'
 import { Route as AppSubmissionsSubmissionIdRouteImport } from './routes/_app.submissions.$submissionId'
 
 const AppRoute = AppRouteImport.update({
@@ -269,6 +270,11 @@ const AppPlatformWorkspacesRoute = AppPlatformWorkspacesRouteImport.update({
   path: '/platform/workspaces',
   getParentRoute: () => AppRoute,
 } as any)
+const AppPreviewSubmissionIdRoute = AppPreviewSubmissionIdRouteImport.update({
+  id: '/preview/$submissionId',
+  path: '/preview/$submissionId',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSubmissionsSubmissionIdRoute =
   AppSubmissionsSubmissionIdRouteImport.update({
     id: '/submissions/$submissionId',
@@ -316,6 +322,7 @@ export interface FileRoutesByFullPath {
   '/platform/settings': typeof AppPlatformSettingsRoute
   '/platform/users': typeof AppPlatformUsersRoute
   '/platform/workspaces': typeof AppPlatformWorkspacesRoute
+  '/preview/$submissionId': typeof AppPreviewSubmissionIdRoute
   '/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
   '/assistant/': typeof AppAssistantIndexRoute
   '/platform/': typeof AppPlatformIndexRoute
@@ -360,6 +367,7 @@ export interface FileRoutesByTo {
   '/platform/settings': typeof AppPlatformSettingsRoute
   '/platform/users': typeof AppPlatformUsersRoute
   '/platform/workspaces': typeof AppPlatformWorkspacesRoute
+  '/preview/$submissionId': typeof AppPreviewSubmissionIdRoute
   '/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
   '/assistant': typeof AppAssistantIndexRoute
   '/platform': typeof AppPlatformIndexRoute
@@ -407,6 +415,7 @@ export interface FileRoutesById {
   '/_app/platform/settings': typeof AppPlatformSettingsRoute
   '/_app/platform/users': typeof AppPlatformUsersRoute
   '/_app/platform/workspaces': typeof AppPlatformWorkspacesRoute
+  '/_app/preview/$submissionId': typeof AppPreviewSubmissionIdRoute
   '/_app/submissions/$submissionId': typeof AppSubmissionsSubmissionIdRoute
   '/_app/assistant/': typeof AppAssistantIndexRoute
   '/_app/platform/': typeof AppPlatformIndexRoute
@@ -453,6 +462,7 @@ export interface FileRouteTypes {
     | '/platform/settings'
     | '/platform/users'
     | '/platform/workspaces'
+    | '/preview/$submissionId'
     | '/submissions/$submissionId'
     | '/assistant/'
     | '/platform/'
@@ -497,6 +507,7 @@ export interface FileRouteTypes {
     | '/platform/settings'
     | '/platform/users'
     | '/platform/workspaces'
+    | '/preview/$submissionId'
     | '/submissions/$submissionId'
     | '/assistant'
     | '/platform'
@@ -543,6 +554,7 @@ export interface FileRouteTypes {
     | '/_app/platform/settings'
     | '/_app/platform/users'
     | '/_app/platform/workspaces'
+    | '/_app/preview/$submissionId'
     | '/_app/submissions/$submissionId'
     | '/_app/assistant/'
     | '/_app/platform/'
@@ -858,6 +870,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPlatformWorkspacesRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/preview/$submissionId': {
+      id: '/_app/preview/$submissionId'
+      path: '/preview/$submissionId'
+      fullPath: '/preview/$submissionId'
+      preLoaderRoute: typeof AppPreviewSubmissionIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/submissions/$submissionId': {
       id: '/_app/submissions/$submissionId'
       path: '/submissions/$submissionId'
@@ -895,6 +914,7 @@ interface AppRouteChildren {
   AppPlatformSettingsRoute: typeof AppPlatformSettingsRoute
   AppPlatformUsersRoute: typeof AppPlatformUsersRoute
   AppPlatformWorkspacesRoute: typeof AppPlatformWorkspacesRoute
+  AppPreviewSubmissionIdRoute: typeof AppPreviewSubmissionIdRoute
   AppSubmissionsSubmissionIdRoute: typeof AppSubmissionsSubmissionIdRoute
   AppAssistantIndexRoute: typeof AppAssistantIndexRoute
   AppPlatformIndexRoute: typeof AppPlatformIndexRoute
@@ -927,6 +947,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppPlatformSettingsRoute: AppPlatformSettingsRoute,
   AppPlatformUsersRoute: AppPlatformUsersRoute,
   AppPlatformWorkspacesRoute: AppPlatformWorkspacesRoute,
+  AppPreviewSubmissionIdRoute: AppPreviewSubmissionIdRoute,
   AppSubmissionsSubmissionIdRoute: AppSubmissionsSubmissionIdRoute,
   AppAssistantIndexRoute: AppAssistantIndexRoute,
   AppPlatformIndexRoute: AppPlatformIndexRoute,

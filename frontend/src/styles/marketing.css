@@ -2596,7 +2596,15 @@
     pointer-events: auto;
   }
 
-  .ev__nodes li {
+  /*
+   * The desktop layout centres nodes 1 and 4 with a translateX(-50%). That
+   * selector is more specific than a bare `.ev__nodes li`, so the reset has to
+   * name them too; otherwise the wrapped list stays shifted half its width and
+   * runs off the left edge of a phone screen.
+   */
+  .ev__nodes li,
+  .ev__nodes li:nth-child(1),
+  .ev__nodes li:nth-child(4) {
     position: static;
     transform: none;
   }

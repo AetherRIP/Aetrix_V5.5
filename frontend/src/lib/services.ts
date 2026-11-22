@@ -35,6 +35,7 @@ import type {
   Submission,
   Workspace,
   Dashboard,
+  CorrectionPreview,
 } from './api/types'
 
 /**
@@ -291,6 +292,24 @@ export const submissionService = {
 
   jobs: (submissionId: string, options?: Opts): Promise<ApiResult<Job[]>> =>
     apiGet<Job[]>(`/api/v1/submissions/${submissionId}/corrections`, options),
+}
+
+/**
+ * The correction preview's two reads.
+ *
+ * Both are read-only: one composes the stored correction, criteria and archive;
+ * the other serves a rendered page of a document the workspace owns.
+ */
+export const previewService = {
+  get: (submissionId: string, options?: Opts): Promise<ApiResult<CorrectionPreview>> =>
+    apiGet<CorrectionPreview>(`/api/v1/submissions/${submissionId}/preview`, options),
+
+  documentPageImage: (
+    documentId: string,
+    pageIndex: number,
+    options?: Opts,
+  ): Promise<ApiResult<Blob>> =>
+    apiBlob(`/api/v1/documents/${documentId}/pages/${pageIndex}`, options),
 }
 
 export const queueService = {

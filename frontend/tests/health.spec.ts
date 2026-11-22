@@ -2,10 +2,15 @@ import { expect, test } from './support/fixtures'
 import type { Page } from '@playwright/test'
 
 /**
- * The health screen is the one authenticated workspace screen whose engine
- * contract already exists (`GET /health` and `GET /ready`). These tests drive it
- * against a real engine origin, supplied as `VITE_AETRIX_API_URL` when the
- * frontend was built and to this test process.
+ * The health screen reads the engine's one status route — `GET /status` — which
+ * reports the API, the correction engine, readiness, the database, the worker
+ * and the provider separately. These tests drive that screen against a real
+ * engine origin, supplied as `VITE_AETRIX_API_URL` both when the frontend was
+ * built and to this test process.
+ *
+ * The engine calls go to the origin compiled into the bundle. The screen has no
+ * localhost fallback: an unset origin renders the unconfigured state, which the
+ * build-without-origin coverage in `status.spec.ts` exercises.
  */
 
 const API = (process.env.VITE_AETRIX_API_URL ?? '').replace(/\/$/, '')
@@ -55,40 +60,39 @@ async function signInAsOwner(page: Page) {
 test.describe('engine health integration', () => {
   test.skip(!API, 'Set VITE_AETRIX_API_URL to the engine origin this build calls.')
 
-  test('reads /health and /ready over HTTPS and renders their answers', async ({ context }) => {
+  test('reads /status from the compiled origin and renders its answers', async ({ context }) => {
     const page = await context.newPage()
     await signInAsOwner(page)
 
     const requested: string[] = []
     page.on('request', (request) => requested.push(request.url()))
 
-    const healthResponse = page.waitForResponse(
-      (response) => response.url() === `${API}/health`,
-      { timeout: 30_000 },
-    )
-    const readyResponse = page.waitForResponse(
-      (response) => response.url() === `${API}/ready`,
+    const statusResponse = page.waitForResponse(
+      (response) => response.url() === `${API}/status`,
       { timeout: 30_000 },
     )
 
     await page.goto('/platform/health', { waitUntil: 'load' })
 
-    const [health, ready] = await Promise.all([healthResponse, readyResponse])
-    expect(health.status()).toBe(200)
-    expect(ready.status()).toBe(200)
+    const status = await statusResponse
+    expect(status.status()).toBe(200)
 
-    // The values on screen come from those two responses.
-    await expect(metric(page, 'API').locator('.hub-stat__value')).toHaveText('Reachable')
+    // The values on screen come from that response, and each subsystem keeps
+    // its own wording: "Connected" is the API answering, "Ready" is readiness.
+    await expect(metric(page, 'API').locator('.hub-stat__value')).toHaveText('Connected')
     await expect(metric(page, 'API').locator('.hub-stat__note')).toContainText('aetrix-engine')
-    await expect(metric(page, 'Database').locator('.hub-stat__value')).toHaveText('Ready')
+    await expect(metric(page, 'Database').locator('.hub-stat__value')).toHaveText('Connected')
+    await expect(metric(page, 'Readiness').locator('.hub-stat__value')).toHaveText('Ready')
 
-    // The engine calls go to the compiled public origin, never a localhost
-    // fallback. (The preview's own assets are served from 127.0.0.1:3000.)
-    const engineCalls = requested.filter(
-      (url) => url === `${API}/health` || url === `${API}/ready`,
-    )
-    expect(engineCalls.sort()).toEqual([`${API}/health`, `${API}/ready`].sort())
-    expect(new URL(API).hostname).not.toMatch(/^(localhost|127\.0\.0\.1)$/)
+    // The worker is a separate observation. A local engine with no worker
+    // process must not be reported as online because the API answered.
+    await expect(metric(page, 'Worker').locator('.hub-stat__value')).toHaveText('Unknown')
+
+    // Every engine request went to the origin this build was compiled with.
+    const engineRequests = requested.filter((url) => url.startsWith(`${API}/`))
+    expect(engineRequests.length).toBeGreaterThan(0)
+    const hosts = [...new Set(engineRequests.map((url) => new URL(url).host))]
+    expect(hosts).toEqual([new URL(API).host])
   })
 
   test('reports an unreachable engine instead of a healthy service', async ({ context }) => {
@@ -96,13 +100,15 @@ test.describe('engine health integration', () => {
     await signInAsOwner(page)
 
     // A network failure, not a synthetic status: the client's own error path.
-    await page.route(`${API}/health`, (route) => route.abort('failed'))
-    await page.route(`${API}/ready`, (route) => route.abort('failed'))
+    await page.route(`${API}/status`, (route) => route.abort('failed'))
 
     await page.goto('/platform/health', { waitUntil: 'load' })
 
-    await expect(metric(page, 'API').locator('.hub-stat__value')).toHaveText('Unreachable')
-    await expect(metric(page, 'Database').locator('.hub-stat__value')).toHaveText('Not ready')
+    await expect(metric(page, 'API').locator('.hub-stat__value')).toHaveText('Unknown')
+    await expect(metric(page, 'API').locator('.hub-stat__note')).toContainText(
+      'could not be reached',
+    )
     await expect(page.getByRole('heading', { name: 'The engine did not answer' })).toBeVisible()
+    await expect(page.getByText(/An unreachable endpoint is reported as unreachable/i)).toBeVisible()
   })
 })

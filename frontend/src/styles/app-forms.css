@@ -1913,6 +1913,104 @@ textarea.app-input {
   background: var(--bg);
 }
 
+/* the paper states completion and verification as two separate facts */
+.rd-hero__sub .app-chip {
+  vertical-align: middle;
+}
+
+.rd-hero__sub .app-hint {
+  max-width: 100%;
+  font-size: 0.6875rem;
+  letter-spacing: 0.01em;
+}
+
+/* the quotations an award actually rests on */
+.rd-evidence {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rd-evidence li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.rd-evidence__kind {
+  padding-top: 3px;
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* why the engine asked for a person, in its own words */
+.rd-row__review {
+  margin: 12px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--warn);
+}
+
+.rd-row__review .rd-row__label {
+  margin-right: 8px;
+}
+
+/* what completion does not establish: the checks that did not pass */
+.rd-verification-note {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--surface);
+}
+
+.rd-verification-note__line {
+  margin: 0;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.rd-verification-note__reason {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.rd-verification-note--absent {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+@media (max-width: 700px) {
+  .rd-evidence li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  /* A middot left at the end of a wrapped line reads as a missing item. */
+  .rd-hero__sub > span[aria-hidden='true'] {
+    display: none;
+  }
+
+  .rd-hero__sub .app-hint {
+    flex-basis: 100%;
+  }
+}
+
 /* ── override control ────────────────────────────────────────────────── */
 
 .rd-override {

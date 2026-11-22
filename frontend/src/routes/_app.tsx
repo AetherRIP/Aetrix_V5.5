@@ -34,6 +34,10 @@ function pageMeta(pathname: string): PageMeta {
   if (pathname.startsWith('/submissions/')) {
     return { title: 'Submission review', eyebrow: 'Work · submission' }
   }
+  if (pathname.startsWith('/preview/')) {
+    // The preview renders its own record heading; a shell h1 would compete with it.
+    return { title: '', eyebrow: 'Work · correction preview' }
+  }
 
   // An empty title means the route renders its own `h1`. The dashboards do:
   // their greeting is the page heading, and a second one would compete with it.

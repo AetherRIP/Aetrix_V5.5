@@ -9,6 +9,8 @@ import type {
   JobResults,
   PageMeta,
   QuestionResult,
+  QuestionVerification,
+  ReviewDecision,
   Submission,
   Verification,
 } from '../lib/api/types'
@@ -41,24 +43,117 @@ function textField(detail: Record<string, unknown>, key: string): string | null 
   return typeof value === 'string' && value.trim() ? value : null
 }
 
-function verificationTone(verification: Verification): 'ok' | 'attention' | 'neutral' {
-  if (verification.kind === 'DOUBLE_CHECK') {
-    if (verification.status === 'AGREES') return 'ok'
-    if (verification.status === 'DISAGREES') return 'attention'
+type Tone = 'ok' | 'attention' | 'neutral'
+
+/**
+ * Every verification kind the engine records, labelled as itself.
+ *
+ * A kind this build does not recognise is shown by name, in a neutral tone,
+ * and never falls through to another check's label.  Guessing would tell a
+ * reviewer that an independent reading of the script was an integrity check.
+ */
+const VERIFICATION_NAMES: Record<string, string> = {
+  INTEGRITY: 'Integrity',
+  MATHEMATICAL: 'Mathematics',
+  SCHEME_MATHEMATICAL: 'Scheme mathematics',
+  TRANSCRIPTION: 'Independent reading',
+  EVIDENCE: 'Evidence in script',
+  DOUBLE_CHECK: 'Second examiner',
+}
+
+function verificationTone(verification: Verification): Tone {
+  const { kind, status } = verification
+  if (kind === 'INTEGRITY') {
+    if (status === 'PASS') return 'ok'
+    if (status === 'REVIEW_REQUIRED' || status === 'FAIL') return 'attention'
     return 'neutral'
   }
-  if (verification.kind === 'MATHEMATICAL') {
-    if (verification.status === 'EQUIVALENT') return 'ok'
-    if (verification.status === 'DIFFERENT') return 'attention'
+  if (kind === 'MATHEMATICAL' || kind === 'SCHEME_MATHEMATICAL') {
+    if (status === 'EQUIVALENT') return 'ok'
+    if (status === 'DIFFERENT') return 'attention'
     return 'neutral'
   }
-  return verification.status === 'PASS' ? 'ok' : 'attention'
+  if (kind === 'TRANSCRIPTION' || kind === 'EVIDENCE') {
+    if (status === 'PASS' || status === 'AGREES') return 'ok'
+    if (status === 'FAIL' || status === 'DIFFERS') return 'attention'
+    return 'neutral'
+  }
+  if (kind === 'DOUBLE_CHECK') {
+    if (status === 'AGREES') return 'ok'
+    if (status === 'DISAGREES') return 'attention'
+    return 'neutral'
+  }
+  return 'neutral'
 }
 
 function verificationLabel(verification: Verification): string {
-  if (verification.kind === 'DOUBLE_CHECK') return `Second examiner · ${verification.status}`
-  if (verification.kind === 'MATHEMATICAL') return `Mathematics · ${verification.status}`
-  return `Integrity · ${verification.status}`
+  const name = VERIFICATION_NAMES[verification.kind]
+  return name
+    ? `${name} · ${verification.status}`
+    : `Unrecognised check (${verification.kind}) · ${verification.status}`
+}
+
+const QUESTION_VERIFICATION_NAMES: Record<string, string> = {
+  FULLY_VERIFIED: 'Fully verified',
+  PARTIALLY_VERIFIED: 'Partially verified',
+  REVIEW_REQUIRED: 'Verification needs review',
+  VERIFICATION_FAILED: 'Verification failed',
+  VERIFICATION_NOT_REQUIRED: 'No independent check required',
+}
+
+function questionVerificationLabel(status: string | null | undefined): string {
+  if (!status) return 'Verification not recorded'
+  return QUESTION_VERIFICATION_NAMES[status] ?? `Verification: ${status}`
+}
+
+function questionVerificationTone(status: string | null | undefined): Tone {
+  if (status === 'FULLY_VERIFIED') return 'ok'
+  if (status === 'VERIFICATION_FAILED' || status === 'REVIEW_REQUIRED') return 'attention'
+  return 'neutral'
+}
+
+/**
+ * How much the paper's verification actually establishes.
+ *
+ * Completion and verification are two facts, so the paper states the second
+ * one beside the first instead of letting a finished run imply a verified
+ * result. The wording says what the state means, not merely its name.
+ */
+const VERIFICATION_STATUS_HELP: Record<string, string> = {
+  FULLY_VERIFIED: 'every required check ran and passed',
+  PARTIALLY_VERIFIED: 'some required checks did not run',
+  REVIEW_REQUIRED: 'a person must decide before approval',
+  VERIFICATION_FAILED: 'a check contradicted an award',
+  VERIFICATION_NOT_REQUIRED: 'no independent check applied',
+}
+
+function verificationStatusHelp(status: string | null | undefined): string {
+  if (!status) return 'the engine recorded no verification state'
+  return VERIFICATION_STATUS_HELP[status] ?? 'an unrecognised verification state'
+}
+
+function verificationKindList(kinds: string[]): string {
+  return kinds.map((kind) => VERIFICATION_NAMES[kind] ?? kind).join(', ')
+}
+
+/**
+ * Which required checks did not pass, named rather than counted.
+ *
+ * `PARTIALLY_VERIFIED` alone cannot tell a reviewer what is absent, and an
+ * absent check must never be mistaken for one that succeeded.
+ */
+function verificationGaps(verification: QuestionVerification): string[] {
+  const lines: string[] = []
+  if (verification.contradicted.length) {
+    lines.push(`Contradicted: ${verificationKindList(verification.contradicted)}`)
+  }
+  if (verification.missing.length) {
+    lines.push(`Missing required: ${verificationKindList(verification.missing)}`)
+  }
+  if (verification.unverifiable.length) {
+    lines.push(`Could not be checked: ${verificationKindList(verification.unverifiable)}`)
+  }
+  return lines
 }
 
 /**
@@ -71,6 +166,40 @@ function verificationLabel(verification: Verification): string {
  */
 function verificationMessage(verification: Verification): string {
   const { detail, status } = verification
+  if (verification.kind === 'TRANSCRIPTION') {
+    if (status === 'AGREES') {
+      return 'The independent reading found the same writing. That does not by itself establish that the marking is correct.'
+    }
+    if (status === 'DIFFERS') {
+      return 'The independent reading of the page differs from what the marking pass recorded. Both readings are stored; a person decides which the mark rests on.'
+    }
+    if (status === 'ABSENT') {
+      return 'Neither reading found an answer for this question.'
+    }
+    return 'The independent reading could not be used, so it neither confirms nor contradicts the answer.'
+  }
+  if (verification.kind === 'EVIDENCE') {
+    if (status === 'PASS') {
+      return 'Every quotation this question awarded against was found in the independent reading of its page.'
+    }
+    if (status === 'FAIL') {
+      return 'At least one quotation was not found in the independent reading of the page. The award is not changed; a person decides.'
+    }
+    return 'The quoted evidence could not be checked against an independent reading.'
+  }
+  if (verification.kind === 'SCHEME_MATHEMATICAL') {
+    const student = textField(detail, 'student_expression')
+    const expected = textField(detail, 'expected_expression')
+    const pair =
+      student && expected ? ` The script states ${student}; the scheme states ${expected}.` : ''
+    if (status === 'EQUIVALENT') {
+      return `SymPy found the student's answer equivalent to the answer the approved scheme prints.${pair}`
+    }
+    if (status === 'DIFFERENT') {
+      return `SymPy found the student's answer different from the answer the approved scheme prints.${pair}`
+    }
+    return `The answer could not be compared with the approved scheme's answer.${pair}`
+  }
   if (verification.kind === 'DOUBLE_CHECK') {
     const first = numberField(detail, 'first_awarded')
     const second = numberField(detail, 'second_awarded')
@@ -87,6 +216,11 @@ function verificationMessage(verification: Verification): string {
     }
     return 'A second marking was recorded for this question.'
   }
+  if (verification.kind === 'INTEGRITY') {
+    return status === 'PASS'
+      ? 'The award is internally consistent with what the marker reported.'
+      : 'The award failed an internal consistency check.'
+  }
   if (verification.kind === 'MATHEMATICAL') {
     const student = textField(detail, 'student_expression')
     const expected = textField(detail, 'expected_expression')
@@ -100,14 +234,13 @@ function verificationMessage(verification: Verification): string {
     }
     return `The expressions could not be compared, so this check proved nothing.${pair}`
   }
-  return status === 'PASS'
-    ? 'The award is internally consistent with what the marker reported.'
-    : 'The award failed an internal consistency check.'
+  return `This check recorded ${status}. This interface does not know how to interpret that kind of check, so read the stored detail before deciding.`
 }
 
 function QuestionRow({
   result,
   verifications,
+  review,
   jobId,
   token,
   recordVersion,
@@ -116,6 +249,7 @@ function QuestionRow({
 }: {
   result: QuestionResult
   verifications: Verification[]
+  review: ReviewDecision | null
   jobId: string
   token: string | null
   recordVersion: number
@@ -219,6 +353,14 @@ function QuestionRow({
           {result.confidence !== null ? (
             <span className="mono app-hint">{result.confidence.toFixed(2)} confidence</span>
           ) : null}
+          {result.verification ? (
+            <span
+              className="chip app-chip"
+              data-tone={questionVerificationTone(result.verification.status)}
+            >
+              {questionVerificationLabel(result.verification.status)}
+            </span>
+          ) : null}
         </div>
 
         {result.student_answer ? (
@@ -250,6 +392,33 @@ function QuestionRow({
             Model awarded {result.raw_awarded_marks} of {result.max_marks} (
             {result.normalisation_anomaly}); the stored award is {result.awarded_marks}.
           </p>
+        ) : null}
+
+        {review && review.requested_reason ? (
+          <p className="rd-row__review">
+            <span className="rd-row__label mono">Review reason</span>
+            {review.requested_reason}
+          </p>
+        ) : null}
+
+        {result.evidence.length ? (
+          <ul
+            className="rd-evidence"
+            aria-label={`Stored quotations for question ${result.question_id}`}
+          >
+            {result.evidence.map((item) => (
+              <li key={item.id}>
+                <span className="rd-evidence__kind mono">
+                  {item.kind === 'QUOTE' ? 'quote' : item.kind}
+                </span>
+                <span>
+                  {item.quote
+                    ? `“${item.quote}”`
+                    : 'No quotation text was stored for this evidence record.'}
+                </span>
+              </li>
+            ))}
+          </ul>
         ) : null}
 
         {result.criteria.length ? (
@@ -290,6 +459,27 @@ function QuestionRow({
             ))}
           </ul>
         ) : null}
+
+        {result.verification ? (
+          verificationGaps(result.verification).length || result.verification.reasons.length ? (
+            <div className="rd-verification-note">
+              {verificationGaps(result.verification).map((line) => (
+                <p key={line} className="rd-verification-note__line mono">
+                  {line}
+                </p>
+              ))}
+              {result.verification.reasons.map((reason) => (
+                <p key={reason} className="rd-verification-note__reason">
+                  {reason}
+                </p>
+              ))}
+            </div>
+          ) : null
+        ) : (
+          <p className="rd-verification-note rd-verification-note--absent">
+            The engine recorded no verification state for this question. That is not a passed check.
+          </p>
+        )}
 
         {canReview ? (
           <details className="rd-override" open={result.review_required}>
@@ -479,7 +669,15 @@ function SubmissionReview() {
           {/* The shell already renders the route's h1, so the record name is
               not a second one. */}
           <p className="rd-hero__kicker mono">Submission</p>
-          <p className="rd-hero__ref">{results ? results.student_ref : submissionId}</p>
+          {/*
+           * The submission record names its student even when no result can be
+           * read (every run refused, or none yet). Falling back to the UUID hid
+           * the one identifier the record already had.
+           */}
+          <p className="rd-hero__ref">
+            {results?.student_ref ??
+              (submissionState.state === 'ok' ? submissionState.data.student_ref : submissionId)}
+          </p>
           <p className="rd-hero__sub">
             <span className="mono">
               {submissionState.state === 'ok' ? submissionState.data.status : 'Not loaded'}
@@ -491,12 +689,42 @@ function SubmissionReview() {
             {results ? (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="mono">{results.job_state}</span>
+                <span
+                  className="chip app-chip"
+                  data-tone="neutral"
+                  data-job-state={results.job_state}
+                  title="Correction state reported by the engine. Verification is a separate fact."
+                >
+                  {results.job_state}
+                </span>
+                {results.verification_status ? (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      className="chip app-chip"
+                      data-tone={questionVerificationTone(results.verification_status)}
+                      data-verification-status={results.verification_status}
+                      title={verificationStatusHelp(results.verification_status)}
+                    >
+                      {questionVerificationLabel(results.verification_status)}
+                    </span>
+                    <span className="app-hint">
+                      {verificationStatusHelp(results.verification_status)}
+                    </span>
+                  </>
+                ) : null}
               </>
             ) : null}
           </p>
         </div>
         <div className="rd-hero__actions">
+          <Link
+            className="btn btn--small btn--outline"
+            to="/preview/$submissionId"
+            params={{ submissionId }}
+          >
+            Correction preview
+          </Link>
           <Link className="btn btn--small btn--outline" to="/queue">
             Back to queue
           </Link>
@@ -789,6 +1017,11 @@ function SubmissionReview() {
                           recordVersion={results.record_version}
                           verifications={
                             verificationsByQuestion[question.question_id] ?? []
+                          }
+                          review={
+                            results.reviews.find(
+                              (review) => review.question_id === question.question_id,
+                            ) ?? null
                           }
                           onChanged={reloadResults}
                           canReview={canReview}
