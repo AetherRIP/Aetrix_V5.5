@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { DataState } from '../components/app/DataState'
+import { StatePanel } from '../components/app/StatePanel'
 import { PageCanvas } from '../components/preview/PageCanvas'
 import { Icon } from '../components/ui/Icons'
 import { useEngineSession } from '../lib/api/session'
 import { useResource } from '../lib/api/useResource'
-import { previewService, submissionService } from '../lib/services'
+import {
+  PREVIEW_ENDPOINT_DEPLOYED,
+  PREVIEW_ENDPOINT_NOT_DEPLOYED_REASON,
+  previewService,
+  submissionService,
+} from '../lib/services'
 import type {
   CorrectionPreview,
   PreviewDecision,
@@ -218,6 +224,26 @@ function CorrectionPreviewPage() {
 
   return (
     <div className="cp-desk">
+      {!PREVIEW_ENDPOINT_DEPLOYED && (state.state === 'unavailable' || state.state === 'error') ? (
+        <div className="app-stack">
+          <StatePanel
+            tone="wip"
+            title="The correction preview endpoint is not deployed"
+            capability="GET /api/v1/submissions/{id}/preview"
+          >
+            <p>{PREVIEW_ENDPOINT_NOT_DEPLOYED_REASON}</p>
+            <p>
+              <Link
+                className="btn btn--outline btn--small"
+                to="/submissions/$submissionId"
+                params={{ submissionId }}
+              >
+                Back to the submission record
+              </Link>
+            </p>
+          </StatePanel>
+        </div>
+      ) : (
       <DataState state={state} capability="GET /api/v1/submissions/{id}/preview">
         {preview ? (
           <>
@@ -911,6 +937,7 @@ function CorrectionPreviewPage() {
           </>
         ) : null}
       </DataState>
+      )}
     </div>
   )
 }

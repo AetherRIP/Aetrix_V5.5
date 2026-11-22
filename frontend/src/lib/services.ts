@@ -295,6 +295,19 @@ export const submissionService = {
 }
 
 /**
+ * Whether the engine this revision ships actually serves the correction-preview
+ * reads below.
+ *
+ * It does not: `backend/app/api/v1/results.py` has no
+ * `/submissions/{id}/preview` route, `documents.py` has no `/documents/{id}/pages/{i}`
+ * route, and `services/preview.py` + `schemas/preview.py` do not exist on `main`.
+ * The screen therefore says so plainly instead of reporting a generic engine
+ * failure. Flip this to `true` in the same change that ships the endpoint, and
+ * delete this note.
+ */
+export const PREVIEW_ENDPOINT_DEPLOYED = false
+
+/**
  * The correction preview's two reads.
  *
  * Both are read-only: one composes the stored correction, criteria and archive;
@@ -311,6 +324,10 @@ export const previewService = {
   ): Promise<ApiResult<Blob>> =>
     apiBlob(`/api/v1/documents/${documentId}/pages/${pageIndex}`, options),
 }
+
+/** Shown by the correction-preview screen when the engine has no preview route. */
+export const PREVIEW_ENDPOINT_NOT_DEPLOYED_REASON =
+  'This revision of the engine does not serve GET /api/v1/submissions/{id}/preview, so there is no stored correction to read here. The screen exists; the endpoint that answers it is not part of the backend this build ships.'
 
 export const queueService = {
   list: (workspaceId: string, options?: Opts): Promise<ApiResult<Job[]>> =>
