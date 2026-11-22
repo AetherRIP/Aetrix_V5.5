@@ -32,6 +32,7 @@ export default defineConfig({
         { path: '/assignments' },
         { path: '/assignments/example' },
         { path: '/submissions/example' },
+        { path: '/preview/example' },
         { path: '/reports' },
         { path: '/settings' },
         { path: '/auth/callback' },
