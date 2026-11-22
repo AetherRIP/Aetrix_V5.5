@@ -2344,7 +2344,10 @@ svg {
 .site-footer__col {
   display: flex;
   flex-direction: column;
-  gap: var(--s-2);
+  /* The links carry their own vertical padding so each target clears 24 px;
+     the gap is reduced by the same amount, which keeps the text rhythm
+     identical to the previous gap-only spacing. */
+  gap: var(--s-1);
   font-size: 0.875rem;
   color: var(--text-2);
 }
@@ -2359,6 +2362,7 @@ svg {
 
 .site-footer__col a {
   width: fit-content;
+  padding-block: 2px;
   border-bottom: 1px solid transparent;
   transition:
     color var(--dur) var(--ease),
