@@ -935,6 +935,40 @@ test.describe('verification UI', () => {
     await page.screenshot({ path: `${SHOTS}/11-unavailable.png` })
   })
 
+  /**
+   * The public artifact is compiled without an engine origin, so the preview
+   * screen must present the absent endpoint itself rather than a failed fetch.
+   * It also must not probe the endpoint it has just said does not exist.
+   */
+  test('the correction preview states its endpoint is not deployed and calls no API', async ({
+    page,
+  }) => {
+    const calls: string[] = []
+    page.on('request', (request) => {
+      const path = new URL(request.url()).pathname
+      if (path.startsWith('/api/v1/')) calls.push(path)
+    })
+
+    await signIn(page)
+
+    const response = await page.goto(`/preview/${SUBMISSION_ID}`, { waitUntil: 'load' })
+    expect(response?.status()).toBe(200)
+
+    await expect(
+      page.getByRole('heading', { name: 'The correction preview endpoint is not deployed' }),
+    ).toBeVisible({ timeout: 30_000 })
+    await expect(
+      page.getByText('GET /api/v1/submissions/{id}/preview', { exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByText(/does not serve GET \/api\/v1\/submissions\/\{id\}\/preview/),
+    ).toBeVisible()
+    // Nothing was asked of a capability this screen says is not there.
+    expect(calls).toEqual([])
+
+    await page.screenshot({ path: `${SHOTS}/12-preview-endpoint-not-deployed.png` })
+  })
+
   test('the correction preview labels each stored verification record', async ({ page }) => {
     await openPreview(page)
 
