@@ -421,6 +421,42 @@ def test_a_coursework_is_refused_before_its_criteria_are_approved(
     assert raised.value.details["reason"] == REASON_CRITERIA_NOT_APPROVED
 
 
+def test_a_stored_coursework_is_refused_at_publication_when_its_criteria_lapse(
+    db_session, identity, paper
+) -> None:
+    """The publish step asks the gate again, not just the draft step.
+
+    A coursework drafted while the criteria were approved must not reach Google
+    after that approval lapses.  The refusal happens before any token is
+    fetched, so nothing is published and the link stays a draft.
+    """
+
+    classroom = _allocated_course(db_session, identity)
+    service = ClassroomCourseworkService(db_session, get_settings())
+    created = service.create(
+        _principal(identity),
+        CourseworkCreate(
+            assignment_id=paper.assignment.id,
+            classroom_class_id=classroom.id,
+            title="Lapsed coursework",
+        ),
+    )
+    version = db_session.get(MarkSchemeVersion, paper.scheme_version.id)
+    assert version is not None
+    version.criteria_approved_at = None
+    db_session.commit()
+
+    with pytest.raises(AppError) as raised:
+        service.publish(_principal(identity), created.id)
+
+    assert raised.value.code is ErrorCode.ASSIGNMENT_NOT_READY
+    assert raised.value.details["reason"] == REASON_CRITERIA_NOT_APPROVED
+    stored = db_session.get(ClassroomCourseworkLink, created.id)
+    assert stored is not None
+    assert stored.state == "DRAFT"
+    assert stored.coursework_id is None
+
+
 def test_a_stored_coursework_whose_points_drifted_is_refused_at_publication(
     db_session, identity, paper
 ) -> None:
