@@ -8,7 +8,7 @@ credential back to the browser.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -23,13 +23,23 @@ class ClassroomConnectionRead(BaseModel):
     redirect_uri: str | None
     required_scopes: list[str] = Field(default_factory=list)
     granted_scopes: list[str] = Field(default_factory=list)
+    #: Scopes this integration needs that the grant does not include.  A
+    #: non-empty list means an operation will fail with CLASSROOM_SCOPE_MISSING
+    #: and the account must be authorised again.
+    missing_scopes: list[str] = Field(default_factory=list)
     connected_at: datetime | None
     connected_by_subject: str | None
+    #: Google's identity for the central account, when userinfo answered.
+    connected_account_email: str | None = None
+    connected_account_name: str | None = None
+    last_refresh_at: datetime | None = None
     last_synced_at: datetime | None
     last_sync_status: SyncStatus | None
     last_sync_counts: dict[str, int] = Field(default_factory=dict)
     last_error_code: str | None
     last_error_message: str | None
+    #: The ten most recent course-discovery runs, newest first.
+    recent_runs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ClassroomAuthorizationStart(BaseModel):

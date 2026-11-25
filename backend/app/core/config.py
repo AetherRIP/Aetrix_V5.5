@@ -200,7 +200,20 @@ class ClassroomSettings(BaseModel):
     token_url: str = "https://oauth2.googleapis.com/token"
     revoke_url: str = "https://oauth2.googleapis.com/revoke"
     api_base_url: str = "https://classroom.googleapis.com/v1"
+    drive_base_url: str = "https://www.googleapis.com/drive/v3"
+    userinfo_url: str = "https://openidconnect.googleapis.com/v1/userinfo"
     timeout_seconds: int = Field(default=20, ge=5, le=60)
+    #: One request is retried at most this many times for a 429 or 5xx.
+    request_attempts: int = Field(default=3, ge=1, le=5)
+    retry_backoff_seconds: float = Field(default=0.5, ge=0.0, le=10.0)
+    #: Per-course ceilings.  Reaching one truncates the sync and says so.
+    max_roster_students: int = Field(default=5000, ge=1, le=50_000)
+    max_submissions: int = Field(default=5000, ge=1, le=50_000)
+    #: Largest attachment fetched from Drive.  A larger file is refused
+    #: with an explicit reason; it is never silently dropped.
+    max_attachment_bytes: int = Field(
+        default=25_000_000, ge=1_000_000, le=100_000_000
+    )
     #: A short window for the signed OAuth state.  The code exchange also
     #: verifies that the state belongs to the authenticated workspace account.
     state_ttl_seconds: int = Field(default=600, ge=60, le=1800)

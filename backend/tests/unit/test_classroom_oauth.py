@@ -27,11 +27,13 @@ from app.core.ids import utcnow
 from app.core.security import Principal, SecretBox
 from app.services.classroom_google import (
     COURSES_SCOPE,
+    REQUIRED_SCOPES,
     ClassroomUpstreamError,
     UpstreamKind,
     authorization_url,
     exchange_code,
     list_courses,
+    missing_scopes,
     refresh_access_token,
     revoke_token,
 )
@@ -70,7 +72,7 @@ def _principal(*, tenant_id: uuid.UUID | None = None, subject: str = "teacher-a"
     )
 
 
-def test_authorization_url_requests_offline_course_scope_only() -> None:
+def test_authorization_url_requests_exactly_the_required_scopes() -> None:
     settings = _settings()
 
     url = authorization_url(settings.classroom, "opaque-state")
@@ -78,7 +80,13 @@ def test_authorization_url_requests_offline_course_scope_only() -> None:
     params = dict(parse_qsl(parsed.query))
 
     assert parsed.netloc == "accounts.google.com"
-    assert params["scope"] == COURSES_SCOPE
+    # The exact set, not a superset: every scope is justified by an operation
+    # the integration performs, and none is requested speculatively.
+    requested = params["scope"].split(" ")
+    assert requested == list(REQUIRED_SCOPES)
+    assert COURSES_SCOPE in requested
+    assert "https://www.googleapis.com/auth/classroom.rosters" not in requested
+    assert "https://www.googleapis.com/auth/classroom.courses" not in requested
     assert params["response_type"] == "code"
     assert params["access_type"] == "offline"
     assert params["prompt"] == "consent"
@@ -86,6 +94,15 @@ def test_authorization_url_requests_offline_course_scope_only() -> None:
     assert params["state"] == "opaque-state"
     assert params["redirect_uri"] == settings.classroom.redirect_uri
     assert "client-secret" not in url
+
+
+def test_missing_scopes_reports_only_what_is_absent() -> None:
+    assert missing_scopes(list(REQUIRED_SCOPES)) == []
+    partial = list(REQUIRED_SCOPES)
+    partial.remove("https://www.googleapis.com/auth/classroom.rosters.readonly")
+    assert missing_scopes(partial) == [
+        "https://www.googleapis.com/auth/classroom.rosters.readonly"
+    ]
 
 
 def test_exchange_code_sends_the_secret_in_the_body() -> None:
@@ -343,9 +360,12 @@ def test_state_cannot_be_issued_without_an_encryption_key() -> None:
     assert caught.value.code is ErrorCode.CLASSROOM_NOT_CONFIGURED
 
 
-def test_only_workspace_managers_may_change_the_connection() -> None:
+def test_only_platform_administration_may_change_the_connection() -> None:
     owner = _principal()
-    ensure_classroom_manager(owner)
+    # A workspace owner owns a tenant, not the platform's Google account.
+    with pytest.raises(AppError) as caught_owner:
+        ensure_classroom_manager(owner)
+    assert caught_owner.value.code is ErrorCode.FORBIDDEN
 
     teacher = Principal(
         user_id=uuid.uuid4(),
@@ -353,9 +373,9 @@ def test_only_workspace_managers_may_change_the_connection() -> None:
         subject="teacher-c",
         role="TEACHER",
     )
-    with pytest.raises(AppError) as caught:
+    with pytest.raises(AppError) as caught_teacher:
         ensure_classroom_manager(teacher)
-    assert caught.value.code is ErrorCode.FORBIDDEN
+    assert caught_teacher.value.code is ErrorCode.FORBIDDEN
 
     platform = Principal(
         user_id=uuid.uuid4(),
@@ -365,3 +385,12 @@ def test_only_workspace_managers_may_change_the_connection() -> None:
         platform_role="ADMIN",
     )
     ensure_classroom_manager(platform)
+
+    platform_owner = Principal(
+        user_id=uuid.uuid4(),
+        tenant_id=owner.tenant_id,
+        subject="owner",
+        role="OWNER",
+        platform_role="PLATFORM_OWNER",
+    )
+    ensure_classroom_manager(platform_owner)

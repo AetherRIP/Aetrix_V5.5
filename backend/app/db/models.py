@@ -1295,6 +1295,8 @@ class ClassroomClass(UUIDPrimaryKey, TimestampMixin, Base):
         String(40), nullable=False, default="operator_recorded"
     )
     owner_email: Mapped[str | None] = mapped_column(String(320))
+    #: The classroom teacher Google reports for the course, when it does.
+    teacher_name: Mapped[str | None] = mapped_column(String(300))
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_subject: Mapped[str] = mapped_column(String(200), nullable=False)
 
@@ -1363,19 +1365,29 @@ class ClassroomAllocation(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
-class ClassroomConnection(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
-    """One workspace's Google Classroom OAuth connection.
+class ClassroomConnection(UUIDPrimaryKey, TimestampMixin, Base):
+    """The platform's single Google Classroom authorisation.
+
+    There is exactly one connection, owned by platform administration: the
+    central Google account performs every Classroom read and write, so no
+    teacher authorises a personal account.  ``connection_key`` is the
+    singleton discriminator (``platform``); existing workspace-scoped rows from
+    the earlier per-tenant design are retained as history with a NULL key and
+    their tokens discarded.
 
     Both tokens are encrypted with the configured Fernet key; no API response,
     log or model representation returns them.  ``RECONNECT_REQUIRED`` is a real
     state: Google revoked or invalidated the grant, the ciphertext was discarded,
-    and the workspace must authorize again.  A transient Google failure does not
-    revoke the connection.
+    and an administrator must authorize again.  A transient Google failure does
+    not revoke the connection.
     """
 
     __tablename__ = "classroom_connections"
     __table_args__ = (
-        UniqueConstraint("tenant_id", name="uq_classroom_connections_tenant"),
+        UniqueConstraint(
+            "connection_key", name="uq_classroom_connections_connection_key"
+        ),
+        Index("ix_classroom_connections_tenant_id", "tenant_id"),
         CheckConstraint(
             "status IN ('CONNECTED','RECONNECT_REQUIRED')", name="status"
         ),
@@ -1386,20 +1398,44 @@ class ClassroomConnection(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
         ),
     )
 
+    #: ``platform`` for the central connection; NULL on retained history rows.
+    connection_key: Mapped[str | None] = mapped_column(String(40))
+    #: NULL for the platform connection; kept on legacy workspace rows so their
+    #: audit trail still says which workspace previously held the grant.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True
+    )
     encrypted_access_token: Mapped[str | None] = mapped_column(Text)
     encrypted_refresh_token: Mapped[str | None] = mapped_column(Text)
-    access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    #: The scopes the integration currently needs.  Kept beside the granted set
+    #: so a deployment that widens its requirement asks for consent again
+    #: instead of silently failing a course-work read.
+    requested_scopes: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     #: Fail closed: a row inserted without an explicit status must not look
     #: usable, so the default is the state that demands a new authorisation.
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="RECONNECT_REQUIRED"
     )
     connected_by_subject: Mapped[str] = mapped_column(String(200), nullable=False)
-    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    #: Google's own identity for the central account, read from userinfo with
+    #: the ``openid`` scope.  Never a token, never a guess.
+    connected_account_email: Mapped[str | None] = mapped_column(String(320))
+    connected_account_name: Mapped[str | None] = mapped_column(String(200))
+    last_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_status: Mapped[str | None] = mapped_column(String(30))
-    last_sync_counts: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False, default=dict)
+    last_sync_counts: Mapped[dict[str, int]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
     last_error_code: Mapped[str | None] = mapped_column(String(80))
     last_error_message: Mapped[str | None] = mapped_column(String(500))
 
@@ -1547,3 +1583,275 @@ class GoogleCloudSyncRun(UUIDPrimaryKey, TimestampMixin, Base):
     api_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_code: Mapped[str | None] = mapped_column(String(80))
     error_message: Mapped[str | None] = mapped_column(String(500))
+
+
+# -- Google Classroom integration -------------------------------------------
+#
+# The platform holds one central Google authorisation.  These tables connect
+# that external world to Aetrix's own nouns without ever letting an external
+# identifier stand in for tenant authorization: every row below carries its
+# workspace, and every query filters on it.  External IDs are unique per
+# workspace, never globally trusted, and no row is deleted when a course is
+# reassigned -- the history stays with the workspace that produced it.
+
+
+class ClassroomRosterEntry(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """One Google Classroom student as seen in one allocated course.
+
+    ``google_user_id`` is the stable external identifier and the only basis for
+    matching.  A display name is never used to decide identity, so two students
+    called the same thing stay two students.  ``match_source`` records how the
+    Aetrix student was chosen: ``EXTERNAL_ID`` (a student whose ``student_ref``
+    is the Google id), ``CREATED`` (Aetrix created a student for this person),
+    or ``MANUAL`` (a teacher resolved the identity explicitly).
+    """
+
+    __tablename__ = "classroom_roster_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "course_id", "google_user_id", name="uq_roster_entry_google"
+        ),
+        UniqueConstraint(
+            "tenant_id", "course_id", "student_id", name="uq_roster_entry_student"
+        ),
+        CheckConstraint("status IN ('ACTIVE','REMOVED')", name="status"),
+        CheckConstraint(
+            "match_source IN ('EXTERNAL_ID','CREATED','MANUAL')", name="match_source"
+        ),
+        Index("ix_roster_entry_course_status", "course_id", "status"),
+        Index("ix_roster_entry_student", "student_id"),
+    )
+
+    course_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    google_user_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False
+    )
+    full_name: Mapped[str | None] = mapped_column(String(300))
+    #: Google only exposes an address when the profile-email scope was granted.
+    email: Mapped[str | None] = mapped_column(String(320))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    match_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ClassroomCourseworkLink(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """An Aetrix assignment and its Google Classroom coursework representation.
+
+    They are deliberately separate things.  The Aetrix assignment owns the
+    marking configuration; this row records whether that assignment has an
+    external counterpart, its ``coursework_id``, and every publication attempt.
+    ``state`` moves ``DRAFT -> PUBLISHING -> PUBLISHED`` or ``FAILED``; a
+    published row is never republished, so a retried request cannot create a
+    second Classroom assignment.
+    """
+
+    __tablename__ = "classroom_coursework_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "assignment_id", name="uq_coursework_link_assignment"
+        ),
+        UniqueConstraint(
+            "tenant_id", "coursework_id", name="uq_coursework_link_coursework"
+        ),
+        CheckConstraint(
+            "state IN ('DRAFT','PUBLISHING','PUBLISHED','FAILED')", name="state"
+        ),
+        Index("ix_coursework_link_course", "tenant_id", "course_id"),
+        Index("ix_coursework_link_class", "classroom_class_id"),
+    )
+
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False
+    )
+    classroom_class_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_classes.id", ondelete="RESTRICT"), nullable=False
+    )
+    course_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    coursework_id: Mapped[str | None] = mapped_column(String(200))
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT")
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    max_points: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    publish_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_by_subject: Mapped[str | None] = mapped_column(String(200))
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    last_error_message: Mapped[str | None] = mapped_column(String(500))
+
+
+class ClassroomSubmissionLink(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """One Google Classroom student submission and what Aetrix did with it.
+
+    ``google_submission_id`` is unique per workspace, so re-running a
+    synchronization cannot ingest the same work twice.  ``submission_id`` and
+    ``document_id`` stay NULL until ingestion succeeds; a failure keeps the row
+    with ``state = INGEST_FAILED`` and an actionable message rather than
+    dropping the student's work.
+    """
+
+    __tablename__ = "classroom_submission_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "google_submission_id",
+            name="uq_submission_link_google",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "coursework_link_id",
+            "google_user_id",
+            name="uq_submission_link_student",
+        ),
+        CheckConstraint(
+            "state IN ('DISCOVERED','INGESTED','INGEST_FAILED','CORRECTING',"
+            "'CORRECTED','WITHDRAWN')",
+            name="state",
+        ),
+        Index("ix_submission_link_coursework", "coursework_link_id", "state"),
+        Index("ix_submission_link_submission", "submission_id"),
+    )
+
+    coursework_link_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_coursework_links.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("submissions.id", ondelete="SET NULL")
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    course_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    coursework_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    google_submission_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    google_user_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="RESTRICT"), nullable=False
+    )
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="DISCOVERED")
+    submission_state: Mapped[str | None] = mapped_column(String(40))
+    late: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: Attachment metadata from Google, never the bytes: id, title, type, URL.
+    attachments: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ingest_error: Mapped[str | None] = mapped_column(String(500))
+    #: The correction job this external submission was marked by, if any.
+    #: A re-mark creates a new job; this points at the current one.
+    correction_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("correction_jobs.id", ondelete="SET NULL")
+    )
+    #: The approved final result.  Grade publication is impossible
+    #: without all of these, so a provisional or uncertain mark can
+    #: never reach Google.
+    approved_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    approved_max: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    approved_by_subject: Mapped[str | None] = mapped_column(String(200))
+    approved_by_role: Mapped[str | None] = mapped_column(String(20))
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+
+class ClassroomGradePublication(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """A grade publication attempt, kept even when it fails.
+
+    Publishing writes ``assignedGrade`` on the student submission.  Only an
+    approved Aetrix result is eligible, the actor who authorised it is recorded,
+    and an attempt whose outcome Google did not confirm stays ``UNKNOWN`` so a
+    retry reconciles before it writes again.
+    """
+
+    __tablename__ = "classroom_grade_publications"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('SUCCEEDED','FAILED','UNKNOWN','CONFLICT')", name="state"
+        ),
+        Index(
+            "ix_grade_publication_link_attempt",
+            "submission_link_id",
+            "created_at",
+        ),
+        Index("ix_grade_publication_tenant_state", "tenant_id", "state"),
+    )
+
+    submission_link_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_submission_links.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    coursework_link_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_coursework_links.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    draft_grade: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    assigned_grade: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    #: The teacher or reviewer who approved the result in Aetrix.
+    approved_by_subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    approved_by_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: The person who pressed publish; equal to the approver when they are the same.
+    authorized_by_subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    external_grade_before: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    response_detail: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ClassroomSyncRun(UUIDPrimaryKey, TimestampMixin, Base):
+    """Synchronization history for course discovery, rosters and submissions.
+
+    ``tenant_id`` is NULL for a platform-level course discovery and set for a
+    workspace roster or submission run.  A run records what it attempted and
+    what it achieved, including partial failure, so the interface can show the
+    truth instead of a green tick.
+    """
+
+    __tablename__ = "classroom_sync_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('COURSES','ROSTER','SUBMISSIONS')", name="kind"
+        ),
+        CheckConstraint(
+            "status IN ('RUNNING','SUCCEEDED','PARTIAL','FAILED')", name="status"
+        ),
+        Index("ix_sync_run_tenant_kind", "tenant_id", "kind", "created_at"),
+        Index("ix_sync_run_course", "course_id"),
+    )
+
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="RUNNING")
+    course_id: Mapped[str | None] = mapped_column(String(200))
+    coursework_link_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("classroom_coursework_links.id", ondelete="SET NULL")
+    )
+    actor_subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    counts: Mapped[dict[str, int]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

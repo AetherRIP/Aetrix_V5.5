@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,7 @@ from ..core.security import Principal, platform_authority
 from ..db.models import (
     ClassroomAllocation,
     ClassroomClass,
+    ClassroomSyncRun,
     PlatformAuditEvent,
     Tenant,
     User,
@@ -45,14 +46,17 @@ from ..schemas.classroom_allocations import (
     WorkspaceAllocationRead,
     WorkspaceTargetRead,
 )
+from ..schemas.classroom_integration import (
+    ClassroomCourseRead,
+    ClassroomSyncRunRead,
+)
 from .platform_accounts import ensure_platform_admin
 
 DISCOVERY_REASON_CONFIGURED = (
-    "A Google Classroom OAuth client is configured. A workspace owner or "
-    "administrator can authorise the classroom.courses.readonly scope and run "
-    "a course sync; listed courses are stored VERIFIED with source "
-    "google_classroom. Operator-recorded classes stay UNVERIFIED until a sync "
-    "lists them. Rosters and grades are not read or written."
+    "A Google Classroom OAuth client is configured. Platform administration "
+    "connects one central Google account and runs a course sync; listed "
+    "courses are stored VERIFIED with source google_classroom. "
+    "Operator-recorded classes stay UNVERIFIED until a sync lists them."
 )
 
 DISCOVERY_REASON_UNCONFIGURED = (
@@ -165,10 +169,11 @@ class ClassroomAllocationService:
                     name="discover classes from Google Classroom",
                     supported=True,
                     note=(
-                        "A workspace owner or administrator authorises the "
-                        "classroom.courses.readonly scope and runs a course "
-                        "sync; listed courses are stored VERIFIED with source "
-                        "google_classroom. Rosters and grades are not read."
+                        "A platform administrator connects the central Google "
+                        "account (classroom.courses.readonly plus the roster "
+                        "and coursework scopes) and runs a course sync; listed "
+                        "courses are stored VERIFIED with source "
+                        "google_classroom."
                     ),
                 ),
             ],
@@ -248,6 +253,82 @@ class ClassroomAllocationService:
             statement.order_by(ClassroomClass.name.asc(), ClassroomClass.id.asc())
         )
         return [_class_read(row) for row in rows]
+
+    def list_courses(
+        self,
+        actor: Principal,
+        *,
+        q: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[ClassroomCourseRead]:
+        """Every discovered course, with its current allocation, for admin.
+
+        Paginated in the query rather than truncated silently: the caller is
+        told when a page is full because there may be more rows.
+        """
+
+        ensure_platform_admin(actor)
+        statement = (
+            select(ClassroomClass, ClassroomAllocation, Tenant.name)
+            .outerjoin(
+                ClassroomAllocation,
+                and_(
+                    ClassroomAllocation.classroom_class_id == ClassroomClass.id,
+                    ClassroomAllocation.status == "ACTIVE",
+                ),
+            )
+            .outerjoin(Tenant, ClassroomAllocation.workspace_id == Tenant.id)
+        )
+        if q:
+            needle = f"%{q.strip()}%"
+            statement = statement.where(
+                ClassroomClass.name.ilike(needle)
+                | ClassroomClass.course_id.ilike(needle)
+                | ClassroomClass.section.ilike(needle)
+            )
+        rows = self.session.execute(
+            statement.order_by(
+                ClassroomClass.course_state.asc(),
+                ClassroomClass.name.asc(),
+                ClassroomClass.id.asc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        ).all()
+        return [
+            ClassroomCourseRead(
+                id=classroom.id,
+                course_id=classroom.course_id,
+                name=classroom.name,
+                section=classroom.section,
+                course_state=classroom.course_state,
+                teacher_name=classroom.teacher_name,
+                owner_email=classroom.owner_email,
+                verification=classroom.verification,
+                synced_at=classroom.synced_at,
+                workspace_id=allocation.workspace_id if allocation else None,
+                workspace_name=workspace_name,
+                allocation_id=allocation.id if allocation else None,
+                allocated_at=allocation.allocated_at if allocation else None,
+            )
+            for classroom, allocation, workspace_name in rows
+        ]
+
+    def sync_runs(
+        self, actor: Principal, *, limit: int = 25
+    ) -> list[ClassroomSyncRunRead]:
+        ensure_platform_admin(actor)
+        runs = self.session.scalars(
+            select(ClassroomSyncRun)
+            .where(
+                ClassroomSyncRun.kind == "COURSES",
+                ClassroomSyncRun.tenant_id.is_(None),
+            )
+            .order_by(ClassroomSyncRun.started_at.desc())
+            .limit(limit)
+        )
+        return [ClassroomSyncRunRead.model_validate(run) for run in runs]
 
     def list_allocations(
         self,
