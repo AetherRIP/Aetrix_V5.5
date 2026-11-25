@@ -46,6 +46,8 @@ export type QuotaEstimate = {
   cooldown_until: string | null
   accounting?: string
   exhausted: boolean
+  /** Requests today whose consumption the provider never confirmed (5xx, timeout). */
+  unconfirmed_requests?: number
   notes: string[]
 }
 
@@ -169,7 +171,13 @@ export type UsageReport = {
   timezone?: string
   recent_calls?: RecentProviderCall[]
   daily: { day: string; requests: number; input_tokens: number; output_tokens: number; failures: number }[]
+  /** Only the three monitored models appear here. */
   by_model: { model: string; requests: number; input_tokens: number; output_tokens: number; failures: number }[]
+  /**
+   * Recorded requests whose model is outside the monitored view. Reported so the
+   * filtered table reconciles with the unfiltered daily totals beside it.
+   */
+  excluded_requests?: number
   by_project: {
     project_id: string
     requests: number
@@ -277,6 +285,16 @@ export type CatalogueProject = {
   error: string | null
 }
 
+export type MarkingPolicy = {
+  /** The only model a production correction job may mark with. */
+  marking_model: string
+  /** Lightweight models that cannot be selected or reached as a fallback. */
+  disabled_models: string[]
+  primary_chain: string[]
+  enforced: boolean
+  note: string
+}
+
 export type ModelCatalogue = {
   discovered_at: string
   cached: boolean
@@ -285,6 +303,7 @@ export type ModelCatalogue = {
   models: CatalogueModel[]
   selections: Record<SelectionRole, string>
   selection_sources: Record<SelectionRole, string>
+  marking_policy: MarkingPolicy
   note: string
 }
 

@@ -557,6 +557,15 @@ function ProjectsTab({ state, onRefresh }: { state: Loaded<FleetOverview>; onRef
                 Resets {stamp(estimate.reset_at)} · observed {stamp(estimate.observed_at)}
               </p>
               <ul className="gem-model__notes">
+                {/* Unconfirmed attempts are counted per minute but not against the
+                    day, so the day meter alone cannot show them. */}
+                {estimate.unconfirmed_requests ? (
+                  <li>
+                    {count(estimate.unconfirmed_requests)} request(s) today failed without a
+                    provider confirmation that they were metered. They count against the
+                    per-minute limit, not the daily allowance.
+                  </li>
+                ) : null}
                 {estimate.notes.map((note) => (
                   <li key={note}>{note}</li>
                 ))}
@@ -1566,6 +1575,15 @@ function UsageTab({ token }: { token: string | null }) {
             </tbody>
           </table>
         </div>
+        {/* The table shows three models; the day totals above do not. Saying how
+            many requests fall outside the view keeps the two reconcilable rather
+            than letting the filtered rows look complete. */}
+        {data.excluded_requests ? (
+          <p className="gem-footnote">
+            {count(data.excluded_requests)} request(s) in this window belong to models outside the
+            three monitored models and are not listed above. Their history is retained.
+          </p>
+        ) : null}
       </Panel>
 
       <Panel title="By project" note="The quota pool">
@@ -1749,7 +1767,21 @@ function ModelsTab({
   }
 
   const catalogue = state.data
-  const selectable = catalogue.models.filter((model) => model.status !== 'unsupported')
+  const policy = catalogue.marking_policy
+  const disabled = new Set(policy?.disabled_models ?? [])
+  const selectable = catalogue.models.filter(
+    (model) => model.status !== 'unsupported' && !disabled.has(model.id),
+  )
+  // The primary role is the marking role. It has one model, and the screen
+  // offers only that model rather than listing alternatives the engine refuses.
+  // The policy is advisory here: when the catalogue does not carry it, the
+  // unfiltered list is shown rather than an empty selector. What may execute is
+  // decided server-side, so an absent field can narrow nothing.
+  const markingModel = policy?.marking_model
+  const selectableFor = (role: SelectionRole) =>
+    role === 'primary' && markingModel
+      ? selectable.filter((model) => model.id === markingModel)
+      : selectable
   const scanned = catalogue.projects.filter((project) => project.ok).length
 
   return (
@@ -1772,12 +1804,14 @@ function ModelsTab({
                 disabled={!token || busy === `save:${role}`}
                 onChange={(event) => void save(role, event.target.value)}
               >
-                {selectable.some((model) => model.id === catalogue.selections[role]) ? null : (
+                {selectableFor(role).some(
+                  (model) => model.id === catalogue.selections[role],
+                ) ? null : (
                   <option value={catalogue.selections[role] ?? ''}>
-                    {catalogue.selections[role]} (not listed now)
+                    {catalogue.selections[role]} (not selectable)
                   </option>
                 )}
-                {selectable.map((model) => (
+                {selectableFor(role).map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.id}
                   </option>
@@ -1792,9 +1826,15 @@ function ModelsTab({
           ))}
         </div>
         <p className="gem-footnote">
-          The lightweight role is stored for extraction and classification work. Question
-          marking runs on the primary role, so nothing here claims the secondary model is used
-          for it.
+          {policy?.marking_model ? (
+            <>
+              Question marking runs on <code>{policy.marking_model}</code> only. No other model is
+              tried if it is unavailable, and the job records the model that actually answered.{' '}
+            </>
+          ) : null}
+          The lightweight role is stored for extraction and classification work. The disabled
+          models {policy?.disabled_models?.join(', ') ?? ''} cannot be selected and are never a
+          fallback; their prices and historical usage remain readable.
         </p>
       </Panel>
 
