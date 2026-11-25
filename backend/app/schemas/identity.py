@@ -31,6 +31,11 @@ class MeRead(BaseModel):
     role: str
     ui_role: str
     capabilities: list[str]
+    #: Platform authority from the verified claim.  It is a different fact from
+    #: the workspace role: a platform administrator is normally an OWNER or
+    #: ADMIN of one workspace, so ``role`` alone cannot distinguish the two,
+    #: and only a PLATFORM_OWNER carries the ``platform_admin`` capability.
+    is_platform_admin: bool = False
     is_demo: bool
 
 

@@ -372,6 +372,7 @@ class IdentityService:
             role=user.role,
             ui_role=UI_ROLE.get(user.role, "viewer"),
             capabilities=capabilities_for(user.role),
+            is_platform_admin=principal.is_platform_admin,
             is_demo=tenant.is_demo,
         )
 

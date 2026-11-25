@@ -257,3 +257,52 @@ def test_an_upstream_failure_leaves_the_membership_row_unchanged() -> None:
     assert member.role == "TEACHER"
     assert store.commits == 0
     assert audit.events == []
+
+
+class _FakeTenants:
+    def __init__(self, tenant: Any) -> None:
+        self.tenant = tenant
+
+    def get(self, tenant_id: uuid.UUID) -> Any:
+        return self.tenant
+
+
+def _me_for(platform_role: str) -> Any:
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    user = SimpleNamespace(
+        id=user_id, subject="subject-1", email=None, display_name="Ana", role="OWNER"
+    )
+    tenant = SimpleNamespace(id=tenant_id, name="Alpha", slug="alpha", is_demo=False)
+    instance = IdentityService(FakeSession())
+    instance.users = FakeUsers(user)
+    instance.tenants = _FakeTenants(tenant)
+    principal = Principal(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        subject="subject-1",
+        role="OWNER",
+        platform_role=platform_role,
+    )
+    return instance.me(principal)
+
+
+def test_me_reports_platform_authority_apart_from_the_workspace_role() -> None:
+    """The screen must be able to tell a platform administrator from an owner.
+
+    ``capabilities`` is derived from the workspace role, so an ADMIN of the
+    platform — normally the OWNER of one workspace — carries no
+    ``platform_admin`` capability.  Reporting the claim separately is what keeps
+    the platform screen from refusing an account the API accepts.
+    """
+
+    admin = _me_for("ADMIN")
+    assert admin.role == "OWNER"
+    assert admin.is_platform_admin is True
+    assert "platform_admin" not in admin.capabilities
+
+    owner = _me_for("PLATFORM_OWNER")
+    assert owner.is_platform_admin is True
+
+    workspace = _me_for("")
+    assert workspace.is_platform_admin is False
