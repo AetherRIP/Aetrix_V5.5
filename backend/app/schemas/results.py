@@ -73,6 +73,9 @@ class QuestionResultRead(BaseModel):
     scheme_concerns: list[dict[str, Any]]
     criteria: list[CriterionResultRead] = Field(default_factory=list)
     evidence: list[EvidenceRead] = Field(default_factory=list)
+    #: The question's derived verification state (required, verified, missing,
+    #: contradicted and unverifiable checks), computed from stored verdicts.
+    verification: dict[str, Any] | None = None
 
 
 class ResultTotals(BaseModel):
@@ -103,6 +106,9 @@ class JobResultsRead(BaseModel):
     assignment_id: UUID
     student_ref: str
     job_state: str
+    #: How thoroughly the stored decisions were verified.  Completion and
+    #: verification are separate: ``COMPLETED`` does not imply ``FULLY_VERIFIED``.
+    verification_status: str | None = None
     #: What produced these marks.  ``AUTOMATED_REFUSED`` means this run was not
     #: presented; a direct job read still says so.
     result_source: str | None = None

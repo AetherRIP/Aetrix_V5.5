@@ -7,6 +7,7 @@ and then wait for the current job to reach a safe boundary.
 
 from __future__ import annotations
 
+import argparse
 import signal
 import socket
 import threading
@@ -225,8 +226,59 @@ def run(settings: Settings | None = None) -> int:
     return 0
 
 
+def run_once(settings: Settings | None = None) -> int:
+    """Claim at most one job, run it, and exit.
+
+    A supervised pilot needs one bounded execution, not a resident worker: with
+    no heartbeat loop and no quota scheduler this process either finishes the one
+    job it claimed or finds nothing runnable.  The pipeline, the lease and the
+    state machine are the same ones the resident worker uses, so nothing about
+    the marking path differs.
+
+    Exit code 0 means a job was claimed and executed (whatever state it ended
+    in); 3 means nothing was runnable, so a wrapper can tell a finished run from
+    one that never started.
+    """
+
+    resolved = settings or get_settings()
+    configure_logging("DEBUG" if resolved.debug else "INFO", json_output=True)
+    if not resolved.features.live_provider:
+        log.warning(
+            "live provider is disabled; the job will park as PROVIDER_UNAVAILABLE "
+            "rather than producing a simulated mark"
+        )
+
+    session_factory = get_session_factory(resolved)
+    pipeline = build_pipeline(resolved)
+    runner = JobRunner(
+        session_factory=session_factory,
+        pipeline=pipeline,
+        settings=resolved,
+        worker_id=f"{socket.gethostname()}-{getpid()}-once",
+    )
+    processed = runner.run_once()
+    log.info(
+        "single run finished",
+        extra={"extra_fields": {"job_id": str(processed) if processed else None}},
+    )
+    return 0 if processed else 3
+
+
 def main() -> None:
-    raise SystemExit(run())
+    parser = argparse.ArgumentParser(
+        prog="aetrix-worker",
+        description=(
+            "Run the correction worker.  With --once it claims at most one job "
+            "and exits (0 = a job ran, 3 = nothing was runnable)."
+        ),
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="claim and run one job, then exit instead of polling for work",
+    )
+    arguments = parser.parse_args()
+    raise SystemExit(run_once() if arguments.once else run())
 
 
 if __name__ == "__main__":

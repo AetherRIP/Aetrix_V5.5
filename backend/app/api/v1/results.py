@@ -11,6 +11,7 @@ from ...core.config import Settings, get_settings
 from ...core.errors import AppError, ErrorCode
 from ...core.security import Principal
 from ...db.session import get_db_session
+from ...schemas.preview import CorrectionPreviewRead
 from ...schemas.results import (
     JobApprovalRequest,
     JobResultsRead,
@@ -18,6 +19,7 @@ from ...schemas.results import (
     PageRead,
     QuestionReviewRequest,
 )
+from ...services.preview import CorrectionPreviewService
 from ...services.results import ResultsService
 from ...storage.base import Storage
 from ..deps import get_principal, get_storage
@@ -47,6 +49,20 @@ def get_submission_results(
             "This submission has not been marked yet, so it has no results.",
         )
     return results
+
+
+@router.get("/submissions/{submission_id}/preview", response_model=CorrectionPreviewRead)
+def get_submission_preview(
+    submission_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> CorrectionPreviewRead:
+    """The three stored sources behind one correction, read-only.
+
+    This is a presentation read: it calls no provider and changes no row.
+    """
+
+    return CorrectionPreviewService(session).preview(principal, submission_id)
 
 
 @router.post("/results/{question_result_id}/override", response_model=JobResultsRead)

@@ -17,18 +17,25 @@ import time
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from app.core.config import MarkingSettings, StorageSettings, get_settings
+from app.core.errors import AppError
+from app.core.ids import content_hash
+from app.correction.aetrix.pipeline import _MarkingRun
 from app.correction.engine import AetrixEngine
+from app.correction.scheme_criteria import criteria_rules_hash
 from app.db.models import (
     CorrectionJob,
     CriterionResult,
     Document,
     DocumentPage,
     EngineRun,
+    ExamBlueprintVersion,
     JobApproval,
     MarkingCriterion,
     MarkingEvidence,
     PageQuestionMapping,
+    ProviderUsage,
     QuestionResult,
     VerificationResult,
 )
@@ -36,7 +43,9 @@ from app.db.repositories import ResultRepository
 from app.jobs.pipeline import build_pipeline
 from app.jobs.runner import JobRunner
 from app.jobs.states import JobState
+from app.prompts.registry import PromptRegistry
 from app.providers.base import LLMResponse, TokenUsage
+from app.providers.gemini import GeminiProvider
 from app.storage import LocalStorage
 from sqlalchemy import select, text
 
@@ -52,12 +61,16 @@ def _answer(question_id: str, awarded: int, components: list[dict], answer: str 
 
 
 def _component(code: str, awarded: bool, evidence: str | None) -> dict:
+    # ``page`` is part of the reply contract: a quotation with no page cannot be
+    # found again, so the engine refuses it.  These fixtures are one-page
+    # scripts, so every quotation is on page 1.
     return {
         "code": code,
         "marks": 1,
         "awarded": awarded,
         "reason": "the step is present" if awarded else "the step is missing",
         "evidence": evidence,
+        "page": 1,
     }
 
 
@@ -116,11 +129,55 @@ class StubProvider:
         )
 
 
-def _settings(tmp_path, **overrides):
+def _settings(tmp_path, *, transcription: bool = False, gate: bool = False, **overrides):
+    """Per-question settings for a suite that pins the per-question engine.
+
+    Whole paper is the product default now, but every test here drives one
+    question at a time (double check, transcription, cancellation, verification),
+    so the mode is stated rather than inherited — the stub provider answers a
+    single-question request, not a paper.
+
+    The blind second reading is on in the product and off here unless a test asks
+    for it: these stubs answer a marking request, so a test that is not about the
+    reading stage must not be made to pay for one or to interpret its absence.
+    """
+
     settings = get_settings().model_copy(
         update={"storage": StorageSettings(root=tmp_path / "documents")}
     )
-    return settings.model_copy(update=overrides) if overrides else settings
+    if overrides:
+        settings = settings.model_copy(update=overrides)
+    marking = settings.marking.model_copy(
+        update={
+            "marking_mode": "PER_QUESTION",
+            "transcription_enabled": transcription,
+            # The evidence gate is the production default and these tests state
+            # it rather than inherit it: a suite that turns the blind reading off
+            # would otherwise send every award in its fixtures to review, which
+            # would replace each test's own subject with that one outcome.  The
+            # gate has its own tests below, which ask for it explicitly.
+            "require_evidence_for_award": gate,
+        }
+    )
+    return settings.model_copy(update={"marking": marking})
+
+
+def _reapprove_criteria(db_session, paper) -> None:
+    """Record the digest of the marking rules as they now stand.
+
+    A test that rewrites a scheme is a re-approval, not a silent edit: the engine
+    marks only against criteria whose approval names the rules reviewed.
+    """
+
+    rows = (
+        db_session.query(MarkingCriterion)
+        .filter(MarkingCriterion.scheme_version_id == paper.scheme_version.id)
+        .all()
+    )
+    paper.scheme_version.criteria_rules_hash = criteria_rules_hash(
+        rows, paper.blueprint.structure
+    )
+    db_session.commit()
 
 
 def _job(db_session, paper, identity, *, key: str, state: str = "CREATED") -> CorrectionJob:
@@ -924,24 +981,49 @@ def test_a_cancel_during_recovery_discards_the_recovered_rows(
 class TranscriptionProvider(StubProvider):
     """Answers the blind transcription prompt with a recorded second reading."""
 
-    def __init__(self, transcripts: dict[str, str | None]) -> None:
+    #: The second reading is answered by a different model in production, and the
+    #: fixture says so unless a test is about the same-model case.
+    reader = "aetrix-blind-reader"
+
+    def __init__(
+        self,
+        transcripts: dict[str, str | None],
+        *,
+        model: str | None = None,
+        same_model: bool = False,
+    ) -> None:
         super().__init__()
         self.transcripts = transcripts
+        self.model = model
+        #: Answer as the marking model would: independent of nothing.
+        self.same_model = same_model
+        #: Who the marking chain answered as, learned from its own replies.
+        self.read_by: str | None = None
 
     def generate(self, request, api_key):
-        if "independent transcription" in request.prompt:
+        blind = "independent transcription" in request.prompt
+        if not blind:
+            # Who the marking chain answered as: the same-model case needs it.
+            self.read_by = request.model
+        if blind:
             context = next((part.text for part in request.inputs if part.text), "")
             question_id = context.splitlines()[0].split(":", 1)[1].strip()
             self.calls += 1
+            transcript = self.transcripts.get(question_id)
             payload = {
                 "question_id": question_id,
-                "transcript": self.transcripts.get(question_id),
+                "evidence_status": "WRITTEN" if (transcript or "").strip() else "ABSENT",
+                "transcript": transcript,
                 "confidence": 0.9,
                 "review_reasons": [],
             }
             return LLMResponse(
                 text=json.dumps(payload),
-                model=request.model,
+                model=(
+                    self.read_by or request.model
+                    if self.same_model
+                    else self.model or self.reader
+                ),
                 usage=TokenUsage(input_tokens=10, output_tokens=10),
                 finish_reason="STOP",
                 provider_request_id=f"stub-transcribe-{self.calls}",
@@ -955,9 +1037,7 @@ def test_a_blind_reading_that_finds_writing_reviews_the_blank_zero(
 ) -> None:
     """A zero taken beside a blank answer is the shape of an unread answer."""
 
-    _page(db_session, paper, identity, settings := _settings(
-        tmp_path, marking=MarkingSettings(transcription_enabled=True)
-    ))
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
     job = _job(db_session, paper, identity, key="transcription-differs")
     provider = TranscriptionProvider({"2": "x = 3, y = 7"})
 
@@ -971,6 +1051,14 @@ def test_a_blind_reading_that_finds_writing_reviews_the_blank_zero(
         "differences": 1,
         "absent": 0,
         "unverifiable": 0,
+        "not_independent": 0,
+        "unknown_independence": 0,
+        "unavailable": 0,
+        "page_unverified": 0,
+        "unverified_award": 0,
+        "evidence_failures": 0,
+        "evidence_unverified": 0,
+        "disagreements": ["2"],
     }
     assert provider.calls == 4, "three markings and one blind reading"
 
@@ -982,10 +1070,12 @@ def test_a_blind_reading_that_finds_writing_reviews_the_blank_zero(
     assert rows["2"].awarded_marks == 0, "the award is not changed by a transcription"
     assert rows["2"].processing_state == "NEEDS_REVIEW"
     assert rows["2"].student_answer is None, "the original evidence is preserved"
-    assert any(
-        concern["code"] == "TRANSCRIPTION_DIFFERS"
+    concern = next(
+        concern
         for concern in rows["2"].scheme_concerns
+        if concern["code"] == "TRANSCRIPTION_DIFFERS"
     )
+    assert concern["severity"] == "DEFINITE_MISMATCH"
 
     verdict = db_session.scalar(
         select(VerificationResult).where(
@@ -1012,9 +1102,7 @@ def test_a_blind_reading_that_agrees_leaves_the_mark_alone(
 ) -> None:
     """Two readers who see the same blank produce no concern."""
 
-    _page(db_session, paper, identity, settings := _settings(
-        tmp_path, marking=MarkingSettings(transcription_enabled=True)
-    ))
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
     job = _job(db_session, paper, identity, key="transcription-agrees")
     provider = TranscriptionProvider({"2": ""})
 
@@ -1023,6 +1111,9 @@ def test_a_blind_reading_that_agrees_leaves_the_mark_alone(
     assert outcome.state is JobState.FINALIZING, outcome.detail
     assert outcome.detail["transcription"]["absent"] == 1
     assert outcome.detail["transcription"]["differences"] == 0
+    # A one-page script has no page to choose, so the page selection is
+    # independent of the marking pass and an agreement is not circular.
+    assert outcome.detail["transcription"]["page_unverified"] == 0
 
     db_session.expire_all()
     rows = ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
@@ -1031,14 +1122,222 @@ def test_a_blind_reading_that_agrees_leaves_the_mark_alone(
     assert not any(
         concern["code"] == "TRANSCRIPTION_DIFFERS" for concern in zero.scheme_concerns
     )
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.detail["page_source"] == "SINGLE_PAGE"
+    assert verdict.detail["page_confidence"] == "INDEPENDENT"
+
+
+#: Q6 of production correction 7ed1c143 as the marking pass recorded it: the
+#: minus that belongs to the second bracket has been read as a plus inside it.
+Q6_MISREAD = "4x^2 + 12x + 9 - 4x^2 - 12x + 9"
+
+#: The same line as it is written on the page: two brackets, subtracted.
+Q6_WRITTEN = "(4x^2 + 12x + 9) - (4x^2 - 12x + 9)"
+
+
+def test_the_q6_misread_minus_cannot_stand_as_a_confident_zero(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """The Mission 3 defect, end to end: a sign nobody read must stop a mark.
+
+    The marking pass writes the second bracket's subtraction as if the bracket
+    had been added; the blind reading of the same page keeps the brackets and
+    the minus.  The zero
+    is internally consistent, so no arithmetic check can see the problem — the
+    only defence is that two readers disagree about what is on the page.
+    """
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="q6-sign-misread")
+    answers = dict(ANSWERS)
+    answers["2"] = {
+        **_answer("2", 0, [_component("B1", False, Q6_MISREAD)], None),
+        # The production zero was recorded at full confidence: nothing about how
+        # sure the marking pass was may keep the disagreement out of review.
+        "confidence": 1.0,
+    }
+    provider = TranscriptionProvider({"2": Q6_WRITTEN})
+    provider.answers = answers
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.state is JobState.REVIEW_REQUIRED, outcome.detail
+    assert outcome.detail["transcription"]["differences"] == 1
+    assert outcome.detail["transcription"]["disagreements"] == ["2"]
+    # The guard, not only the row: a disagreement fails this run's validation, so
+    # no later stage that happens to balance can settle the paper around it, and
+    # this run's marks are not presented at all.
+    assert outcome.detail.get("guard_reason"), outcome.detail
+    assert outcome.detail["guard"] == "BLOCKED", outcome.detail["guard_reason"]
+
+    db_session.expire_all()
+    rows = {
+        row.question_id: row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    }
+    zero = rows["2"]
+    assert zero.awarded_marks == 0, "a disagreement never rewrites a mark"
+    assert zero.processing_state == "NEEDS_REVIEW"
+    assert zero.student_answer is None, "the original reading is preserved"
+    concern = next(
+        concern
+        for concern in zero.scheme_concerns
+        if concern["code"] == "TRANSCRIPTION_DIFFERS"
+    )
+    assert concern["severity"] == "DEFINITE_MISMATCH"
+    assert Q6_WRITTEN in concern["message"]
+    assert Q6_MISREAD in concern["message"]
+
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "DIFFERS"
+    difference = verdict.detail["differences"][0]
+    assert difference["kind"] == "SIGN"
+    assert difference["marking"] == Q6_MISREAD
+    assert difference["independent"] == Q6_WRITTEN
+    # Both wrong signs are reported, not only the first.
+    assert len(verdict.detail["differences"]) == 2
+    assert {item["kind"] for item in verdict.detail["differences"]} == {"SIGN"}
+    # The provenance a reviewer needs: which page was read, how it was chosen,
+    # the ranking that selected this question, and the reply as it arrived.
+    assert verdict.detail["page_source"] == "EVIDENCE"
+    assert verdict.detail["pages"] == [1]
+    assert verdict.detail["independence"] == "MODEL"
+    assert verdict.detail["ranking"]["rank"] == 1
+    assert Q6_WRITTEN in verdict.detail["raw_response"]
+
+    # The marking pass's own words are untouched: only a person may replace them.
+    quotes = db_session.scalars(
+        select(MarkingEvidence).where(MarkingEvidence.question_result_id == zero.id)
+    )
+    assert [item.quote for item in quotes] == [Q6_MISREAD]
+
+
+def test_a_reader_who_is_the_marking_model_is_not_independent(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """The same model asked twice is a prompt check, and it must say so."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-same-model")
+    provider = TranscriptionProvider({"2": ""}, same_model=True)
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["transcription"]["not_independent"] == 1
+    assert outcome.detail["transcription"]["differences"] == 0
+
+    db_session.expire_all()
+    zero = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "2"
+    )
+    assert zero.processing_state == "NEEDS_REVIEW"
+    concern = next(
+        concern
+        for concern in zero.scheme_concerns
+        if concern["code"] == "TRANSCRIPTION_NOT_INDEPENDENT"
+    )
+    assert concern["severity"] == "POSSIBLE_MISMATCH"
+    assert zero.awarded_marks == 0
+
+
+class MalformedReaderProvider(StubProvider):
+    """Answers the blind prompt with prose instead of the output contract."""
+
+    def generate(self, request, api_key):
+        if "independent transcription" in request.prompt:
+            self.calls += 1
+            return LLMResponse(
+                text="I think the candidate meant to write 18.",
+                model="aetrix-blind-reader",
+                usage=TokenUsage(input_tokens=10, output_tokens=10),
+                finish_reason="STOP",
+                provider_request_id=f"stub-malformed-{self.calls}",
+                latency_ms=1,
+            )
+        return super().generate(request, api_key)
+
+
+def test_a_malformed_reading_cannot_confirm_a_zero(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A reply outside the contract verifies nothing, so the zero is not settled."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-malformed")
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, MalformedReaderProvider())
+
+    assert outcome.detail["transcription"]["unverifiable"] == 1
+    assert outcome.detail["transcription"]["agreements"] == 0
+
+    db_session.expire_all()
+    zero = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "2"
+    )
+    assert zero.awarded_marks == 0
+    assert zero.processing_state == "NEEDS_REVIEW"
+    assert any(
+        concern["code"] == "TRANSCRIPTION_UNVERIFIED"
+        for concern in zero.scheme_concerns
+    )
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "UNVERIFIABLE"
+
+
+def test_a_reader_who_finds_nothing_where_the_mark_quotes_work_disagrees(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """An empty reading is a claim about the page, not proof that nothing is there."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-independent-absent")
+    answers = dict(ANSWERS)
+    answers["2"] = _answer("2", 0, [_component("B1", False, Q6_WRITTEN)], None)
+    provider = TranscriptionProvider({"2": None})
+    provider.answers = answers
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.state is JobState.REVIEW_REQUIRED, outcome.detail
+    assert outcome.detail["transcription"]["differences"] == 1
+    db_session.expire_all()
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "DIFFERS"
+    assert verdict.detail["differences"][0]["kind"] == "INDEPENDENT_ABSENT"
 
 
 def test_economy_never_pays_for_a_blind_reading(
     monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
 ) -> None:
-    _page(db_session, paper, identity, settings := _settings(
-        tmp_path, marking=MarkingSettings(transcription_enabled=True)
-    ))
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
     paper.assignment.review_mode = "ECONOMY"
     db_session.commit()
     job = _job(db_session, paper, identity, key="transcription-economy")
@@ -1050,9 +1349,11 @@ def test_economy_never_pays_for_a_blind_reading(
     assert provider.calls == 3
 
 
-def test_transcription_is_off_unless_the_operator_enables_it(
+def test_the_operator_switch_still_decides(
     monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
 ) -> None:
+    """The second reading is part of the correction now, and can still be shut off."""
+
     _page(db_session, paper, identity, settings := _settings(tmp_path))
     job = _job(db_session, paper, identity, key="transcription-disabled")
     provider = TranscriptionProvider({"2": "x = 3"})
@@ -1060,7 +1361,7 @@ def test_transcription_is_off_unless_the_operator_enables_it(
     outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
 
     assert outcome.detail["transcription"] is None
-    assert provider.calls == 3
+    assert provider.calls == 3, "a disabled stage costs nothing"
 
 
 def test_review_modes_trade_requests_for_certainty(
@@ -1149,24 +1450,20 @@ def test_an_award_the_approved_scheme_does_not_support_requires_review(
     """The scheme is evidence independent of the reply that produced the mark."""
 
     _page(db_session, paper, identity, settings := _settings(tmp_path))
-    db_session.add(
-        MarkingCriterion(
-            tenant_id=identity.tenant_a.id,
-            scheme_version_id=paper.scheme_version.id,
-            question_id="1a",
-            code="M1",
-            ordinal=0,
-            marks=1,
-            description="M1 for forming the equation",
-            dependencies=[],
-            alternatives=[],
-            source_ref={},
-        )
-    )
-    db_session.commit()
+    # The reply reaches the question's two marks through a code the approved
+    # scheme does not define, so the award rests on nothing the scheme printed.
+    answers = {
+        **ANSWERS,
+        "1a": _answer(
+            "1a",
+            2,
+            [_component("M1", True, "2x + 6 = 12"), _component("X9", True, "x = 3")],
+            "x = 3",
+        ),
+    }
     job = _job(db_session, paper, identity, key="scheme-mismatch")
 
-    outcome = _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+    outcome = _run(monkeypatch, session_factory, job.id, settings, StubProvider(answers))
 
     assert outcome.state is JobState.REVIEW_REQUIRED, outcome.detail
     assert any("UNKNOWN_CRITERION" in finding for finding in outcome.detail["scheme_findings"])
@@ -1178,10 +1475,9 @@ def test_an_award_the_approved_scheme_does_not_support_requires_review(
     }
     messages = [concern["message"] for concern in rows["1a"].scheme_concerns]
     assert any("UNKNOWN_CRITERION" in message for message in messages), messages
-    assert any("OVER_SCHEME_CAPACITY" in message for message in messages), messages
     assert rows["1a"].awarded_marks == 2, "the award is kept as evidence"
     assert rows["1a"].processing_state == "NEEDS_REVIEW"
-    # No scheme detail for 1b is silence, not a finding.
+    # A question whose reply names only defined mark points is unaffected.
     assert rows["1b"].processing_state == "MARKED"
 
 
@@ -1284,8 +1580,16 @@ def test_a_page_mapping_removes_the_truncation_review(
     assert {row.processing_state for row in rows} == {"MARKED", "CONFIRMED_ZERO"}
 
 
+@pytest.mark.parametrize("document_status", ["UPLOADED", "REJECTED"])
 def test_a_document_that_failed_processing_blocks_marking_before_any_request(
-    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+    monkeypatch,
+    session_factory,
+    db_session,
+    paper,
+    identity,
+    provider_credential,
+    tmp_path,
+    document_status,
 ) -> None:
     """A document nobody could read is not the same as a blank answer."""
 
@@ -1302,11 +1606,11 @@ def test_a_document_that_failed_processing_blocks_marking_before_any_request(
             mime_type="application/pdf",
             size_bytes=len(b"pdf"),
             page_count=2,
-            status="REJECTED",
+            status=document_status,
         )
     )
     db_session.commit()
-    job = _job(db_session, paper, identity, key="unprocessed-document")
+    job = _job(db_session, paper, identity, key=f"unprocessed-document-{document_status}")
     provider = StubProvider()
 
     outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
@@ -1383,31 +1687,66 @@ class CapturingProvider(StubProvider):
         return super().generate(request, api_key)
 
 
+#: Fields Mission 5 found in the blind request, plus the rest of the marking
+#: context.  Every one carries a value that would be visible if it leaked.
+BLIND_FORBIDDEN = {
+    "maximum marks": "Maximum marks",
+    "scheme references": "Scheme references",
+    "special instructions": "Special instructions",
+    "mark scheme criteria": "Mark scheme criteria",
+    "criterion description": "ZEBRA scheme note",
+    "expected answer": "ZEBRA-EXPECTED-ANSWER",
+    "marking answer": "ZEBRA-MARKING-ANSWER",
+    "marking quote": "ZEBRA-MARKING-QUOTE",
+    "awarded marks": "ZEBRA-AWARDED-MARKS",
+    "confidence": "ZEBRA-CONFIDENCE",
+}
+
+
 def test_a_blind_reading_receives_neither_scheme_nor_marks(
     monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
 ) -> None:
     """The reader must not be able to agree with a conclusion it never saw."""
 
-    _page(db_session, paper, identity, settings := _settings(
-        tmp_path, marking=MarkingSettings(transcription_enabled=True)
-    ))
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    # An approved blueprint is immutable, so the blueprint-level sentinels
+    # (``special_instructions``, ``criteria_refs``) are proven at the header
+    # level in ``tests/unit/test_transcription_blind_inputs.py``; this test proves
+    # the scheme, the marks and the marking pass's own reading do not travel.
+    # Replace question 2's criteria so the scheme carries a marker the reader must
+    # not see, keeping the question's own five marks so the criteria still cover it.
+    db_session.query(MarkingCriterion).filter(
+        MarkingCriterion.scheme_version_id == paper.scheme_version.id,
+        MarkingCriterion.question_id == "2",
+    ).delete(synchronize_session=False)
     db_session.add(
         MarkingCriterion(
             tenant_id=identity.tenant_a.id,
             scheme_version_id=paper.scheme_version.id,
+            blueprint_version_id=paper.blueprint.id,
             question_id="2",
-            code="M1",
+            code="B1",
             ordinal=0,
-            marks=1,
+            marks=5,
             description="ZEBRA scheme note that must not reach the reader",
+            expected_answer="ZEBRA-EXPECTED-ANSWER",
             dependencies=[],
             alternatives=[],
             source_ref={},
         )
     )
     db_session.commit()
+    _reapprove_criteria(db_session, paper)
     job = _job(db_session, paper, identity, key="blind-context")
-    provider = CapturingProvider()
+    # The marking pass records its own reading in the answer and the quotation.
+    provider = CapturingProvider(
+        {
+            **ANSWERS,
+            "2": _answer(
+                "2", 0, [_component("B1", False, "ZEBRA-MARKING-QUOTE")], "ZEBRA-MARKING-ANSWER"
+            ),
+        }
+    )
 
     outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
 
@@ -1418,14 +1757,37 @@ def test_a_blind_reading_receives_neither_scheme_nor_marks(
     assert len(transcriptions) == 1
     request = transcriptions[0]
     texts = [part.text for part in request.inputs if part.text]
-    assert len(texts) == 1, "the reader gets the question, not a second scheme block"
-    assert "Mark scheme" not in texts[0]
+    # Apart from the page label each image carries, the reader gets the question
+    # and nothing else: no scheme block, no marks, no second opinion.
+    prose = [text for text in texts if not text.startswith("Page ")]
+    assert len(prose) == 1, "the reader gets the question, not a second scheme block"
+    assert prose[0] == "Question: 2\nAnswer type: working"
     assert all("ZEBRA" not in text for text in texts)
     assert "Mark scheme criteria" not in request.prompt
     assert request.response_schema["properties"].keys() >= {"question_id", "transcript"}
     assert "awarded_marks" not in request.response_schema["properties"]
     # Pages still reach the reader; it reads the script, just not the marking.
-    assert len(request.inputs) == 2
+    images = [part for part in request.inputs if part.image is not None]
+    assert len(images) == 1
+    assert len(request.inputs) == 3, "question, the page's label and the page image"
+
+    # The serialised request the provider would send: the real Gemini encoder,
+    # not a summary of the parts.
+    payload = json.dumps(
+        {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": request.prompt}]
+                    + [GeminiProvider._part(part) for part in request.inputs],
+                }
+            ]
+        }
+    )
+    for name, value in BLIND_FORBIDDEN.items():
+        assert value.lower() not in payload.lower(), f"{name} reached the blind reader"
+    assert "ZEBRA" not in payload
+    assert "Maximum marks" not in payload
 
     marking = next(
         request
@@ -1435,6 +1797,173 @@ def test_a_blind_reading_receives_neither_scheme_nor_marks(
     )
     assert any("Mark scheme criteria" in (part.text or "") for part in marking.inputs)
     assert any("ZEBRA" in (part.text or "") for part in marking.inputs)
+    assert any("Maximum marks" in (part.text or "") for part in marking.inputs)
+
+
+class SilentModelProvider(TranscriptionProvider):
+    """A reader whose provider does not say which model answered."""
+
+    def __init__(self, transcripts: dict[str, str | None]) -> None:
+        super().__init__(transcripts)
+        self.reader = ""
+
+
+def test_an_unreported_reader_model_is_not_independent(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """An unknown identity cannot be claimed as an independent reading."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-unknown-model")
+    provider = SilentModelProvider({"2": ""})
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["transcription"]["unknown_independence"] == 1
+    assert outcome.detail["transcription"]["not_independent"] == 0
+
+    db_session.expire_all()
+    zero = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "2"
+    )
+    assert zero.processing_state == "NEEDS_REVIEW"
+    assert any(
+        concern["code"] == "TRANSCRIPTION_INDEPENDENCE_UNKNOWN"
+        for concern in zero.scheme_concerns
+    )
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.detail["independence"] == "UNKNOWN"
+
+
+def _extra_page(db_session, paper, identity, settings, *, index: int = 2) -> DocumentPage:
+    """A second rendered page, so a paper is no longer a single-page script."""
+
+    storage = LocalStorage(settings.storage.root)
+    # Distinct bytes: two identical page checksums are a duplicate-page coverage
+    # finding, which would put every row in review before transcription runs.
+    stored = storage.put(
+        f"submissions/8a6b/answer{index}.png", f"png-bytes-{index}".encode(), "image/png"
+    )
+    document = db_session.scalar(
+        select(Document).where(Document.submission_id == paper.submission.id)
+    )
+    document.page_count = max(document.page_count, index)
+    page = DocumentPage(
+        tenant_id=identity.tenant_a.id,
+        document_id=document.id,
+        page_index=index,
+        storage_key=stored.key,
+        quality_status="READABLE",
+        checksum=stored.sha256,
+    )
+    db_session.add(page)
+    db_session.commit()
+    return page
+
+
+def test_a_question_with_no_usable_page_is_not_sent_the_whole_script(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Mission 5: an unmapped question would have carried all eight pages.
+
+    With nothing attributing the question to a page, the request is refused and
+    the zero goes to a person.  No request is spent guessing.
+    """
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    _extra_page(db_session, paper, identity, settings)
+    job = _job(db_session, paper, identity, key="transcription-no-page")
+    provider = CapturingProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["transcription"]["unavailable"] == 1, (
+        outcome.detail["transcription"]
+    )
+    assert outcome.detail["transcription"]["checked"] == 1
+    assert outcome.detail["transcription"]["differences"] == 0
+    # Three marking requests, no blind reading: an unusable request is not sent.
+    assert provider.calls == 3
+    assert not [
+        request for request in provider.requests if "independent transcription" in request.prompt
+    ]
+
+    db_session.expire_all()
+    zero = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "2"
+    )
+    assert zero.awarded_marks == 0
+    assert zero.processing_state == "NEEDS_REVIEW"
+    concern = next(
+        concern
+        for concern in zero.scheme_concerns
+        if concern["code"] == "TRANSCRIPTION_UNAVAILABLE"
+    )
+    assert concern["severity"] == "POSSIBLE_MISMATCH"
+    assert "NO_PAGE_MAPPING" in concern["message"]
+
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "UNVERIFIABLE"
+    assert verdict.detail["status"] == "UNAVAILABLE"
+    assert verdict.detail["reason"] == "NO_PAGE_MAPPING"
+    assert verdict.detail["pages"] == []
+
+
+def test_an_oversized_blind_request_is_not_sent(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A payload over the image budget is refused, not base64'd and hoped for."""
+
+    page = _page(
+        db_session,
+        paper,
+        identity,
+        settings := _settings(
+            tmp_path,
+            transcription=True,
+            marking=MarkingSettings(
+                transcription_enabled=True, transcription_max_image_bytes=1_048_576
+            ),
+        ),
+    )
+    # A two-megabyte page image, larger than the one-megabyte budget above.
+    (settings.storage.root / page.storage_key).write_bytes(
+        b"\x89PNG\r\n\x1a\n" + b"0" * (2 * 1024 * 1024)
+    )
+    job = _job(db_session, paper, identity, key="transcription-oversized")
+    provider = CapturingProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["transcription"]["unavailable"] == 1
+    assert provider.calls == 3
+
+    db_session.expire_all()
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "UNVERIFIABLE"
+    assert verdict.detail["reason"].startswith("IMAGE_PAYLOAD_EXCEEDED:")
 
 
 def test_a_scheme_contradiction_is_not_second_guessed(
@@ -1445,6 +1974,11 @@ def test_a_scheme_contradiction_is_not_second_guessed(
     _page(db_session, paper, identity, settings := _settings(
         tmp_path, marking=MarkingSettings(double_check_enabled=True)
     ))
+    # This paper's question 1a is marked against a scheme that states an answer.
+    db_session.query(MarkingCriterion).filter(
+        MarkingCriterion.scheme_version_id == paper.scheme_version.id,
+        MarkingCriterion.question_id == "1a",
+    ).delete(synchronize_session=False)
     for code, description in (
         ("M1", "M1 for forming the equation"),
         ("A1", "4"),
@@ -1453,6 +1987,7 @@ def test_a_scheme_contradiction_is_not_second_guessed(
             MarkingCriterion(
                 tenant_id=identity.tenant_a.id,
                 scheme_version_id=paper.scheme_version.id,
+                blueprint_version_id=paper.blueprint.id,
                 question_id="1a",
                 code=code,
                 ordinal=0 if code == "M1" else 1,
@@ -1464,6 +1999,7 @@ def test_a_scheme_contradiction_is_not_second_guessed(
             )
         )
     db_session.commit()
+    _reapprove_criteria(db_session, paper)
     job = _job(db_session, paper, identity, key="scheme-not-second-guessed")
 
     outcome = _run(monkeypatch, session_factory, job.id, settings, StubProvider())
@@ -1501,10 +2037,14 @@ def test_accuracy_keeps_integrity_and_transcription_when_double_check_is_off(
 ) -> None:
     """The operator's switch disables second opinions, never the reading stage."""
 
-    _page(db_session, paper, identity, settings := _settings(
-        tmp_path,
-        marking=MarkingSettings(transcription_enabled=True, double_check_enabled=False),
-    ))
+    _page(
+        db_session,
+        paper,
+        identity,
+        settings := _settings(
+            tmp_path, transcription=True, marking=MarkingSettings(double_check_enabled=False)
+        ),
+    )
     paper.assignment.review_mode = "ACCURACY"
     db_session.commit()
     job = _job(db_session, paper, identity, key="accuracy-double-off")
@@ -1525,6 +2065,15 @@ def test_accuracy_keeps_integrity_and_transcription_when_double_check_is_off(
     )
     assert stage.outcome == "SKIPPED"
     assert db_session.get(CorrectionJob, job.id).double_check_status == "DISABLED"
+    kinds = {
+        record.kind
+        for record in db_session.scalars(
+            select(VerificationResult).where(VerificationResult.job_id == job.id)
+        )
+    }
+    assert "INTEGRITY" in kinds, "disabling second opinions must not skip integrity"
+    assert "TRANSCRIPTION" in kinds, "the blind reading still ran"
+    assert "DOUBLE_CHECK" not in kinds
 
 
 def test_a_resumed_run_does_not_pay_for_the_same_blind_reading(
@@ -1532,9 +2081,7 @@ def test_a_resumed_run_does_not_pay_for_the_same_blind_reading(
 ) -> None:
     """A stored reading is a decision: the next execution must not buy it twice."""
 
-    _page(db_session, paper, identity, settings := _settings(
-        tmp_path, marking=MarkingSettings(transcription_enabled=True)
-    ))
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
     job = _job(db_session, paper, identity, key="transcription-resume")
     first = TranscriptionProvider({"2": ""})
 
@@ -1591,3 +2138,1030 @@ def test_a_cancel_during_the_double_check_keeps_no_verdicts(
         ).all()
         == []
     ), "a discarded row left its verification records behind"
+
+
+class CancellingMarkingProvider(StubProvider):
+    """Requests cancellation while the first marking request is in flight."""
+
+    def __init__(self, session_factory) -> None:
+        super().__init__()
+        self.session_factory = session_factory
+        self.cancelled = False
+
+    def generate(self, request, api_key):
+        if not self.cancelled:
+            self.cancelled = True
+            with self.session_factory() as session:
+                job = session.scalar(select(CorrectionJob))
+                job.cancel_requested = True
+                session.commit()
+        return super().generate(request, api_key)
+
+
+def test_a_cancel_during_marking_discards_the_rows_and_stops_spending(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="cancel-marking")
+    provider = CancellingMarkingProvider(session_factory)
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.state is JobState.CANCELLED, outcome.detail
+    assert outcome.detail["reason"] == "cancelled during marking"
+    assert provider.calls == 1, "the loop marked the next question after cancellation"
+    db_session.expire_all()
+    assert ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id) == []
+    assert db_session.scalars(
+        select(VerificationResult).where(VerificationResult.job_id == job.id)
+    ).all() == []
+
+
+class CancellingTranscriptionProvider(TranscriptionProvider):
+    """Requests cancellation during the blind transcription request."""
+
+    def __init__(self, session_factory, transcripts) -> None:
+        super().__init__(transcripts)
+        self.session_factory = session_factory
+
+    def generate(self, request, api_key):
+        if "independent transcription" in request.prompt:
+            with self.session_factory() as session:
+                job = session.scalar(select(CorrectionJob))
+                job.cancel_requested = True
+                session.commit()
+        return super().generate(request, api_key)
+
+
+def test_a_cancel_during_transcription_discards_rows_and_verdicts(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="cancel-transcription")
+    provider = CancellingTranscriptionProvider(session_factory, {"2": "x = 3"})
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.state is JobState.CANCELLED, outcome.detail
+    assert outcome.detail["reason"] == "cancelled during verification"
+    assert provider.calls == 4, "three marks and the one selected transcription"
+    db_session.expire_all()
+    assert ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id) == []
+    assert db_session.scalars(
+        select(VerificationResult).where(VerificationResult.job_id == job.id)
+    ).all() == []
+
+
+def test_a_cancel_arriving_before_the_guard_discards_the_finished_run(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Cancellation is observable after the last stage and before the guard."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="cancel-before-guard")
+    original = __import__(
+        "app.correction.aetrix.pipeline", fromlist=["validation_failed_for"]
+    ).validation_failed_for
+
+    def cancel_then_validate(rows, findings):
+        with session_factory() as session:
+            pending = session.get(CorrectionJob, job.id)
+            pending.cancel_requested = True
+            session.commit()
+        return original(rows, findings)
+
+    monkeypatch.setattr(
+        "app.correction.aetrix.pipeline.validation_failed_for", cancel_then_validate
+    )
+    provider = StubProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.state is JobState.CANCELLED, outcome.detail
+    assert outcome.detail["reason"] == "cancelled before the result guard"
+    assert provider.calls == 3
+    db_session.expire_all()
+    assert ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id) == []
+    assert db_session.scalars(
+        select(VerificationResult).where(VerificationResult.job_id == job.id)
+    ).all() == []
+
+
+def test_a_retry_replaces_a_stale_mathematical_verdict(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A verdict from a reply that no longer exists must not survive a retry."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="stale-verification")
+
+    def invalid_marking(request, api_key):
+        del api_key
+        return LLMResponse(
+            text="not json at all",
+            model=request.model,
+            usage=TokenUsage(input_tokens=10, output_tokens=10),
+            finish_reason="STOP",
+            provider_request_id="stub-invalid",
+            latency_ms=1,
+        )
+
+    first = _run(
+        monkeypatch,
+        session_factory,
+        job.id,
+        settings,
+        type("Invalid", (StubProvider,), {"generate": staticmethod(invalid_marking)})(),
+    )
+    assert first.state is JobState.REVIEW_REQUIRED, first.detail
+    db_session.expire_all()
+    stale_row = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "1a"
+    )
+    assert stale_row.processing_state == "NEEDS_REVIEW"
+    db_session.add(
+        VerificationResult(
+            tenant_id=identity.tenant_a.id,
+            job_id=job.id,
+            question_id="1a",
+            kind="MATHEMATICAL",
+            status="DIFFERENT",
+            detail={"left": "x = 4", "right": "x = 3"},
+        )
+    )
+    db_session.commit()
+
+    second = _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+
+    assert second.state is JobState.FINALIZING, second.detail
+    db_session.expire_all()
+    kinds = set(
+        db_session.scalars(
+            select(VerificationResult.kind).where(
+                VerificationResult.job_id == job.id,
+                VerificationResult.question_id == "1a",
+            )
+        ).all()
+    )
+    assert kinds == {"INTEGRITY"}, f"stale verdicts survived the retry: {kinds}"
+    row = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "1a"
+    )
+    assert row.awarded_marks == 2
+
+
+def test_a_crash_before_verification_persistence_leaves_no_partial_question(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A question is persisted with its verdicts, or not at all."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="crash-before-verification")
+    original = _MarkingRun._persist_verifications
+
+    def crash_on_second_question(self, question_id, verification, extra=None):
+        if question_id == "1b":
+            raise RuntimeError("process died before the verification commit")
+        return original(self, question_id, verification, extra)
+
+    monkeypatch.setattr(
+        _MarkingRun, "_persist_verifications", crash_on_second_question
+    )
+    with pytest.raises(RuntimeError, match="before the verification commit"):
+        _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+    monkeypatch.setattr(_MarkingRun, "_persist_verifications", original)
+
+    db_session.expire_all()
+    assert [
+        row.question_id
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    ] == ["1a"]
+    assert {
+        record.question_id
+        for record in db_session.scalars(
+            select(VerificationResult).where(VerificationResult.job_id == job.id)
+        )
+    } == {"1a"}
+
+    provider = StubProvider()
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.state is JobState.FINALIZING, outcome.detail
+    assert provider.calls == 2, "the decided question was marked a second time"
+    db_session.expire_all()
+    rows = ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    assert {row.question_id for row in rows} == {"1a", "1b", "2"}
+    assert sum(row.awarded_marks for row in rows) == 5
+
+
+def test_a_crash_after_the_verification_commit_is_resumed_without_duplicates(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A committed question survives; the rest is completed once on resume."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="crash-after-verification")
+    original = _MarkingRun._persist_verifications
+
+    def crash_after_second_question(self, question_id, verification, extra=None):
+        original(self, question_id, verification, extra)
+        self.session.commit()
+        if question_id == "1b":
+            raise RuntimeError("process died after the verification commit")
+
+    monkeypatch.setattr(
+        _MarkingRun, "_persist_verifications", crash_after_second_question
+    )
+    with pytest.raises(RuntimeError, match="after the verification commit"):
+        _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+    monkeypatch.setattr(_MarkingRun, "_persist_verifications", original)
+
+    db_session.expire_all()
+    persisted = {
+        row.question_id
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    }
+    assert persisted == {"1a", "1b"}
+
+    provider = StubProvider()
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.state is JobState.FINALIZING, outcome.detail
+    assert provider.calls == 1, "only the question that never persisted was retried"
+    db_session.expire_all()
+    rows = ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    assert {row.question_id for row in rows} == {"1a", "1b", "2"}
+    for question_id in ("1a", "1b"):
+        count = len(
+            db_session.scalars(
+                select(VerificationResult).where(
+                    VerificationResult.job_id == job.id,
+                    VerificationResult.question_id == question_id,
+                    VerificationResult.kind == "INTEGRITY",
+                )
+            ).all()
+        )
+        assert count == 1, f"the resumed run duplicated the verdict for {question_id}"
+
+
+def test_a_database_write_failure_leaves_no_half_persisted_question(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A failed flush rolls the whole question back, and a retry can persist it."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="database-failure")
+    from sqlalchemy import text as sql_text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    original = _MarkingRun._persist_verifications
+
+    def fail_inside_the_transaction(self, question_id, verification, extra=None):
+        self.session.execute(sql_text("SELECT 1 / 0"))
+        return original(self, question_id, verification, extra)
+
+    monkeypatch.setattr(
+        _MarkingRun, "_persist_verifications", fail_inside_the_transaction
+    )
+
+    with pytest.raises(SQLAlchemyError):
+        _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+    monkeypatch.setattr(_MarkingRun, "_persist_verifications", original)
+
+    db_session.expire_all()
+    assert ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id) == [], (
+        "a failed transaction left a question behind"
+    )
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+
+    assert outcome.state is JobState.FINALIZING, outcome.detail
+    db_session.expire_all()
+    rows = ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    assert {row.question_id for row in rows} == {"1a", "1b", "2"}
+    assert sum(row.awarded_marks for row in rows) == 5
+
+
+class OneBadQuestionProvider(StubProvider):
+    """Leaves question 1b undecided so the job needs a retry."""
+
+    def generate(self, request, api_key):
+        context = next((part.text for part in request.inputs if part.text), "")
+        if context.splitlines()[0].split(":", 1)[1].strip() == "1b":
+            self.calls += 1
+            return LLMResponse(
+                text="not json at all",
+                model=request.model,
+                usage=TokenUsage(input_tokens=10, output_tokens=10),
+                finish_reason="STOP",
+                provider_request_id=f"stub-invalid-{self.calls}",
+                latency_ms=1,
+            )
+        return super().generate(request, api_key)
+
+
+def test_a_retry_cannot_switch_the_marking_prompt_version(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A job is one experiment: resuming with another prompt fails closed."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="prompt-switch")
+    pinned = _settings(
+        tmp_path, marking=MarkingSettings(marking_prompt_version=1)
+    )
+
+    first = _run(monkeypatch, session_factory, job.id, pinned, OneBadQuestionProvider())
+    assert first.state is JobState.REVIEW_REQUIRED, first.detail
+
+    provider = StubProvider()
+    with pytest.raises(AppError, match="refusing to mix prompt versions"):
+        _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert provider.calls == 0, "no request was spent before the job failed closed"
+    db_session.expire_all()
+    rows = ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    assert rows
+    assert {row.prompt_version for row in rows} == {"aetrix_v5_5_marking:v1"}
+    assert all(row.prompt_version != "aetrix_v5_5_marking:v2" for row in rows)
+
+
+def test_a_pinned_marking_prompt_is_used_and_its_version_recorded(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """The baseline experiment can pin v1 without editing a prompt file."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    job = _job(db_session, paper, identity, key="prompt-pin-v1")
+
+    _run(
+        monkeypatch,
+        session_factory,
+        job.id,
+        _settings(tmp_path, marking=MarkingSettings(marking_prompt_version=1)),
+        StubProvider(),
+    )
+    db_session.expire_all()
+    pinned = ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    assert pinned
+    assert {row.prompt_version for row in pinned} == {"aetrix_v5_5_marking:v1"}
+
+    default_job = _job(db_session, paper, identity, key="prompt-default")
+    _run(monkeypatch, session_factory, default_job.id, settings, StubProvider())
+    db_session.expire_all()
+    current = ResultRepository(db_session).list_for_job(
+        identity.tenant_a.id, default_job.id
+    )
+    assert current
+    # The version this deployment selects, whatever it is: a prompt bump is a
+    # content change and a pin is an operator decision, neither of which is a
+    # reason for this test to fail.  What it proves is that an unpinned job
+    # records the version the settings resolve, not a hard-coded one.
+    selected = PromptRegistry(settings.provider.prompt_root).load(
+        "aetrix_v5_5_marking", settings.marking.marking_prompt_version
+    )
+    assert {row.prompt_version for row in current} == {
+        f"{selected.prompt_id}:v{selected.version}"
+    }
+
+
+# -- imported criteria must be approved and complete before marking starts -----
+def _assert_refused(outcome, job_id, identity, db_session, provider) -> None:
+    """A gate refusal spends no request and stores no decision."""
+
+    assert outcome.state is JobState.REVIEW_REQUIRED, outcome.detail
+    assert provider.calls == 0, "a request was paid for before the scheme was usable"
+    db_session.expire_all()
+    assert ResultRepository(db_session).list_for_job(identity.tenant_a.id, job_id) == []
+
+
+def test_marking_refuses_to_start_without_imported_criteria(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """An approved scheme with no criteria rows must not be marked against."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    db_session.query(MarkingCriterion).filter(
+        MarkingCriterion.scheme_version_id == paper.scheme_version.id
+    ).delete(synchronize_session=False)
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="criteria-missing")
+    provider = StubProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["reason"] == "SCHEME_CRITERIA_MISSING", outcome.detail
+    _assert_refused(outcome, job.id, identity, db_session, provider)
+
+
+def test_marking_refuses_to_start_on_unapproved_criteria(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Imported rows are inert until a person approves them."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    paper.scheme_version.criteria_approved_at = None
+    paper.scheme_version.criteria_approved_by = None
+    paper.scheme_version.criteria_approval_reason = None
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="criteria-unapproved")
+    provider = StubProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["reason"] == "SCHEME_CRITERIA_NOT_APPROVED", outcome.detail
+    assert any("approved" in problem for problem in outcome.detail["problems"])
+    _assert_refused(outcome, job.id, identity, db_session, provider)
+
+
+def test_marking_refuses_criteria_approved_against_another_blueprint(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Criteria reviewed against a different paper cannot decide this paper's marks."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    # A second, real blueprint version of the same paper: the criteria name it,
+    # and this job marks version 1.
+    other = ExamBlueprintVersion(
+        tenant_id=identity.tenant_a.id,
+        exam_id=paper.exam.id,
+        version=2,
+        status="APPROVED",
+        structure=paper.blueprint.structure,
+        total_marks=paper.blueprint.total_marks,
+        content_hash=content_hash(paper.blueprint.structure),
+        created_by=identity.user_a.id,
+        approved_by=identity.user_a.id,
+        approved_at=datetime.now(UTC),
+        approval_reason="fixture",
+    )
+    db_session.add(other)
+    db_session.flush()
+    paper.scheme_version.criteria_blueprint_version_id = other.id
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="criteria-other-blueprint")
+    provider = StubProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["reason"] == "SCHEME_CRITERIA_BLUEPRINT_MISMATCH", outcome.detail
+    _assert_refused(outcome, job.id, identity, db_session, provider)
+
+
+def test_marking_refuses_criteria_changed_after_approval(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """The approval covers the reviewed rules, not whatever the rows say now."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    criterion = (
+        db_session.query(MarkingCriterion)
+        .filter(
+            MarkingCriterion.scheme_version_id == paper.scheme_version.id,
+            MarkingCriterion.question_id == "1a",
+            MarkingCriterion.code == "M1",
+        )
+        .one()
+    )
+    criterion.description = "M1 for a tolerance nobody reviewed"
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="criteria-rules-changed")
+    provider = StubProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["reason"] == "SCHEME_CRITERIA_RULES_CHANGED", outcome.detail
+    assert any("changed after they were approved" in p for p in outcome.detail["problems"])
+    _assert_refused(outcome, job.id, identity, db_session, provider)
+
+
+def test_marking_refuses_an_approval_that_records_no_rules_digest(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """An approval with no digest cannot prove which rules were reviewed."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    paper.scheme_version.criteria_rules_hash = None
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="criteria-rules-unverified")
+    provider = StubProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["reason"] == "SCHEME_CRITERIA_RULES_UNVERIFIED", outcome.detail
+    _assert_refused(outcome, job.id, identity, db_session, provider)
+
+
+def test_marking_refuses_criteria_that_do_not_cover_every_question(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A question with no criteria would be marked with nothing to check it against."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path))
+    db_session.query(MarkingCriterion).filter(
+        MarkingCriterion.scheme_version_id == paper.scheme_version.id,
+        MarkingCriterion.question_id == "2",
+    ).delete(synchronize_session=False)
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="criteria-incomplete")
+    provider = StubProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["reason"] == "SCHEME_CRITERIA_INCOMPLETE", outcome.detail
+    assert any("'2'" in problem for problem in outcome.detail["problems"])
+    _assert_refused(outcome, job.id, identity, db_session, provider)
+
+# -- Mission 6.2: page provenance and unverifiable awards -------------------
+
+
+def test_an_agreement_on_the_marking_pass_own_page_is_not_page_verification(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Two readers can agree about a page the first pass chose for itself.
+
+    The citation is the marking pass naming the page it read.  Sending that page
+    to a second reader and finding the same characters confirms what is on the
+    page; it does not confirm that the page was the right one.  The reading is
+    still recorded as an agreement, and the page is reported as circular.
+    """
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-circular-page")
+    answers = dict(ANSWERS)
+    answers["2"] = _answer("2", 0, [_component("B1", False, Q6_WRITTEN)], None)
+    provider = TranscriptionProvider({"2": Q6_WRITTEN})
+    provider.answers = answers
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    transcription_detail = outcome.detail["transcription"]
+    assert transcription_detail["agreements"] == 1
+    assert transcription_detail["differences"] == 0
+    assert transcription_detail["page_unverified"] == 1
+    assert outcome.state is JobState.REVIEW_REQUIRED, outcome.detail
+
+    db_session.expire_all()
+    zero = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "2"
+    )
+    assert zero.awarded_marks == 0, "an agreement never changes an award"
+    assert zero.processing_state == "NEEDS_REVIEW"
+    concern = next(
+        concern
+        for concern in zero.scheme_concerns
+        if concern["code"] == "TRANSCRIPTION_PAGE_UNVERIFIED"
+    )
+    assert concern["severity"] == "POSSIBLE_MISMATCH"
+    assert "evidence" in concern["message"]
+
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "AGREES"
+    assert verdict.detail["page_source"] == "EVIDENCE"
+    assert verdict.detail["page_confidence"] == "CIRCULAR"
+
+
+def test_a_mapped_page_is_independent_and_an_agreement_leaves_the_award_alone(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """The same agreement, on a page an approved mapping chose, needs no person."""
+
+    page = _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    db_session.add(
+        PageQuestionMapping(
+            tenant_id=identity.tenant_a.id,
+            document_id=page.document_id,
+            page_id=page.id,
+            blueprint_version_id=paper.blueprint.id,
+            question_id="1a",
+            confidence=1.0,
+            method="MANUAL",
+        )
+    )
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="transcription-mapped-page")
+    answers = dict(ANSWERS)
+    # Low confidence is what buys the reading; the award stays a normal one.
+    answers["1a"] = {**ANSWERS["1a"], "confidence": 0.7}
+    provider = TranscriptionProvider({"2": "", "1a": "2x + 6 = 12\nx = 3"})
+    provider.answers = answers
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    transcription_detail = outcome.detail["transcription"]
+    assert transcription_detail["agreements"] == 1
+    assert transcription_detail["page_unverified"] == 0
+    assert transcription_detail["unverified_award"] == 0
+    assert outcome.state is JobState.FINALIZING, outcome.detail
+
+    db_session.expire_all()
+    rows = {
+        row.question_id: row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    }
+    assert rows["1a"].awarded_marks == 2
+    assert not any(
+        concern["code"].startswith("TRANSCRIPTION")
+        for concern in rows["1a"].scheme_concerns
+    )
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "1a",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "AGREES"
+    assert verdict.detail["page_source"] == "MAPPING"
+    assert verdict.detail["page_confidence"] == "INDEPENDENT"
+
+
+def test_an_illegible_reading_on_a_non_zero_award_goes_to_a_person(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Mission 6.1: a positive award with an unusable reading was silent."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-unverifiable-award")
+    answers = dict(ANSWERS)
+    answers["1a"] = {**ANSWERS["1a"], "confidence": 0.7}
+    provider = MalformedReaderProvider()
+    provider.answers = answers
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    transcription_detail = outcome.detail["transcription"]
+    assert transcription_detail["unverifiable"] == 2, transcription_detail
+    assert transcription_detail["unverified_award"] == 1
+    assert outcome.state is JobState.REVIEW_REQUIRED, outcome.detail
+
+    db_session.expire_all()
+    rows = {
+        row.question_id: row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    }
+    assert rows["1a"].awarded_marks == 2, "an unusable reading never changes an award"
+    assert rows["1a"].student_answer == "x = 3", "the original reading is preserved"
+    assert rows["1a"].processing_state == "NEEDS_REVIEW"
+    concern = next(
+        concern
+        for concern in rows["1a"].scheme_concerns
+        if concern["code"] == "TRANSCRIPTION_UNVERIFIED"
+    )
+    assert concern["severity"] == "POSSIBLE_MISMATCH"
+    assert "2 mark(s)" in concern["message"]
+
+
+def test_a_difference_on_a_non_zero_award_blocks_presentation(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A disagreement is a disagreement whatever the award is."""
+
+    page = _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    db_session.add(
+        PageQuestionMapping(
+            tenant_id=identity.tenant_a.id,
+            document_id=page.document_id,
+            page_id=page.id,
+            blueprint_version_id=paper.blueprint.id,
+            question_id="1a",
+            confidence=1.0,
+            method="MANUAL",
+        )
+    )
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="transcription-differs-award")
+    answers = dict(ANSWERS)
+    answers["1a"] = {**ANSWERS["1a"], "confidence": 0.7}
+    provider = TranscriptionProvider({"2": "", "1a": "2x + 6 = 12\nx = 4"})
+    provider.answers = answers
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["transcription"]["differences"] == 1
+    assert outcome.detail["transcription"]["disagreements"] == ["1a"]
+    assert outcome.detail.get("guard") == "BLOCKED", outcome.detail.get("guard_reason")
+
+    db_session.expire_all()
+    row = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "1a"
+    )
+    assert row.awarded_marks == 2, "a disagreement never rewrites a mark"
+    assert row.student_answer == "x = 3"
+    assert row.processing_state == "NEEDS_REVIEW"
+
+
+def test_a_question_whose_pages_exceed_the_request_budget_is_refused(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Mission 6.1: a page set over the limit was thinned, silently.
+
+    Six pages is what one request may carry; this deployment allows two, and the
+    approved mapping gives question 2 three pages.  The set is over budget before
+    any image is read, so it is refused rather than cut down to two pages.
+    """
+
+    settings = _settings(
+        tmp_path,
+        transcription=True,
+        marking=MarkingSettings(transcription_enabled=True, transcription_max_pages=2),
+    )
+    first = _page(db_session, paper, identity, settings)
+    extra = [
+        _extra_page(db_session, paper, identity, settings, index=index)
+        for index in range(2, 5)
+    ]
+    # Every readable page is mapped and every question is mapped, so coverage has
+    # nothing to flag: the only reason this run stops is the transcription budget.
+    for page in (first, extra[0], extra[1]):
+        db_session.add(
+            PageQuestionMapping(
+                tenant_id=identity.tenant_a.id,
+                document_id=first.document_id,
+                page_id=page.id,
+                blueprint_version_id=paper.blueprint.id,
+                question_id="2",
+                confidence=1.0,
+                method="MANUAL",
+            )
+        )
+    for question_id in ("1a", "1b"):
+        db_session.add(
+            PageQuestionMapping(
+                tenant_id=identity.tenant_a.id,
+                document_id=first.document_id,
+                page_id=extra[2].id,
+                blueprint_version_id=paper.blueprint.id,
+                question_id=question_id,
+                confidence=1.0,
+                method="MANUAL",
+            )
+        )
+    db_session.commit()
+    job = _job(db_session, paper, identity, key="transcription-page-budget")
+    provider = CapturingProvider()
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    transcription_detail = outcome.detail["transcription"]
+    assert transcription_detail["unavailable"] == 1, transcription_detail
+    assert transcription_detail["checked"] == 1
+    # Three marking requests and no blind reading: a refused page set costs
+    # nothing and is never sent in part.
+    assert provider.calls == 3
+    assert not [
+        request
+        for request in provider.requests
+        if "independent transcription" in request.prompt
+    ]
+
+    db_session.expire_all()
+    zero = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "2"
+    )
+    assert zero.awarded_marks == 0
+    assert zero.processing_state == "NEEDS_REVIEW"
+    concern = next(
+        concern
+        for concern in zero.scheme_concerns
+        if concern["code"] == "TRANSCRIPTION_UNAVAILABLE"
+    )
+    assert "PAGE_BUDGET_EXCEEDED" in concern["message"]
+
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.status == "UNVERIFIABLE"
+    assert verdict.detail["reason"].startswith("PAGE_BUDGET_EXCEEDED:")
+    assert verdict.detail["pages"] == []
+
+
+def test_a_model_recorded_by_an_earlier_execution_is_a_marking_model(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Mission 6.1: a resumed job forgot who had marked it.
+
+    The append-only usage ledger still knows: a fallback that answered before the
+    resume is a model that read this paper, so a blind reading answered by it is
+    a prompt check, not an independent reading.
+    """
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-resumed-fallback")
+    db_session.add(
+        ProviderUsage(
+            tenant_id=identity.tenant_a.id,
+            job_id=job.id,
+            project_id="earlier-execution",
+            provider="stub",
+            model="earlier-fallback-model",
+            purpose="marking",
+            success=True,
+        )
+    )
+    db_session.commit()
+    provider = TranscriptionProvider({"2": ""}, model="earlier-fallback-model")
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["transcription"]["not_independent"] == 1
+    assert outcome.detail["transcription"]["unknown_independence"] == 0
+
+    db_session.expire_all()
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.detail["independence"] == "PROMPT"
+    assert "earlier-fallback-model" in verdict.detail["marking_models"]
+    zero = next(
+        row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.question_id == "2"
+    )
+    assert zero.processing_state == "NEEDS_REVIEW"
+    assert any(
+        concern["code"] == "TRANSCRIPTION_NOT_INDEPENDENT"
+        for concern in zero.scheme_concerns
+    )
+
+
+def test_a_failed_marking_attempt_is_not_a_marking_model(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Only an attempt that produced a reply counts as having read the script."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, transcription=True))
+    job = _job(db_session, paper, identity, key="transcription-failed-attempt")
+    db_session.add(
+        ProviderUsage(
+            tenant_id=identity.tenant_a.id,
+            job_id=job.id,
+            project_id="earlier-execution",
+            provider="stub",
+            model="model-that-returned-503",
+            purpose="marking",
+            success=False,
+        )
+    )
+    db_session.commit()
+    provider = TranscriptionProvider({"2": ""}, model="model-that-returned-503")
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    assert outcome.detail["transcription"]["not_independent"] == 0
+
+    db_session.expire_all()
+    verdict = db_session.scalar(
+        select(VerificationResult).where(
+            VerificationResult.job_id == job.id,
+            VerificationResult.question_id == "2",
+            VerificationResult.kind == "TRANSCRIPTION",
+        )
+    )
+    assert verdict.detail["independence"] == "MODEL"
+    assert "model-that-returned-503" not in verdict.detail["marking_models"]
+
+
+# -- the evidence gate ------------------------------------------------------
+# STUDENT_02 recorded 3/3 for Q37b on an answer that was not written: the award
+# was made, the evidence comparison had never been bought for that question, and
+# nothing routed it anywhere.  These tests pin the gate that closes that hole.
+def test_an_award_no_evidence_check_examined_goes_to_a_person(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Marks with no evidence comparison are kept and routed, never presented."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, gate=True))
+    job = _job(db_session, paper, identity, key="evidence-gate-on")
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+
+    assert outcome.state is JobState.REVIEW_REQUIRED, outcome.detail
+    assert outcome.detail["evidence_gate"]["enabled"] is True
+    assert set(outcome.detail["evidence_gate"]["ungrounded"]) == {"1a", "1b"}
+    assert any(
+        "no check has compared this question's quoted evidence" in reason
+        for reason in outcome.detail["review_reasons"]
+    )
+
+    db_session.expire_all()
+    rows = {
+        row.question_id: row
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    }
+    # The answer is evidence, not a verdict the gate re-decides.
+    assert (rows["1a"].awarded_marks, rows["1b"].awarded_marks) == (2, 3)
+    for question_id in ("1a", "1b"):
+        row = rows[question_id]
+        assert row.review_required is True
+        assert (row.status, row.processing_state) == ("REVIEW_REQUIRED", "NEEDS_REVIEW")
+        assert any(
+            concern.get("code") == "EVIDENCE_NOT_CHECKED"
+            for concern in (row.scheme_concerns or [])
+        ), row.scheme_concerns
+
+    # A question that holds no marks is not an unverified award, and remains the
+    # confirmed zero its reply stated.
+    assert rows["2"].awarded_marks == 0
+    assert rows["2"].processing_state == "CONFIRMED_ZERO"
+    assert rows["2"].review_required is False
+
+
+def test_the_gate_is_the_only_reason_the_same_paper_is_a_review_item(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """Switching the gate off restores the old end state, so the gate is the cause."""
+
+    _page(db_session, paper, identity, settings := _settings(tmp_path, gate=False))
+    job = _job(db_session, paper, identity, key="evidence-gate-off")
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, StubProvider())
+
+    assert outcome.state is JobState.FINALIZING, outcome.detail
+    assert outcome.detail["evidence_gate"] == {
+        "enabled": False,
+        "questions": 3,
+        "unverified_awards": 0,
+        "ungrounded": [],
+    }
+
+    db_session.expire_all()
+    rows = ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+    assert all(
+        not any(
+            str(concern.get("code")) == "EVIDENCE_NOT_CHECKED"
+            for concern in (row.scheme_concerns or [])
+        )
+        for row in rows
+    )
+
+
+def test_a_checked_quotation_keeps_its_question_out_of_the_gate(
+    monkeypatch, session_factory, db_session, paper, identity, provider_credential, tmp_path
+) -> None:
+    """A recorded evidence verdict — even one that disagrees — is a check taken."""
+
+    _page(
+        db_session,
+        paper,
+        identity,
+        settings := _settings(tmp_path, transcription=True, gate=True),
+    )
+    job = _job(db_session, paper, identity, key="evidence-gate-checked")
+    provider = TranscriptionProvider({"2": ""})
+
+    outcome = _run(monkeypatch, session_factory, job.id, settings, provider)
+
+    from app.db.models import VerificationResult
+
+    db_session.expire_all()
+    checked = {
+        record.question_id
+        for record in db_session.scalars(
+            select(VerificationResult).where(
+                VerificationResult.job_id == job.id,
+                VerificationResult.kind == "EVIDENCE",
+            )
+        )
+    }
+    # The stage that buys the blind reading really did record a check, so the
+    # gate is reading verdicts rather than assuming there are none.
+    assert checked, "the transcription stage recorded no evidence verdict"
+
+    awarded = {
+        row.question_id
+        for row in ResultRepository(db_session).list_for_job(identity.tenant_a.id, job.id)
+        if row.awarded_marks
+    }
+    gate = outcome.detail["evidence_gate"]
+    assert gate["enabled"] is True
+    assert not (checked & set(gate["ungrounded"])), "a checked question was named"
+    # Every award no check examined is named, and nothing else is.
+    assert set(gate["ungrounded"]) == awarded - checked
+    assert outcome.state is (
+        JobState.FINALIZING if not gate["ungrounded"] else JobState.REVIEW_REQUIRED
+    ), outcome.detail

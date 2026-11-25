@@ -19,7 +19,13 @@ from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
 from ..core.monitoring_models import is_monitored_model
 from ..correction.guard import RESULT_SOURCE_REFUSED
-from ..jobs.states import RUNNABLE_STATES, JobState, ensure_transition, progress_for
+from ..jobs.states import (
+    EXECUTION_FINISHED_STATES,
+    RUNNABLE_STATES,
+    JobState,
+    ensure_transition,
+    progress_for,
+)
 from .models import (
     Assignment,
     AuditEvent,
@@ -680,6 +686,7 @@ class JobRepository:
         recovery_of_job_id: uuid.UUID | None = None,
         requested_engine_name: str | None = None,
         requested_engine_version: str | None = None,
+        marking_mode: str | None = None,
     ) -> CorrectionJob:
         job = CorrectionJob(
             tenant_id=tenant_id,
@@ -696,6 +703,7 @@ class JobRepository:
             recovery_of_job_id=recovery_of_job_id,
             requested_engine_name=requested_engine_name,
             requested_engine_version=requested_engine_version,
+            marking_mode=marking_mode,
         )
         self.session.add(job)
         self.session.flush()
@@ -776,8 +784,13 @@ class JobRepository:
         job.state = target
         job.progress = progress_for(target)
         job.record_version += 1
-        if target in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}:
+        if target in EXECUTION_FINISHED_STATES:
             job.finished_at = utcnow()
+        else:
+            # Re-entering a running state (retry, approval, recovery) means
+            # the job is executing again; keeping the old timestamp would
+            # date a live run to the attempt that ended before it.
+            job.finished_at = None
         self.add_event(
             job,
             from_state=current.value,
@@ -1495,8 +1508,24 @@ class CredentialRepository:
                     ProviderCredential.cooldown_until <= utcnow(),
                 ),
             )
-            .order_by(ProviderCredential.last_success_at.desc().nullslast())
-            .with_for_update(skip_locked=True)
+            # ``created_at`` keeps the claim order deterministic without changing
+            # which key is preferred: with no successful call yet, the oldest key
+            # is still the one chosen, exactly as the previous heap-order scan
+            # happened to do.  Two concurrent claims therefore visit rows in the
+            # same order and cannot deadlock.
+            .order_by(
+                ProviderCredential.last_success_at.desc().nullslast(),
+                ProviderCredential.created_at.asc(),
+                ProviderCredential.id,
+            )
+            # A blocking lock, not ``SKIP LOCKED``: this query is not choosing
+            # between many workers, it is reserving the key for *this* request.
+            # Another request's brief bookkeeping (a success/failure update) holds
+            # the row for microseconds; skipping it would report a key that exists
+            # as "no credential available", which is precisely what parallel
+            # correction exposed.  The provider call itself happens after this
+            # transaction commits, so the wait is never a network wait.
+            .with_for_update()
         )
         rows = list(self.session.scalars(statement))
         result: list[ProviderCredential] = []

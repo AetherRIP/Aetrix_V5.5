@@ -27,6 +27,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 
+def _per_question():
+    """These pin the per-question engine; whole paper is the product default."""
+
+    base = get_settings()
+    marking = base.marking.model_copy(update={"marking_mode": "PER_QUESTION"})
+    return base.model_copy(update={"marking": marking})
+
+
 def _job(db_session, paper, identity, *, key: str, state: str = "COMPLETED") -> CorrectionJob:
     job = CorrectionJob(
         tenant_id=identity.tenant_a.id,
@@ -242,7 +250,7 @@ def test_a_stale_worker_refuses_to_write(
     runner = JobRunner(
         session_factory=session_factory,
         pipeline=None,  # type: ignore[arg-type] - only the refusal path is used
-        settings=get_settings(),
+        settings=_per_question(),
         worker_id="this-worker",
     )
 
@@ -267,7 +275,7 @@ def test_a_current_worker_with_the_claimed_version_may_write(
     runner = JobRunner(
         session_factory=session_factory,
         pipeline=None,  # type: ignore[arg-type]
-        settings=get_settings(),
+        settings=_per_question(),
         worker_id="this-worker",
     )
 
@@ -287,7 +295,7 @@ def test_a_version_change_after_the_claim_refuses_the_write(
     runner = JobRunner(
         session_factory=session_factory,
         pipeline=None,  # type: ignore[arg-type]
-        settings=get_settings(),
+        settings=_per_question(),
         worker_id="this-worker",
     )
 

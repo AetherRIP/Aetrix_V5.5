@@ -105,7 +105,9 @@ class JobService:
                 "The assignment mark scheme is not approved.",
             )
 
-        request_hash = self._request_hash(submission.content_hash, blueprint, scheme)
+        request_hash = self._request_hash(
+            submission.content_hash, blueprint, scheme, payload.marking_mode
+        )
         key = payload.idempotency_key or self._automatic_key(
             principal.tenant_id, assignment.id, submission.id, blueprint, scheme
         )
@@ -124,6 +126,7 @@ class JobService:
                 idempotency_key=key,
                 request_hash=request_hash,
                 max_attempts=self.settings.worker.max_attempts,
+                marking_mode=payload.marking_mode,
             )
             self.jobs.add_event(
                 job,
@@ -135,6 +138,7 @@ class JobService:
                     "blueprint_version_id": str(blueprint.id),
                     "scheme_version_id": str(scheme.id),
                     "request_hash": request_hash,
+                    "marking_mode": payload.marking_mode or "CONFIGURED",
                 },
                 actor=f"user:{principal.user_id}",
             )
@@ -173,13 +177,26 @@ class JobService:
         submission_hash: str,
         blueprint: ExamBlueprintVersion,
         scheme: MarkSchemeVersion,
+        marking_mode: str | None = None,
     ) -> str:
-        return content_hash(
+        """The identity of this request, including an explicitly chosen mode.
+
+        A mode is part of what the requester asked for: reusing one idempotency
+        key to demand a different mode must conflict rather than silently return
+        the job already marked in the other mode.  When no mode was requested the
+        digest is exactly the historical one, so jobs created before the field
+        existed still match their own idempotency key.
+        """
+
+        parts = [
             submission_hash,
             blueprint.content_hash,
             scheme.content_hash,
             __version__,
-        )
+        ]
+        if marking_mode:
+            parts.append(f"marking_mode={marking_mode}")
+        return content_hash(*parts)
 
     def _automatic_key(
         self,
@@ -471,6 +488,10 @@ class JobService:
                 recovery_of_job_id=source.id,
                 requested_engine_name=source.engine_name,
                 requested_engine_version=source.engine_version,
+                # A re-mark continues the paper in the mode it was marked in.  A
+                # recovery that quietly used another mode would put two request
+                # shapes in one paper and make the comparison meaningless.
+                marking_mode=source.marking_mode,
             )
             self.jobs.add_event(
                 job,
@@ -483,6 +504,7 @@ class JobService:
                     "source_result_source": source.result_source,
                     "requested_engine_name": source.engine_name,
                     "requested_engine_version": source.engine_version,
+                    "marking_mode": source.marking_mode,
                     "reason": payload.reason,
                 },
                 actor=f"user:{principal.user_id}",

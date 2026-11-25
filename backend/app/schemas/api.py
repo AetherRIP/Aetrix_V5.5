@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -76,6 +76,11 @@ class CorrectionCreate(BaseModel):
     assignment_id: UUID
     submission_id: UUID
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=200)
+    #: How this paper is corrected.  ``None`` uses the deployment's configured
+    #: mode; a value here fixes it on the job, and the worker executes exactly
+    #: that mode on every attempt and after every recovery.  The three values
+    #: select genuinely different execution paths, not a label on one path.
+    marking_mode: Literal["PER_QUESTION", "WHOLE_PAPER", "PARALLEL"] | None = None
 
     @field_validator("idempotency_key")
     @classmethod
@@ -143,6 +148,13 @@ class JobRead(BaseModel):
     result_source: str | None = None
     recovery_of_job_id: UUID | None = None
     requested_engine_name: str | None = None
+    #: The mode this paper was first marked in (``WHOLE_PAPER``,
+    #: ``PER_QUESTION`` or ``PARALLEL``); null until marking starts.
+    marking_mode: str | None = None
+    #: How thoroughly the stored decisions were verified.  Independent of the
+    #: job state: a completed paper is normally only partially verified because
+    #: the expensive checks are sampled.
+    verification_status: str | None = None
 
 
 class JobSubmissionRead(BaseModel):
@@ -229,7 +241,12 @@ class UsageSummaryRead(BaseModel):
     output_tokens: int
     cached_tokens: int
     cost_usd: float
+    #: Only the three monitored models appear here.
     by_model: dict[str, int]
+    #: Recorded requests whose model is outside the monitored view.  Reported so
+    #: the filtered breakdown can be reconciled with ``requests``, which stays
+    #: the ledger's real total.
+    excluded_requests: int = 0
 
 
 class HealthRead(BaseModel):

@@ -144,6 +144,7 @@ def test_the_sole_engine_stamps_its_identity_on_a_new_job() -> None:
     )
     session = SimpleNamespace(
         get=lambda *_args, **_kwargs: job,
+        scalar=lambda *_args, **_kwargs: None,
         commit=lambda: None,
     )
 
@@ -156,3 +157,39 @@ def test_the_sole_engine_stamps_its_identity_on_a_new_job() -> None:
     )
     assert job.result_source == "AI_PRIMARY"
     assert job.primary_model == _settings().provider.model_primary
+
+
+def test_a_legacy_lite_selection_is_refused_not_stamped() -> None:
+    """A saved Lite selection cannot become the model a job records.
+
+    The single-model policy refuses it before a request is sent.  Silently
+    stamping the environment model instead would make the job record a model the
+    operator did not choose, and marking it would be worse.
+    """
+
+    class Pipeline:
+        def run(self, job, session, settings):  # pragma: no cover - refusal first
+            raise AssertionError("a disabled marking model must not reach the pipeline")
+
+    job = SimpleNamespace(
+        id=None,
+        tenant_id=None,
+        engine_name=None,
+        engine_version=None,
+        result_source=None,
+        primary_model=None,
+        secondary_model=None,
+    )
+    session = SimpleNamespace(
+        get=lambda *_args, **_kwargs: job,
+        scalar=lambda *_args, **_kwargs: SimpleNamespace(model="gemini-3.1-flash-lite"),
+        commit=lambda: None,
+    )
+
+    with pytest.raises(AppError) as error:
+        AetrixEngine(pipeline=Pipeline()).run(job, session, _settings())
+
+    assert error.value.code is ErrorCode.CONFIGURATION_ERROR
+    assert "gemini-3.1-flash-lite" in error.value.message
+    assert "gemini-3.6-flash" in error.value.message
+    assert job.primary_model is None

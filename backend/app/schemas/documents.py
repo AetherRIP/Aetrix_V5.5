@@ -61,6 +61,15 @@ class SchemeVersionRead(BaseModel):
     source: str
     content_hash: str
     approved_at: datetime | None
+    #: The criteria review trail (migration 0026/0031).  Returned because the
+    #: review screen decides what to show from it: without these fields an
+    #: approved scheme looks unapproved and the approval can be offered again.
+    criteria_blueprint_version_id: UUID | None
+    criteria_blueprint_hash: str | None
+    criteria_rules_hash: str | None
+    criteria_approved_at: datetime | None
+    criteria_approved_by: UUID | None
+    criteria_approval_reason: str | None
     created_at: datetime
 
 
@@ -80,6 +89,41 @@ class SchemeUploadRead(BaseModel):
 
 
 class SchemeApprove(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class SchemeCriterionRead(BaseModel):
+    """One stored mark point, as the review screen shows it.
+
+    The review columns are nullable because criteria recorded before migration
+    0026 carry none of them; the screen must be able to say so rather than
+    invent a question or an answer.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    question_id: str
+    code: str
+    marks: int
+    ordinal: int
+    description: str
+    question_text: str | None
+    expected_answer: str | None
+    award_conditions: str | None
+    withhold_conditions: str | None
+    source_page: int | None
+    source_quote: str | None
+    blueprint_version_id: UUID | None
+
+
+class SchemeCriteriaExtractionRequest(BaseModel):
+    blueprint_version_id: UUID
+    prompt_version: int | None = Field(default=None, ge=1)
+
+
+class SchemeCriteriaApprove(BaseModel):
+    blueprint_version_id: UUID
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -124,6 +168,20 @@ class ProviderCallSummary(BaseModel):
     cached_tokens: int | None
     cost_usd: float | None
     latency_ms: int | None
+
+
+class SchemeCriteriaExtractionRead(BaseModel):
+    """A stored transcription and the coverage that let it be stored.
+
+    ``coverage`` is the plain-language report: questions, marks per question and
+    the total, so a reviewer can see the transcription reconciles with the
+    approved paper without re-adding the marks by hand.
+    """
+
+    version: SchemeVersionRead
+    criteria: list[SchemeCriterionRead]
+    coverage: dict[str, Any]
+    provider: ProviderCallSummary
 
 
 class BlueprintExtractionRead(BaseModel):

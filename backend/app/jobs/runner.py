@@ -11,6 +11,7 @@ partially-marked paper is reused.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -20,6 +21,7 @@ from ..core.config import Settings
 from ..core.logging import get_logger, log_context
 from ..db.models import CorrectionJob
 from ..db.repositories import JobRepository
+from .code_version import code_fingerprint
 from .pipeline import (
     CorrectionPipeline,
     PipelineUnavailable,
@@ -40,15 +42,31 @@ class JobRunner:
         settings: Settings,
         worker_id: str,
         stop_event: threading.Event | None = None,
+        fingerprint_fn: Callable[[], str] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._pipeline = pipeline
         self._settings = settings
         self.worker_id = worker_id
         self._stop = stop_event or threading.Event()
+        self._fingerprint = fingerprint_fn or code_fingerprint
+        #: The routing code this process loaded.  Stamped on the terminal event
+        #: of every job it finishes, so a result can always be traced to the
+        #: policy that produced it.
+        self.code_fingerprint = self._fingerprint()
         self._heartbeat_stop = threading.Event()
 
     def run_once(self) -> str | None:
+        stale = self._stale_reason()
+        if stale is not None:
+            # Claiming now would mark the job with routing code that is no
+            # longer what is on disk.  Nothing else in the system can see that
+            # mismatch: the lease, the heartbeat and the engine name all match.
+            log.error(
+                "worker code changed on disk; refusing to claim another job",
+                extra={"extra_fields": {"worker": self.worker_id, "reason": stale}},
+            )
+            return None
         with self._session_factory() as session:
             repository = JobRepository(session)
             job = repository.claim_next(
@@ -144,6 +162,12 @@ class JobRunner:
                 heartbeat.join(timeout=2.0)
                 self._clear_lease(tenant_id, job_id)
 
+    def _stale_reason(self) -> str | None:
+        current = self._fingerprint()
+        if current == self.code_fingerprint:
+            return None
+        return f"loaded {self.code_fingerprint[:12]}, on disk {current[:12]}"
+
     def _new_session(self) -> Session:
         return self._session_factory()
 
@@ -223,7 +247,7 @@ class JobRunner:
                 service.jobs.transition(
                     job,
                     state,
-                    detail=detail,
+                    detail={**detail, "worker_code": self.code_fingerprint[:12]},
                     actor=f"worker:{self.worker_id}",
                 )
                 job.lease_owner = None
@@ -369,6 +393,12 @@ class JobRunner:
             except Exception:
                 log.exception("worker loop error")
                 processed = None
+            if self._stale_reason() is not None:
+                log.error(
+                    "worker code changed on disk; stopping this worker",
+                    extra={"extra_fields": {"worker": self.worker_id}},
+                )
+                break
             if processed is None:
                 stop.wait(self._settings.worker.poll_interval_seconds)
             elif stop.is_set():

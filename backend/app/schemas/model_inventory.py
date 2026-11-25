@@ -123,8 +123,12 @@ class InventoryCountsRead(BaseModel):
 
 class ModelInventoryRead(BaseModel):
     imported_at: datetime
+    #: Only the three monitored models appear here.
     models: list[InventoryModelRead]
     counts: InventoryCountsRead
     selections: dict[str, str]
     selection_sources: dict[str, str]
+    #: Registered models outside the monitored view.  Their records and history
+    #: are kept; they are excluded from this table, never shown as zero usage.
+    excluded_models: int = 0
     note: str

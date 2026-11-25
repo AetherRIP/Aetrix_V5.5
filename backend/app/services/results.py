@@ -15,6 +15,7 @@ Approval is stored, not inferred from a job state, so "provisional" and
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from ..audit.service import AuditService
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
 from ..core.security import Principal, ensure_reviewer
+from ..correction import verification_status as verification_completeness
 from ..correction.guard import RESULT_SOURCE_REFUSED
 from ..correction.processing import (
     ProcessingState,
@@ -223,11 +225,21 @@ class ResultsService:
                 EvidenceRead.model_validate(row)
             )
 
+        verification_rows = self.results.verifications(job.id)
+        paper_verification = verification_completeness.summarise(
+            rows, verification_completeness.records_from_rows(verification_rows)
+        )
+
+        def verification_for(question_id: str) -> dict[str, Any] | None:
+            found = paper_verification.question(question_id)
+            return found.describe() if found is not None else None
+
         questions = [
             QuestionResultRead.model_validate(row).model_copy(
                 update={
                     "criteria": criteria_by_result.get(row.id, []),
                     "evidence": evidence_by_result.get(row.id, []),
+                    "verification": verification_for(str(row.question_id)),
                 }
             )
             for row in rows
@@ -271,12 +283,14 @@ class ResultsService:
             assignment_id=job.assignment_id,
             student_ref=submission.student_ref,
             job_state=job.state,
+            # Derived live so historical rows (which predate the column) get an
+            # honest answer, and the stored column cannot drift from the rows.
+            verification_status=paper_verification.status,
             result_source=job.result_source,
             refused_newer_job_id=refused_newer_id,
             questions=questions,
             verifications=[
-                VerificationRead.model_validate(row)
-                for row in self.results.verifications(job.id)
+                VerificationRead.model_validate(row) for row in verification_rows
             ],
             reviews=[
                 ReviewDecisionRead.model_validate(row) for row in self.results.reviews(job.id)

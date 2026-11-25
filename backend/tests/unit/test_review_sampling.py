@@ -204,6 +204,28 @@ def test_accuracy_samples_confident_answers_balanced_does_not() -> None:
     assert len(accuracy) == 2
 
 
+def test_the_accuracy_threshold_is_active_above_the_operator_default() -> None:
+    """ACCURACY raises the review threshold to 0.95; it does not disable it.
+
+    A MARKED row may carry 0.85-0.949 confidence because the pipeline only
+    requires ``marking.min_confidence`` (0.6 by default). ACCURACY reviews such a
+    row; BALANCED leaves it alone. A log that called this threshold inert was
+    wrong, and this test pins the difference.
+    """
+
+    rows = [_row("q1", awarded=1, max_marks=2, confidence=0.90)]
+    balanced = policy_for(MODE_BALANCED, settings=_settings())
+    accuracy = policy_for(MODE_ACCURACY, settings=_settings())
+
+    assert balanced.double_check_threshold == MarkingSettings().double_check_min_confidence
+    assert accuracy.double_check_threshold == 0.95
+    assert balanced.double_check_threshold < 0.90 < accuracy.double_check_threshold
+    assert select_targets(rows, policy=balanced, seed="job-threshold") == []
+    assert [target.question_id for target in select_targets(
+        rows, policy=accuracy, seed="job-threshold"
+    )] == ["q1"]
+
+
 def test_a_confirmed_zero_is_not_offered_for_a_second_opinion() -> None:
     """The pipeline only passes markable rows; the sampler must not invent one."""
 

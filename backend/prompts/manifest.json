@@ -9,6 +9,14 @@
       "content_hash": "3bc149e7717cf2a28264a70f329f248154469a91699cae39d893a9145159d682"
     },
     {
+      "id": "scheme_criteria_extraction",
+      "version": 1,
+      "path": "scheme_criteria_extraction/v1.md",
+      "model_role": "primary",
+      "description": "Transcribe the printed mark points of a mark scheme against an approved blueprint.",
+      "content_hash": "e347f4db92f98857652f678a2f01d7ffb5554881ebcaf475c2f1e0f4dc5b6b3b"
+    },
+    {
       "id": "page_question_mapping",
       "version": 1,
       "path": "page_question_mapping/v1.md",
@@ -55,6 +63,68 @@
       "model_role": "review",
       "description": "Blindly transcribe one question's answer without marks, scheme or expected answer.",
       "content_hash": "2e10becc5eaa11e667f794ff4a38419e6ef24803de29e8ba66b2b578da0aa38b"
+    },
+    {
+      "id": "aetrix_v5_5_marking_whole_paper",
+      "version": 1,
+      "path": "aetrix_v5_5_marking_whole_paper/v1.md",
+      "model_role": "primary",
+      "description": "Mark every question of one paper in a single bounded reply.",
+      "content_hash": "309ce84901ac96501610467e4b1f12e11fbdbf6ace9c4b7fed1d1ac2662c0cbb"
+    },
+    {
+      "id": "aetrix_v5_5_marking_whole_paper",
+      "version": 2,
+      "path": "aetrix_v5_5_marking_whole_paper/v2.md",
+      "model_role": "primary",
+      "description": "Mark every question of one paper in a single bounded reply, naming each mark point's reference and the page its evidence is on.",
+      "content_hash": "12c8ddf20f4a91e022f5592e37529413ae2cc89ca9c1a88b43724da7948081db"
+    },
+    {
+      "id": "aetrix_v5_5_marking",
+      "version": 3,
+      "path": "aetrix_v5_5_marking/v3.md",
+      "model_role": "primary",
+      "description": "Mark one question against an approved blueprint and record evidence.",
+      "content_hash": "718637ce183cbbd235f56b3ecff004749310a43f907c26eb2d822abc1cc654b6",
+      "reissues": 2,
+      "provenance_note": "Same bytes as v2.md, which was already recorded in prompt_versions v2 as content 6c6b49fc...: that file was edited without a version bump and its recorded content is gone from git. v3 is a new identity for this content, not an improved prompt."
+    },
+    {
+      "id": "aetrix_v5_5_marking",
+      "version": 4,
+      "path": "aetrix_v5_5_marking/v4.md",
+      "model_role": "primary",
+      "description": "Mark one question against an approved blueprint, naming each mark point's reference and the page its evidence is on.",
+      "content_hash": "031e4527a251c817f71960ab877263dcb60060bee02a77b1a51555b8990e701e"
+    },
+    {
+      "id": "aetrix_v5_5_double_check",
+      "version": 3,
+      "path": "aetrix_v5_5_double_check/v3.md",
+      "model_role": "review",
+      "description": "Independently re-mark one question as the second examiner.",
+      "content_hash": "c54110d2508be33191e7296cafc0ce70bb8cd3b4c8d4f3c4f54be4014085180f",
+      "reissues": 2,
+      "provenance_note": "Same bytes as v2.md, whose recorded prompt_versions row holds content aac10099.... v3 is a new identity for the same content, not an improved prompt."
+    },
+    {
+      "id": "aetrix_v5_5_transcription",
+      "version": 2,
+      "path": "aetrix_v5_5_transcription/v2.md",
+      "model_role": "review",
+      "description": "Blindly transcribe one question's answer without marks, scheme or expected answer.",
+      "content_hash": "2e10becc5eaa11e667f794ff4a38419e6ef24803de29e8ba66b2b578da0aa38b",
+      "reissues": 1,
+      "provenance_note": "Same bytes as v1.md, whose recorded prompt_versions row holds content 261f19ca.... v2 is a new identity for the same content, not an improved prompt."
+    },
+    {
+      "id": "aetrix_v5_5_transcription",
+      "version": 3,
+      "path": "aetrix_v5_5_transcription/v3.md",
+      "model_role": "review",
+      "description": "Blindly transcribe one question's answer without marks or scheme, stating whether the writing is written, absent or illegible.",
+      "content_hash": "8bd76c07c9049368475d649e026c199a2fb16c7b2573d100d590e659bce9653d"
     }
   ]
 }

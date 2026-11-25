@@ -24,6 +24,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from ..correction.transcription import TRANSCRIPTION_REQUEST_MAX_PAGES
 from .marking_policy import (
     DISABLED_MARKING_MODELS,
     PRODUCTION_MARKING_MODEL,
@@ -621,9 +622,39 @@ class GoogleCloudSettings(BaseModel):
 class MarkingSettings(BaseModel):
     review_mode: ReviewMode = ReviewMode.BALANCED
     blueprint_approval_required: bool = True
+    #: How one paper is marked.  ``WHOLE_PAPER`` is the product: one request for
+    #: the complete script against the complete scheme, so the model reads the
+    #: paper as a whole, and the per-question engine answers only the leaves that
+    #: reply did not decide.  ``PER_QUESTION`` remains selectable for a controlled
+    #: comparison, but it is not the default and must not be presented as
+    #: evidence that whole-paper marking works.  ``PARALLEL`` sends the same
+    #: per-question request as ``PER_QUESTION`` but corrects independent questions
+    #: concurrently, bounded by ``parallel_max_concurrency``.
+    marking_mode: Literal["PER_QUESTION", "WHOLE_PAPER", "PARALLEL"] = "WHOLE_PAPER"
+    #: How many question requests one parallel pass may have in flight.  Every
+    #: request still goes through the same credential pool, project cooldown and
+    #: append-only usage ledger, so raising this cannot buy quota the provider
+    #: does not have; it only shortens the wall clock while capacity remains.  The
+    #: ceiling is deliberately small: a paper is a few dozen questions and the
+    #: pool's per-minute allowance, not the CPU, is the real limit.
+    parallel_max_concurrency: int = Field(default=3, ge=1, le=8)
+    #: How many rendered pages one paper request may carry.  A script with more
+    #: pages is marked per question, which can still send a question only the
+    #: pages mapped to it; dropping pages from a paper request would turn a
+    #: present answer into an apparent blank.
+    whole_paper_max_pages: int = Field(default=12, ge=1, le=40)
+    #: The output budget for the paper reply.  32,768 covers 39 leaves at the
+    #: bounded supporting-text sizes with headroom; the model's own ceiling is
+    #: 65,536 and is enforced here rather than assumed.
+    whole_paper_max_output_tokens: int = Field(default=32768, ge=4096, le=65536)
     max_escalations_per_job: int = Field(default=6, ge=0, le=50)
     min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     max_marks_per_question: int = Field(default=50, ge=1, le=200)
+    #: Pin the marking prompt to one manifest version for a controlled experiment.
+    #: ``None`` uses the newest version, which is the production default.  This
+    #: exists so a validation run can compare prompt v1 and v2 on the same papers
+    #: without editing a file between runs.
+    marking_prompt_version: int | None = Field(default=None, ge=1)
     #: Independent second marking of low-confidence questions.  It never
     #: overwrites the first award: a disagreement goes to a teacher.
     double_check_enabled: bool = False
@@ -632,8 +663,35 @@ class MarkingSettings(BaseModel):
     #: A blind second reading of a question's answer, compared with the answer the
     #: marking pass extracted.  Off by default because it costs a request per
     #: selected question; a difference goes to a person and never rewrites anything.
-    transcription_enabled: bool = False
+    #: A blind second reading of selected answers.  On by default: a zero that
+    #: rests on an unverified reading is not a confirmed zero, and the mission
+    #: that added material transcription comparison exists because a confident
+    #: zero stood without one.  An operator can still turn it off, and the mode
+    #: budget bounds what it can spend.
+    transcription_enabled: bool = True
     transcription_max_questions: int = Field(default=4, ge=0, le=20)
+    #: How many page images one transcription request may carry.  A question that
+    #: needs more pages than this is reported as unavailable rather than sent a
+    #: silently thinned script: a missing page reads as a missing answer.  The
+    #: upper bound is the request builder's own ceiling, not a separate promise:
+    #: a larger value could only be honoured by dropping pages.
+    transcription_max_pages: int = Field(
+        default=3, ge=1, le=TRANSCRIPTION_REQUEST_MAX_PAGES
+    )
+    #: The image budget of one transcription request, in bytes before base64
+    #: encoding.  The provider's inline request ceiling is around 20 MB encoded,
+    #: so the raw ceiling is deliberately well below it.
+    transcription_max_image_bytes: int = Field(default=8_388_608, ge=1_048_576)
+    #: Whether a mark that no evidence check has examined sends its question to a
+    #: person.  On by default, and the reason is a real paper: a full-marks award
+    #: for an answer that was never written was presented as a finished result
+    #: because the evidence check had simply not been bought for that question.
+    #: The comparison is bought for a few questions per paper, so this makes an
+    #: unverified award a review item rather than a decided mark — raise
+    #: ``transcription_max_questions`` to verify more of a paper automatically.
+    #: An operator who turns this off is choosing to present unverified awards;
+    #: the paper's verification state still records that they were unverified.
+    require_evidence_for_award: bool = True
 
 
 class WorkerSettings(BaseModel):

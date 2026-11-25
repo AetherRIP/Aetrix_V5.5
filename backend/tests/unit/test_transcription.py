@@ -54,8 +54,15 @@ def test_spacing_and_latex_wrappers_are_not_a_difference() -> None:
     assert compare_transcripts("24 - 18y", "$24-18y$") == STATUS_AGREES
 
 
-def test_mathematically_equivalent_answers_agree() -> None:
-    assert compare_transcripts("0.75", "3/4") == STATUS_AGREES
+def test_a_decimal_and_a_fraction_are_different_working() -> None:
+    """Equality of value is not equality of writing.
+
+    ``0.75`` and ``3/4`` are the same number and different working, and a scheme
+    can award one and withhold the other.  Algebraic equivalence is deliberately
+    not treated as agreement: the comparison is about what the reader saw.
+    """
+
+    assert compare_transcripts("0.75", "3/4") == STATUS_DIFFERS
 
 
 def test_a_different_answer_differs() -> None:
@@ -85,8 +92,8 @@ def test_superscripts_and_subscripts_survive_comparison_forms() -> None:
     assert compare_transcripts("a_1", "a1") == STATUS_DIFFERS
 
 
-def test_fractions_written_two_ways_agree() -> None:
-    assert compare_transcripts("1/2", "0.5") == STATUS_AGREES
+def test_a_half_and_a_decimal_are_different_working() -> None:
+    assert compare_transcripts("1/2", "0.5") == STATUS_DIFFERS
 
 
 def test_a_label_on_a_diagram_is_text_and_must_match() -> None:
@@ -178,9 +185,28 @@ def test_economy_never_pays_for_transcription() -> None:
     assert policy.transcription_budget == 0
 
 
-def test_transcription_is_off_unless_the_operator_enables_it() -> None:
-    assert policy_for(MODE_BALANCED, settings=_settings()).transcription_budget == 0
-    assert policy_for(MODE_ACCURACY, settings=_settings()).transcription_budget == 0
+def test_the_operator_switch_still_decides() -> None:
+    """The second reading is on by default and the operator can still stop it.
+
+    It was off by default when it was an experiment; a confident zero standing on
+    an unverified reading is the defect it exists for, so it is now part of the
+    correction.  Disabling it must still cost nothing.
+    """
+
+    assert policy_for(MODE_BALANCED, settings=_settings()).transcription_budget == 2
+    assert policy_for(MODE_ACCURACY, settings=_settings()).transcription_budget == 4
+    assert (
+        policy_for(
+            MODE_BALANCED, settings=_settings(transcription_enabled=False)
+        ).transcription_budget
+        == 0
+    )
+    assert (
+        policy_for(
+            MODE_ACCURACY, settings=_settings(transcription_enabled=False)
+        ).transcription_budget
+        == 0
+    )
 
 
 def test_the_modes_spend_different_amounts_of_an_enabled_switch() -> None:

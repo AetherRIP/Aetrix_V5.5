@@ -30,6 +30,12 @@ from sqlalchemy.orm import Session
 from ..core.config import Settings
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
+from ..core.marking_policy import (
+    DISABLED_MARKING_MODELS,
+    PRODUCTION_MARKING_MODEL,
+    is_disabled_marking_model,
+    marking_model_problem,
+)
 from ..core.security import SecretBox
 from ..db.models import ProviderCredential, ProviderModelSelection
 from ..providers.errors import (
@@ -333,7 +339,50 @@ def effective_selection(
 
 
 def selected_model(session: Session, settings: Settings, role: str) -> str:
-    return effective_selection(session, settings, role)[0]
+    """The model a role resolves to, with the production policy enforced.
+
+    Only the marking role is policy-bound.  The review role is a second
+    examiner, not a marking model, so it may be a different model.  A stored
+    primary selection that predates the policy fails here rather than being
+    silently ignored: a correction job must not mark with a model the operator
+    did not choose, and it must not swap to another without saying so.
+    """
+
+    model, source = effective_selection(session, settings, role)
+    if role == "primary":
+        problem = marking_model_problem(model)
+        if problem is not None:
+            raise AppError(
+                ErrorCode.CONFIGURATION_ERROR,
+                f"The primary model cannot mark a paper. {problem} Nothing was "
+                "marked and no fallback model was tried.",
+                details={
+                    "role": role,
+                    "model": model,
+                    "source": source,
+                    "production_marking_model": PRODUCTION_MARKING_MODEL,
+                    "disabled_models": sorted(DISABLED_MARKING_MODELS),
+                },
+            )
+    return model
+
+
+def marking_policy_report(settings: Settings) -> dict[str, Any]:
+    """The policy the admin screens show, read from the same constants."""
+
+    primary = settings.provider.model_chains.get("primary") or []
+    return {
+        "marking_model": PRODUCTION_MARKING_MODEL,
+        "disabled_models": sorted(DISABLED_MARKING_MODELS),
+        "primary_chain": [entry.model for entry in primary if entry.enabled],
+        "enforced": True,
+        "note": (
+            f"{PRODUCTION_MARKING_MODEL} is the only model a production "
+            "correction job may mark with. The disabled Lite models cannot be "
+            "selected and are never reached as a fallback. Prices and historical "
+            "usage for them are retained."
+        ),
+    }
 
 
 def discover_catalogue(
@@ -423,6 +472,7 @@ def discover_catalogue(
         sources[role] = source
     catalogue["selections"] = selections
     catalogue["selection_sources"] = sources
+    catalogue["marking_policy"] = marking_policy_report(settings)
     catalogue["note"] = (
         "Availability is read from models.list with one key per Google Cloud "
         "project; a model absent from a project's list is shown unavailable to "
@@ -446,6 +496,19 @@ def set_selection(
     model = model.strip()
     if not MODEL_ID_PATTERN.match(model):
         raise AppError(ErrorCode.CONFLICT, "That is not a valid Gemini model id.")
+    # The policy is checked before discovery, so the operator gets the policy
+    # answer even when no credential can currently list models.
+    if role == "primary":
+        problem = marking_model_problem(model)
+        if problem is not None:
+            raise AppError(ErrorCode.CONFLICT, problem)
+    elif is_disabled_marking_model(model):
+        raise AppError(
+            ErrorCode.CONFLICT,
+            f"'{model}' is a disabled lightweight model and cannot be selected "
+            f"for a production role. {PRODUCTION_MARKING_MODEL} is the marking "
+            "model.",
+        )
 
     catalogue = discover_catalogue(session, settings)
     if not catalogue["models"]:

@@ -57,13 +57,19 @@ class AetrixEngine:
             current.engine_name = current.engine_name or self.name
             current.engine_version = current.engine_version or self.version
             current.result_source = current.result_source or "AI_PRIMARY"
-            current.primary_model = current.primary_model or settings.provider.model_primary
-            if settings.marking.double_check_enabled:
-                # The second examiner is a different model, and the job records
-                # which one, so a disagreement can be read in context.
-                current.secondary_model = (
-                    current.secondary_model or settings.provider.model_review
-                )
+            # The model this run will really use: an operator's saved selection is
+            # authoritative over the environment fallback, so stamping the env
+            # value would record a model the paper was not marked with.
+            if current.primary_model is None:
+                from ...services.model_catalogue import selected_model
+
+                current.primary_model = selected_model(session, settings, "primary")
+            # The second examiner is a different model, and the job records which
+            # one, so a disagreement can be read in context.
+            if settings.marking.double_check_enabled and current.secondary_model is None:
+                from ...services.model_catalogue import selected_model
+
+                current.secondary_model = selected_model(session, settings, "review")
             session.commit()
 
         pipeline = self._pipeline or AetrixPipeline()

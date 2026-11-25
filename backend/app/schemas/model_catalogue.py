@@ -54,6 +54,16 @@ class CatalogueProjectRead(BaseModel):
     error: str | None
 
 
+class MarkingPolicyRead(BaseModel):
+    """The single-model policy the engine enforces, shown to operators."""
+
+    marking_model: str
+    disabled_models: list[str]
+    primary_chain: list[str]
+    enforced: bool
+    note: str
+
+
 class ModelCatalogueRead(BaseModel):
     discovered_at: datetime
     cached: bool
@@ -62,6 +72,7 @@ class ModelCatalogueRead(BaseModel):
     models: list[CatalogueModelRead]
     selections: dict[str, str]
     selection_sources: dict[str, str]
+    marking_policy: MarkingPolicyRead
     note: str
 
 

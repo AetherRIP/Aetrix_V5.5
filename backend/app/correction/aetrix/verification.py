@@ -164,6 +164,58 @@ def equivalent(left: str, right: str) -> bool | None:
     return False if different else None
 
 
+#: A printed scheme loses superscripts when its answer is transcribed as plain
+#: text: ``12x^3 - 60x^2 + 75x`` becomes ``12x3 - 60x2 + 75x``.  Read literally,
+#: that text multiplies by a symbol called ``x3`` and a correct answer looks
+#: different.  The pattern is a single variable followed directly by digits; a
+#: letter inside a longer run is part of a name, not a base, so ``sin2x``,
+#: ``sqrt2`` and ``xy2`` are left exactly as written.
+_LOST_SUPERSCRIPT = re.compile(r"(?<![A-Za-z])([A-Za-z])(\d+)")
+
+
+def restore_printed_superscripts(expression: str) -> str:
+    """Read ``12x3`` as ``12x^3``: what a printed scheme's plain text meant.
+
+    Only the scheme side is ever read this way.  A marking reply writes its own
+    expressions with ``^`` (the prompt asks for it), so a flattened exponent in
+    a reply is not an artefact of transcription and is left alone.
+
+    The reading cannot be exact, and the residue is one case: ``x2`` written as
+    a product is indistinguishable in plain text from ``x^2`` whose superscript
+    was lost, and is read as the power.  A power on a bracket (``2(x + 1)3``) is
+    not read at all, since no letter precedes the digit.  Reading the artefact
+    can therefore recover an equivalence that was not there, but it can never
+    manufacture a difference, which is why the comparison keeps the strict
+    verdict unless the restored reading proves equality.
+    """
+
+    return _LOST_SUPERSCRIPT.sub(r"\1^\2", expression)
+
+
+def equivalent_to_scheme(
+    student_expression: str, expected_expression: str
+) -> bool | None:
+    """Compare a script's answer with a printed scheme answer.
+
+    The strict comparison always runs first and keeps its verdict when it can
+    prove a difference.  A second reading of the scheme side — the one where a
+    lost superscript is restored — may prove *equivalence*; it never creates a
+    mismatch, because a difference from the restored reading is not evidence
+    about the printed answer.  ``None`` therefore still means "this check cannot
+    decide", exactly as ``equivalent`` does.
+    """
+
+    strict = equivalent(student_expression, expected_expression)
+    if strict is True:
+        return True
+    restored = restore_printed_superscripts(expected_expression)
+    if restored == expected_expression:
+        return strict
+    if equivalent(student_expression, restored) is True:
+        return True
+    return strict
+
+
 def verify_question(
     mark: QuestionMark,
     *,

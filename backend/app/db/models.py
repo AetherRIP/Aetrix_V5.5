@@ -168,6 +168,22 @@ class MarkSchemeVersion(UUIDPrimaryKey, TenantScoped, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
+    #: The review trail for the criteria transcribed from this scheme (migration
+    #: 0026).  All nullable: a scheme whose criteria were never reviewed carries
+    #: none of them, and nothing is backfilled.
+    criteria_blueprint_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("exam_blueprint_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    criteria_blueprint_hash: Mapped[str | None] = mapped_column(String(64))
+    #: SHA-256 over the approved marking rules and the blueprint they were
+    #: reviewed against (migration 0031).  Null means the approval predates the
+    #: digest, which the readiness gate refuses rather than assumes.
+    criteria_rules_hash: Mapped[str | None] = mapped_column(String(64))
+    criteria_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    criteria_approved_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    criteria_approval_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class MarkingCriterion(UUIDPrimaryKey, TenantScoped, Base):
@@ -193,6 +209,16 @@ class MarkingCriterion(UUIDPrimaryKey, TenantScoped, Base):
     award_conditions: Mapped[str | None] = mapped_column(Text)
     withhold_conditions: Mapped[str | None] = mapped_column(Text)
     source_ref: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    #: The blueprint these criteria were reviewed against, the printed question
+    #: and answer, and where in the scheme they were read from.  All nullable:
+    #: criteria recorded before migration 0026 carry none of them.
+    blueprint_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("exam_blueprint_versions.id", ondelete="CASCADE"), nullable=True
+    )
+    question_text: Mapped[str | None] = mapped_column(Text)
+    expected_answer: Mapped[str | None] = mapped_column(Text)
+    source_page: Mapped[int | None] = mapped_column(Integer)
+    source_quote: Mapped[str | None] = mapped_column(Text)
 
 
 class Assignment(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
@@ -328,7 +354,7 @@ class PageQuestionMapping(UUIDPrimaryKey, TenantScoped, Base):
         UniqueConstraint(
             "page_id", "question_id", "blueprint_version_id", name="uq_page_question_blueprint"
         ),
-        CheckConstraint("method IN ('TEXT_MATCH','MODEL')", name="method"),
+        CheckConstraint("method IN ('TEXT_MATCH','MODEL','MANUAL')", name="method"),
         CheckConstraint("confidence >= 0.0 AND confidence <= 1.0", name="confidence"),
         Index("ix_page_mapping_document", "document_id"),
     )
@@ -433,6 +459,17 @@ class CorrectionJob(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
         Index("ix_jobs_lease", "lease_expires_at"),
         Index("ix_jobs_submission", "submission_id"),
         Index("ix_jobs_recovery_of", "recovery_of_job_id"),
+        CheckConstraint(
+            "marking_mode IS NULL OR marking_mode IN "
+            "('PER_QUESTION','WHOLE_PAPER','PARALLEL')",
+            name="marking_mode",
+        ),
+        CheckConstraint(
+            "verification_status IS NULL OR verification_status IN "
+            "('FULLY_VERIFIED','PARTIALLY_VERIFIED','REVIEW_REQUIRED',"
+            "'VERIFICATION_FAILED','VERIFICATION_NOT_REQUIRED')",
+            name="verification_status",
+        ),
     )
 
     assignment_id: Mapped[uuid.UUID] = mapped_column(
@@ -474,6 +511,11 @@ class CorrectionJob(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     scheme_hash: Mapped[str | None] = mapped_column(String(64))
     double_check_status: Mapped[str | None] = mapped_column(String(40))
     disagreement_status: Mapped[str | None] = mapped_column(String(40))
+    #: How thoroughly this paper's decisions were verified, derived from the
+    #: stored per-question verdicts.  Completion is a different fact: a fully
+    #: decided paper is normally only partially verified because the expensive
+    #: independent checks are sampled.  Null on rows written before the column.
+    verification_status: Mapped[str | None] = mapped_column(String(30))
     recovery_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: The refused run this job re-marks, if any.  Set only on a recovery job;
     #: the source keeps its rows, guard decision and engine attribution intact.
@@ -484,6 +526,11 @@ class CorrectionJob(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     #: marked by that engine; a mismatch fails loudly instead of switching.
     requested_engine_name: Mapped[str | None] = mapped_column(String(40))
     requested_engine_version: Mapped[str | None] = mapped_column(String(40))
+    #: The marking mode this paper was first marked in.  Fixed on the first
+    #: marking execution: a deployment changing its configuration must not switch
+    #: a paper that is part way through, and a resumed job keeps the mode its
+    #: rows were produced in.  Null only for jobs that never reached marking.
+    marking_mode: Mapped[str | None] = mapped_column(String(20))
 
 
 class JobEvent(UUIDPrimaryKey, TenantScoped, Base):
@@ -518,6 +565,12 @@ class QuestionResult(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
             "('MARKED','CONFIRMED_ZERO','UNMARKED','NEEDS_REVIEW')",
             name="processing_state",
         ),
+        CheckConstraint(
+            "response_source IS NULL OR response_source IN "
+            "('PER_QUESTION','WHOLE_PAPER','PARALLEL')",
+            name="response_source",
+        ),
+        Index("ix_question_results_provider_usage_id", "provider_usage_id"),
     )
 
     job_id: Mapped[uuid.UUID] = mapped_column(
@@ -551,11 +604,79 @@ class QuestionResult(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     )
     engine_version: Mapped[str | None] = mapped_column(String(40))
     prompt_version: Mapped[str | None] = mapped_column(String(80))
+    #: Which request produced this row's award: one question's request or the
+    #: paper's.  A whole-paper job's fallback rows are ``PER_QUESTION``, which is
+    #: the truth about them — the paper request did not answer that question.
+    response_source: Mapped[str | None] = mapped_column(String(20))
+    #: The row's position inside a whole-paper reply.  Null for a question that
+    #: had a reply of its own.
+    response_sequence: Mapped[int | None] = mapped_column(Integer)
+    #: The audited provider call behind this row.  It also addresses the archived
+    #: body in ``provider_responses``, so a stored mark can be traced to the
+    #: exact reply it came from.
+    provider_usage_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("provider_usage.id", ondelete="SET NULL")
+    )
+
+
+class ProviderResponse(UUIDPrimaryKey, TenantScoped, Base):
+    """The complete reply one provider request received, kept once.
+
+    A per-question reply is small enough to live in the row it marked.  A
+    whole-paper reply is a single document that many rows depend on, so it is
+    stored once, addressed by its own SHA-256, and every row it produced reaches
+    it through ``provider_usage_id``.  Bodies are evidence about an award, not
+    client data: the migration closes the table to the Data API roles.
+    """
+
+    __tablename__ = "provider_responses"
+    __table_args__ = (
+        UniqueConstraint("provider_usage_id", name="uq_provider_responses_usage"),
+        CheckConstraint(
+            "response_source IN ('PER_QUESTION','WHOLE_PAPER')", name="response_source"
+        ),
+        Index("ix_provider_responses_job", "job_id", "created_at"),
+    )
+
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("correction_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    provider_usage_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("provider_usage.id", ondelete="SET NULL")
+    )
+    prompt_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("prompt_versions.id", ondelete="SET NULL")
+    )
+    response_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: Position of this reply among the job's replies of the same source.
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    body: Mapped[Any] = mapped_column(JSON, nullable=False)
+    body_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    finish_reason: Mapped[str | None] = mapped_column(String(40))
+    model: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
 
 
 class CriterionResult(UUIDPrimaryKey, TenantScoped, Base):
     __tablename__ = "criterion_results"
-    __table_args__ = (Index("ix_criterion_result_question", "question_result_id"),)
+    __table_args__ = (
+        Index("ix_criterion_result_question", "question_result_id"),
+        # One stored row per mark point per question.  A criterion_id is only
+        # written when the reply named exactly one approved mark point, so a
+        # duplicate here would mean one mark point was paid twice; the database
+        # refuses it.  Historical rows carry no link and are unaffected.
+        Index(
+            "uq_criterion_result_once_per_criterion",
+            "question_result_id",
+            "criterion_id",
+            unique=True,
+            postgresql_where=text("criterion_id IS NOT NULL"),
+        ),
+    )
 
     question_result_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("question_results.id", ondelete="CASCADE"), nullable=False
@@ -578,11 +699,22 @@ class MarkingEvidence(UUIDPrimaryKey, TenantScoped, Base):
     question_result_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("question_results.id", ondelete="CASCADE"), nullable=False
     )
+    #: The approved mark point this quotation was awarded against.  Nullable:
+    #: evidence recorded before the identity existed keeps no link, and an award
+    #: whose mark point could not be identified is stored unlinked rather than
+    #: attached to a guessed criterion.
+    criterion_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("marking_criteria.id", ondelete="SET NULL"), nullable=True
+    )
     page_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("document_pages.id", ondelete="SET NULL"), nullable=True
     )
     kind: Mapped[str] = mapped_column(String(40), nullable=False)
-    bbox: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # ``none_as_null`` is what keeps a missing box out of the JSON document:
+    # without it SQLAlchemy writes the JSON literal ``null``, so the column is
+    # NOT NULL to a reviewer's query while holding no coordinates at all.  A box
+    # that is absent must be SQL NULL and must never be invented.
+    bbox: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True))
     quote: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
@@ -595,7 +727,7 @@ class VerificationResult(UUIDPrimaryKey, TenantScoped, Base):
         UniqueConstraint("job_id", "question_id", "kind", name="uq_verification_identity"),
         CheckConstraint(
             "kind IN ('MATHEMATICAL','INTEGRITY','DOUBLE_CHECK',"
-            "'SCHEME_MATHEMATICAL','TRANSCRIPTION')",
+            "'SCHEME_MATHEMATICAL','TRANSCRIPTION','EVIDENCE')",
             name="kind",
         ),
         CheckConstraint(

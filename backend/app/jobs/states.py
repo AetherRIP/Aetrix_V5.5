@@ -34,6 +34,21 @@ class JobState(StrEnum):
 #: attempt budget.  Completed and cancelled jobs admit no further transition.
 TERMINAL_STATES: frozenset[JobState] = frozenset({JobState.COMPLETED, JobState.CANCELLED})
 
+#: States in which a run has stopped executing and will not resume on its own.
+#: ``finished_at`` is stamped when one of these is entered: a refused run is
+#: finished *for execution* even though a teacher still has to approve it.
+#: Leaving the timestamp NULL there made the API report a run that had already
+#: stopped as still running, and dated a completed marking to its previous
+#: attempt after a retry.
+EXECUTION_FINISHED_STATES: frozenset[JobState] = frozenset(
+    {
+        JobState.REVIEW_REQUIRED,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    }
+)
+
 #: States a worker may claim.  ``RETRY_SUSPENDED`` is intentionally absent:
 #: resuming a parked job is an explicit operator action.
 RUNNABLE_STATES: frozenset[JobState] = frozenset(

@@ -10,11 +10,13 @@ from app.core.config import get_settings
 from app.core.security import Principal
 from app.correction.aetrix.pipeline import AetrixPipeline
 from app.correction.processing import STATUS_TO_STATE, ensure_consistent
+from app.correction.scheme_criteria import criteria_rules_hash
 from app.db.models import (
     CorrectionJob,
     CriterionResult,
     Document,
     DocumentPage,
+    MarkingCriterion,
     QuestionResult,
     VerificationResult,
 )
@@ -28,26 +30,76 @@ from sqlalchemy import event, func, select
 
 from tests.support import FakeProvider, make_png
 
+
+def _per_question():
+    """These pin the per-question engine; whole paper is the product default.
+
+    The blind second reading is stated as off here, as the sibling pipeline suite
+    does: these stubs answer a marking request, and a test that is not about the
+    reading stage must not be made to interpret a reply that was never a
+    transcription.  A test about that stage enables it explicitly.
+    """
+
+    base = get_settings()
+    marking = base.marking.model_copy(
+        update={
+            "marking_mode": "PER_QUESTION",
+            "transcription_enabled": False,
+            # The evidence gate is stated rather than inherited: this suite is
+            # about persistence and recovery, and a fixture that buys no blind
+            # reading would otherwise turn every award into a review item.  The
+            # gate's own tests live in the sibling pipeline suite.
+            "require_evidence_for_award": False,
+        }
+    )
+    return base.model_copy(update={"marking": marking})
+
 # The fixture blueprint has three scoreable leaves: 1a (2), 1b (3), 2 (5).
 LEAVES = {"1a": 2, "1b": 3, "2": 5}
 
 
+#: The fixture scheme's printed mark points per scoreable leaf.  A reply names the
+#: codes it was given; claiming a whole leaf on one code would say that a mark
+#: point is worth more than the scheme printed for it, which the verifier reports.
+PRINTED = {
+    "1a": (("M1", 1), ("A1", 1)),
+    "1b": (("M1", 1), ("M2", 1), ("A1", 1)),
+    "2": (("M1", 2), ("A1", 3)),
+}
+
+
 def _payload(question_id: str, *, awarded: int, confidence: float = 0.95) -> str:
+    components = []
+    remaining = awarded
+    for code, printed in PRINTED[question_id]:
+        credit = max(0, min(printed, remaining))
+        remaining -= credit
+        components.append(
+            {
+                "code": code,
+                "description": f"{code} for the printed step",
+                "marks": printed,
+                "awarded": credit == printed,
+                "reason": "Matches the scheme." if credit else "No response seen.",
+                "evidence": "x = 3" if credit else None,
+                # The reply contract asks for the page the quotation is on; a
+                # quotation with no page is refused as unlocatable.
+                "page": 1,
+            }
+        )
+    if remaining:
+        # A deliberately over-claimed reply keeps its arithmetic: the extra marks
+        # are claimed on the last code, so the reply contradicts the maximum.
+        components[-1]["marks"] += remaining
+        components[-1]["awarded"] = True
+        components[-1]["reason"] = "Claims more than the scheme prints."
+        components[-1]["evidence"] = "x = 3"
     return json.dumps(
         {
             "question_id": question_id,
             "student_answer": "x = 3",
             "awarded_marks": awarded,
-            "components": [
-                {
-                    "code": "A1",
-                    "description": "Correct final answer",
-                    "marks": awarded,
-                    "awarded": awarded > 0,
-                    "reason": "Matches the scheme." if awarded > 0 else "No response seen.",
-                    "evidence": "x = 3" if awarded > 0 else None,
-                }
-            ],
+            "components": components,
             "confidence": confidence,
         }
     )
@@ -94,7 +146,7 @@ class CancellingProvider(ScriptedProvider):
 
 
 def _setup(paper, identity, db_session, storage):
-    job = JobService(db_session, get_settings()).create(
+    job = JobService(db_session, _per_question()).create(
         Principal(
             user_id=identity.user_a.id,
             tenant_id=identity.tenant_a.id,
@@ -162,7 +214,7 @@ def test_a_full_run_persists_one_mark_per_leaf_question(
     provider = ScriptedProvider(_full_script())
 
     outcome = AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     assert outcome.state is JobState.FINALIZING
@@ -174,7 +226,9 @@ def test_a_full_run_persists_one_mark_per_leaf_question(
     assert all(row.max_marks == LEAVES[row.question_id] for row in marks)
     assert len(provider.requests) == 3
 
-    assert db_session.scalar(select(func.count()).select_from(CriterionResult)) == 3
+    # One criterion result per printed component the reply claimed: 1a has two
+    # (M1, A1), 1b three (M1, M2, A1) and 2 two (M1, A1).
+    assert db_session.scalar(select(func.count()).select_from(CriterionResult)) == 7
     assert db_session.scalar(select(func.count()).select_from(VerificationResult)) == 3
 
 
@@ -192,7 +246,7 @@ def test_the_maximum_mark_is_never_exceeded_or_clamped(
     )
 
     outcome = AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     assert outcome.state is JobState.REVIEW_REQUIRED
@@ -208,7 +262,7 @@ def test_low_confidence_requires_review_rather_than_a_zero(
 ) -> None:
     storage = LocalStorage(tmp_path / "store")
     job = _setup(paper, identity, db_session, storage)
-    floor = get_settings().marking.min_confidence
+    floor = _per_question().marking.min_confidence
     provider = ScriptedProvider(
         {
             "1a": _payload("1a", awarded=2),
@@ -218,7 +272,7 @@ def test_low_confidence_requires_review_rather_than_a_zero(
     )
 
     outcome = AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     assert outcome.state is JobState.REVIEW_REQUIRED
@@ -243,7 +297,7 @@ def test_a_malformed_response_is_a_typed_review_item(
     )
 
     outcome = AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     assert outcome.state is JobState.REVIEW_REQUIRED
@@ -263,15 +317,16 @@ def test_a_repeat_run_reuses_committed_marks_without_calling_the_model_again(
     provider = ScriptedProvider(_full_script())
     pipeline = AetrixPipeline(provider=provider, storage=storage)
 
-    first = pipeline.run(job, db_session, get_settings())
+    first = pipeline.run(job, db_session, _per_question())
     calls_after_first = len(provider.requests)
-    second = pipeline.run(job, db_session, get_settings())
+    second = pipeline.run(job, db_session, _per_question())
 
     assert first.state is JobState.FINALIZING
     assert second.state is JobState.FINALIZING
     assert len(provider.requests) == calls_after_first == 3
     assert len(_all_marks(db_session, job)) == 3
-    assert db_session.scalar(select(func.count()).select_from(CriterionResult)) == 3
+    # The second run neither re-asks nor duplicates what the first one stored.
+    assert db_session.scalar(select(func.count()).select_from(CriterionResult)) == 7
 
 
 def test_a_cancelled_job_leaves_no_partial_results(
@@ -282,7 +337,7 @@ def test_a_cancelled_job_leaves_no_partial_results(
     provider = CancellingProvider(_full_script(), session_factory, job.id)
 
     outcome = AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     assert outcome.state is JobState.CANCELLED
@@ -301,7 +356,7 @@ def test_a_cancel_requested_before_marking_does_no_work(
     provider = ScriptedProvider(_full_script())
 
     outcome = AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     assert outcome.state is JobState.CANCELLED
@@ -322,7 +377,7 @@ def test_an_unreadable_submission_is_reviewed_not_zeroed(
     provider = ScriptedProvider(_full_script())
 
     outcome = AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     assert outcome.state is JobState.REVIEW_REQUIRED
@@ -356,7 +411,7 @@ def test_a_provider_failure_never_becomes_a_zero(
 
     with pytest.raises(RetryablePipelineError):
         AetrixPipeline(provider=provider, storage=storage).run(
-            job, db_session, get_settings()
+            job, db_session, _per_question()
         )
 
     assert provider.requests, "the failure must have come from the model call"
@@ -378,7 +433,7 @@ def test_a_failed_run_never_persists_a_confirmed_zero(
 
     with pytest.raises(RetryablePipelineError):
         AetrixPipeline(provider=provider, storage=storage).run(
-            job, db_session, get_settings()
+            job, db_session, _per_question()
         )
 
     db_session.expire_all()
@@ -403,7 +458,7 @@ def test_every_persisted_state_agrees_with_its_status(
     provider = ScriptedProvider({**_full_script(), "2": _payload("2", awarded=0)})
 
     AetrixPipeline(provider=provider, storage=storage).run(
-        job, db_session, get_settings()
+        job, db_session, _per_question()
     )
 
     rows = {row.question_id: row for row in _all_marks(db_session, job)}
@@ -437,7 +492,7 @@ def test_the_state_is_written_in_the_same_insert_as_the_status(
     event.listen(bind, "before_cursor_execute", capture)
     try:
         AetrixPipeline(provider=provider, storage=storage).run(
-            job, db_session, get_settings()
+            job, db_session, _per_question()
         )
     finally:
         event.remove(bind, "before_cursor_execute", capture)
@@ -447,3 +502,76 @@ def test_the_state_is_written_in_the_same_insert_as_the_status(
         assert params["status"] in STATUS_TO_STATE
         assert params["processing_state"] == STATUS_TO_STATE[params["status"]]
         assert params["engine_version"] == "5.5.0"
+
+
+def test_a_mixed_route_award_is_reviewed_at_runtime(
+    paper, identity, db_session, provider_credential, tmp_path
+) -> None:
+    """``replaces`` is enforced while marking, not only when a scheme is imported.
+
+    The stored criteria are rewritten to add a documented two-mark route on Q1b
+    that replaces both method marks, and the approval digest is recomputed so the
+    readiness gate accepts them.  A reply that earns the route *and* a method mark
+    it replaces must reach the row as a contradiction, with the award kept.
+    """
+
+    storage = LocalStorage(tmp_path / "store")
+    criteria = list(
+        db_session.scalars(
+            select(MarkingCriterion).where(
+                MarkingCriterion.scheme_version_id == paper.scheme_version.id
+            )
+        )
+    )
+    host = next(
+        row for row in criteria if row.question_id == "1b" and row.code == "M1"
+    )
+    host.alternatives = [
+        {
+            "code": "M3",
+            "marks": 2,
+            "rule": "one-stage expansion replacing both method marks",
+            "replaces": ["M1", "M2"],
+        }
+    ]
+    paper.scheme_version.criteria_rules_hash = criteria_rules_hash(
+        criteria, paper.blueprint.structure
+    )
+    db_session.commit()
+
+    job = _setup(paper, identity, db_session, storage)
+    payload = json.loads(_payload("1b", awarded=3))
+    payload["components"] = [
+        {
+            "code": "M1",
+            "description": "printed step",
+            "marks": 1,
+            "awarded": True,
+            "reason": "Matches the scheme.",
+            "evidence": "2x + 3",
+            "page": 1,
+        },
+        {
+            "code": "M3",
+            "description": "one-stage expansion",
+            "marks": 2,
+            "awarded": True,
+            "reason": "Matches the scheme.",
+            "evidence": "all eight terms in one stage",
+            "page": 1,
+        },
+    ]
+    payload["awarded_marks"] = 3
+    provider = ScriptedProvider({**_full_script(), "1b": json.dumps(payload)})
+
+    AetrixPipeline(provider=provider, storage=storage).run(
+        job, db_session, _per_question()
+    )
+
+    row = {mark.question_id: mark for mark in _all_marks(db_session, job)}["1b"]
+    messages = [concern["message"] for concern in row.scheme_concerns]
+    assert any(message.startswith("ROUTE_CONFLICT") for message in messages), messages
+    assert row.review_required is True
+    assert row.status == "REVIEW_REQUIRED"
+    # The award is kept for a person to decide; it is not clamped or rewritten.
+    assert row.awarded_marks == 3

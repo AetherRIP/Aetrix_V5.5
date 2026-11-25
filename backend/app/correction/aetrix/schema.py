@@ -10,9 +10,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from ...providers.json import parse_json_text
+from ..bbox import check_bbox
 
 MARKING_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -26,11 +34,14 @@ MARKING_RESPONSE_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "code": {"type": "string"},
+                    "reference": {"type": ["string", "null"]},
                     "description": {"type": "string"},
                     "marks": {"type": "integer", "minimum": 0},
                     "awarded": {"type": "boolean"},
                     "reason": {"type": ["string", "null"]},
                     "evidence": {"type": ["string", "null"]},
+                    "page": {"type": ["integer", "null"]},
+                    "bbox": {"type": "array", "items": {"type": "number"}},
                 },
                 "required": ["code", "marks", "awarded"],
             },
@@ -89,11 +100,25 @@ class MarkComponent(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     code: str = Field(min_length=1, max_length=20)
+    #: The stable identity of the mark point the reply means (``M1#2``).  The
+    #: prompt prints one for every approved criterion; a reply that omits it
+    #: names a code only, which is enough exactly when one point carries it.
+    reference: str | None = Field(default=None, max_length=40)
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_CHARS)
     marks: int = Field(ge=0, le=AWARD_RESPONSE_CEILING)
     awarded: bool = False
     reason: str | None = Field(default=None, max_length=MAX_REASON_CHARS)
     evidence: str | None = Field(default=None, max_length=MAX_EVIDENCE_CHARS)
+    #: The page of the original student document the quotation is written on.
+    #: ``None`` means the reply did not say, which is recorded as unlocated.
+    page: int | None = Field(default=None, ge=0, le=5000)
+    #: A bounding box in normalised page coordinates, when the extraction
+    #: process produces one.  A malformed box is dropped and reported, never
+    #: repaired.
+    bbox: Any = None
+    #: Set by validation when a box arrived but could not be read.  It is stored
+    #: with the concern so a person knows the reply tried to place the evidence.
+    bbox_invalid: str | None = Field(default=None, exclude=True)
 
     @field_validator("code")
     @classmethod
@@ -102,6 +127,34 @@ class MarkComponent(BaseModel):
         if not value:
             raise ValueError("a component code cannot be blank")
         return value
+
+    @model_validator(mode="after")
+    def _read_identity(self) -> MarkComponent:
+        """Accept the reference in either field, and keep the code clean.
+
+        A model asked for ``code`` and ``reference`` sometimes writes
+        ``M1#2`` into ``code`` and omits the second field.  That is the same
+        statement, so it is read the same way rather than rejected; the mark
+        point itself is never guessed.
+        """
+
+        code = self.code.strip()
+        tail: str | None = None
+        if "#" in code:
+            base, _, position = code.partition("#")
+            if position.strip().isdigit() and int(position) >= 1:
+                code, tail = base.strip(), f"{base.strip().upper()}#{int(position)}"
+        self.code = code
+        reference = (self.reference or "").strip() or None
+        if reference and "#" in reference:
+            base, _, position = reference.partition("#")
+            if position.strip().isdigit() and int(position) >= 1:
+                reference = f"{base.strip().upper()}#{int(position)}"
+        self.reference = reference or tail
+        box, problem = check_bbox(self.bbox)
+        self.bbox = box
+        self.bbox_invalid = problem
+        return self
 
     @field_validator("description", "reason", "evidence", mode="before")
     @classmethod
@@ -214,13 +267,17 @@ def _disambiguate_component_codes(components: list[MarkComponent]) -> None:
     marked.  Each repeat is renamed deterministically (``M1``, ``M1-2``) so the
     components, their awards and their evidence are kept exactly as stated;
     only the label that collided changes.
+
+    A component that names its mark point explicitly (``M1#2``) is left alone:
+    the reference already distinguishes it, and renaming it would put a label
+    on the row that the scheme does not print.
     """
 
     seen: dict[str, int] = {}
     for component in components:
         base = component.code
         seen[base] = seen.get(base, 0) + 1
-        if seen[base] == 1:
+        if seen[base] == 1 or component.reference:
             continue
         suffix = f"-{seen[base]}"
         component.code = f"{base[: 20 - len(suffix)]}{suffix}"

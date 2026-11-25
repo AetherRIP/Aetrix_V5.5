@@ -86,11 +86,13 @@ from alembic.config import Config
 from app.core.config import get_settings
 from app.core.ids import content_hash, utcnow
 from app.core.security import SecretBox, fingerprint
+from app.correction.scheme_criteria import criteria_rules_hash
 from app.db.base import Base
 from app.db.models import (
     Assignment,
     Exam,
     ExamBlueprintVersion,
+    MarkingCriterion,
     MarkScheme,
     MarkSchemeVersion,
     ProviderCredential,
@@ -127,6 +129,32 @@ BLUEPRINT_STRUCTURE = {
 }
 
 
+#: Supabase defines these roles; a bare PostgreSQL cluster does not, and the
+#: migrations revoke from them.  CI creates them before migrating (see
+#: ``.github/workflows/ci.yml``); the suite does the same so a disposable
+#: cluster needs no undocumented manual step.
+_SUPABASE_ROLES = ("anon", "authenticated")
+
+
+def _ensure_supabase_roles(dsn: str) -> None:
+    """Create the roles the RLS migrations revoke from, if they are missing."""
+
+    role_engine = create_engine(dsn)
+    try:
+        with role_engine.begin() as connection:
+            for role in _SUPABASE_ROLES:
+                present = connection.execute(
+                    text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}
+                ).scalar()
+                if present:
+                    continue
+                # A role name cannot be a bound parameter; the names are a
+                # module constant, never input.
+                connection.execute(text(f'CREATE ROLE "{role}" NOLOGIN NOINHERIT'))
+    finally:
+        role_engine.dispose()
+
+
 #: Only fixtures that actually need PostgreSQL request ``engine``, which in turn
 #: requests this. Pure unit tests therefore never run migrations or open a
 #: connection, while every integration test still migrates to head first.
@@ -134,6 +162,7 @@ BLUEPRINT_STRUCTURE = {
 def migrated_database() -> None:
     dsn = get_settings().database.dsn()
     _refuse_non_loopback(dsn)
+    _ensure_supabase_roles(dsn)
     config = Config(str(BACKEND / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND / "migrations"))
     config.set_main_option("sqlalchemy.url", dsn.replace("%", "%%"))
@@ -305,6 +334,9 @@ def paper(db_session, identity):
     scheme = MarkScheme(tenant_id=identity.tenant_a.id, exam_id=exam.id, title="Fixture scheme")
     db_session.add(scheme)
     db_session.flush()
+    # The criteria review trail is part of the fixture because marking refuses to
+    # start without it: imported rows are inert until a person approves them
+    # against the blueprint the job marks.
     scheme_version = MarkSchemeVersion(
         tenant_id=identity.tenant_a.id,
         mark_scheme_id=scheme.id,
@@ -313,8 +345,46 @@ def paper(db_session, identity):
         source="FIXTURE",
         content_hash="a" * 64,
         approved_at=utcnow(),
+        criteria_blueprint_version_id=blueprint.id,
+        criteria_approved_at=utcnow(),
+        criteria_approved_by=identity.user_a.id,
+        criteria_approval_reason="fixture",
     )
     db_session.add(scheme_version)
+    db_session.flush()
+
+    # One criterion per printed mark point, summing to each leaf's marks.
+    criteria_rows: list[MarkingCriterion] = []
+    for question_id, code, ordinal, marks, description in (
+        ("1a", "M1", 0, 1, "M1 for forming the equation"),
+        ("1a", "A1", 1, 1, "A1 for the correct value of x"),
+        ("1b", "M1", 0, 1, "M1 for expressing one unknown in terms of the other"),
+        ("1b", "M2", 1, 1, "M2 for eliminating one unknown"),
+        ("1b", "A1", 2, 1, "A1 for both values"),
+        ("2", "M1", 0, 2, "M1 for a correct method"),
+        ("2", "A1", 1, 3, "A1 for the completed working"),
+    ):
+        criteria_rows.append(
+            MarkingCriterion(
+                tenant_id=identity.tenant_a.id,
+                scheme_version_id=scheme_version.id,
+                blueprint_version_id=blueprint.id,
+                question_id=question_id,
+                code=code,
+                ordinal=ordinal,
+                marks=marks,
+                description=description,
+                dependencies=[],
+                alternatives=[],
+                source_ref={},
+            )
+        )
+    db_session.add_all(criteria_rows)
+    db_session.flush()
+    # The approval records the rules it covered; the marking gate recomputes this
+    # digest from the stored rows, so a fixture whose rows and approval disagree
+    # would be refused before a request is made.
+    scheme_version.criteria_rules_hash = criteria_rules_hash(criteria_rows, BLUEPRINT_STRUCTURE)
     db_session.flush()
 
     assignment = Assignment(

@@ -32,6 +32,7 @@ from ..db.repositories import (
 )
 from ..schemas.api import AssignmentCreate, ExamCreate, SubmissionCreate
 from ..schemas.blueprint import BlueprintPut, BlueprintStructure
+from .scheme_criteria import readiness_of_assignment
 
 
 def structure_hash(structure: BlueprintStructure) -> str:
@@ -241,10 +242,43 @@ class AssignmentService:
         scheme = self.schemes.get_version(principal.tenant_id, payload.scheme_version_id)
         if scheme is None:
             raise AppError(ErrorCode.NOT_FOUND, "Mark-scheme version not found.")
+        # A scheme belongs to one paper.  Attaching a scheme from another exam
+        # would pair marks for one paper with questions from another, and the
+        # criteria check below could never be satisfied anyway.
+        scheme_record = self.schemes.get_scheme(principal.tenant_id, scheme.mark_scheme_id)
+        if scheme_record is None or scheme_record.exam_id != payload.exam_id:
+            raise AppError(
+                ErrorCode.NOT_FOUND,
+                "Mark-scheme version not found for this exam.",
+            )
         if scheme.status != "APPROVED":
             raise AppError(
                 ErrorCode.ASSIGNMENT_NOT_READY,
                 "The assignment requires an approved mark-scheme version.",
+            )
+        # Approved status is about the uploaded document.  Marking needs the
+        # scheme's own mark points, reviewed against this exact blueprint: a
+        # scheme approved but never transcribed must not produce an assignment
+        # that can only fail at marking time.
+        readiness = readiness_of_assignment(
+            self.session,
+            tenant_id=principal.tenant_id,
+            blueprint_version_id=blueprint.id,
+            scheme_version_id=scheme.id,
+        )
+        if not readiness.ready:
+            raise AppError(
+                ErrorCode.ASSIGNMENT_NOT_READY,
+                "This assignment could not be marked: the mark scheme has no "
+                "approved criteria for this blueprint. Transcribe the scheme's "
+                "criteria, review them, and approve them against this blueprint "
+                "version first.",
+                details={
+                    "reason": readiness.reason,
+                    "problems": list(readiness.problems)[:10],
+                    "blueprint_version_id": str(blueprint.id),
+                    "scheme_version_id": str(scheme.id),
+                },
             )
         assignment = self.assignments.create(
             tenant_id=principal.tenant_id,

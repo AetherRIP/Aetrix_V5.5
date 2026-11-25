@@ -21,6 +21,10 @@ from typing import Any
 #: that a whole paper stays a reasonable row size.
 RAW_RESPONSE_LIMIT = 32_768
 
+#: A whole-paper reply is archived once and belongs to every question it marked,
+#: so it is not sliced per row; 256 KiB holds 39 bounded items with room to spare.
+PROVIDER_RESPONSE_LIMIT = 262_144
+
 #: Why a stored mark differs from what the model returned.
 OVER_MAX_AWARD = "OVER_MAX_AWARD"
 MODEL_RESPONSE_INVALID = "MODEL_RESPONSE_INVALID"
@@ -36,18 +40,33 @@ class CapturedResponse:
 
 
 def capture_raw_response(text: str | None) -> CapturedResponse:
-    """Store the model's reply as faithfully as JSON allows.
+    """Store one question's model reply as faithfully as JSON allows.
 
     A reply that parses is stored as the parsed document.  A reply that does not
     is stored as text under a stated format, so an unusable response is still
     inspectable instead of being reduced to an error string.
     """
 
+    return _capture(text, RAW_RESPONSE_LIMIT)
+
+
+def capture_provider_response(text: str | None) -> CapturedResponse:
+    """Store a complete provider reply, whole-paper sized.
+
+    The per-question cap is deliberately small; a paper reply carries every
+    question at once, and clipping it at the per-question limit would archive a
+    document that no longer explains the rows it belongs to.
+    """
+
+    return _capture(text, PROVIDER_RESPONSE_LIMIT)
+
+
+def _capture(text: str | None, limit: int) -> CapturedResponse:
     raw = text or ""
     if not raw.strip():
         return CapturedResponse(value=None, truncated=False)
-    truncated = len(raw) > RAW_RESPONSE_LIMIT
-    clipped = raw[:RAW_RESPONSE_LIMIT]
+    truncated = len(raw) > limit
+    clipped = raw[:limit]
     if truncated:
         return CapturedResponse(
             value={"format": "TEXT_TRUNCATED", "text": clipped}, truncated=True
