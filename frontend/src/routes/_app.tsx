@@ -141,6 +141,12 @@ function pageMeta(pathname: string): PageMeta {
       eyebrow: 'Platform',
       description: 'Append-only record of privileged actions across the platform.',
     },
+    '/platform/classroom': {
+      title: 'Google Classroom',
+      eyebrow: 'Platform · integration',
+      description:
+        'The single central Google account, the courses it can see, and what each synchronization achieved.',
+    },
     '/platform/gemini': {
       title: 'Gemini fleet',
       eyebrow: 'Platform · providers',

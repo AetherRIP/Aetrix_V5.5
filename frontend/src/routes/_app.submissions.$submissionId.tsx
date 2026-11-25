@@ -9,6 +9,7 @@ import type {
   JobResults,
   PageMeta,
   QuestionResult,
+  ReportDetail,
   QuestionVerification,
   ReviewDecision,
   Submission,
@@ -538,6 +539,9 @@ function SubmissionReview() {
   const [recoveryReason, setRecoveryReason] = useState('')
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const [recovering, setRecovering] = useState(false)
+  const [reportDetail, setReportDetail] = useState<ReportDetail>('standard')
+  const [reportBusy, setReportBusy] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
 
   const [submissionState] = useResource<Submission>(
     submissionId,
@@ -660,6 +664,40 @@ function SubmissionReview() {
     } else {
       setRecoveryError(response.reason)
     }
+  }
+
+  /**
+   * The report is a PDF rendered by the engine from these stored results, so
+   * it is fetched with the session token and handed to the browser as a blob.
+   * "Open" shows it in a tab; "Download" saves the same bytes.
+   */
+  async function openReport(mode: 'view' | 'download') {
+    if (!session.token || reportBusy) return
+    setReportBusy(true)
+    setReportError(null)
+    const response = await submissionService.report(submissionId, reportDetail, {
+      token: session.token,
+    })
+    setReportBusy(false)
+    if (response.status !== 'ok') {
+      setReportError(
+        response.status === 'error'
+          ? response.reason
+          : 'The engine is not serving the report in this revision.',
+      )
+      return
+    }
+    const url = URL.createObjectURL(response.data)
+    if (mode === 'view') {
+      window.open(url, '_blank', 'noopener')
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      return
+    }
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `aetrix-report-${reportDetail}.pdf`
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -934,6 +972,58 @@ function SubmissionReview() {
                   ) : null}
                 </div>
                 {approvalError ? <p className="app-form__error">{approvalError}</p> : null}
+              </section>
+
+              <section
+                className="rd-pane"
+                style={{ '--i': 3 } as CSSProperties}
+                aria-label="Student report"
+              >
+                <div className="rd-pane__head">
+                  <h2 className="rd-pane__title">Student report</h2>
+                  <span className="rd-pane__note mono">PDF</span>
+                </div>
+                <p className="app-card__body">
+                  The report is rendered from these stored results.{
+                    results.totals.approved
+                      ? ' This result is approved, and the report states the approver.'
+                      : ' Nothing is approved yet, so the report is printed as a draft.'
+                  }
+                </p>
+                <div className="app-inline-actions">
+                  <label className="app-hint" htmlFor="report-detail">
+                    Detail
+                  </label>
+                  <select
+                    id="report-detail"
+                    className="app-input app-input--narrow"
+                    value={reportDetail}
+                    onChange={(event) => setReportDetail(event.target.value as ReportDetail)}
+                    disabled={reportBusy}
+                    aria-label="How much of the report to print"
+                  >
+                    <option value="summary">Summary</option>
+                    <option value="standard">Standard</option>
+                    <option value="detailed">Detailed</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn--small btn--outline"
+                    disabled={reportBusy}
+                    onClick={() => void openReport('view')}
+                  >
+                    {reportBusy ? 'Rendering…' : 'Open report'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--small btn--primary"
+                    disabled={reportBusy}
+                    onClick={() => void openReport('download')}
+                  >
+                    Download PDF
+                  </button>
+                </div>
+                {reportError ? <p className="app-form__error">{reportError}</p> : null}
               </section>
 
               <div className="rd-body">

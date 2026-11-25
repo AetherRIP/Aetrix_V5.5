@@ -27,6 +27,12 @@ export type Me = {
   role: EngineRole
   ui_role: UiRole
   capabilities: string[]
+  /**
+   * Platform authority from the verified claim — a different fact from the
+   * workspace role. Only a PLATFORM_OWNER carries the `platform_admin`
+   * capability, so a platform administrator is recognisable only here.
+   */
+  is_platform_admin?: boolean
   is_demo: boolean
 }
 
@@ -94,6 +100,13 @@ export type Assignment = {
   review_mode: 'ECONOMY' | 'BALANCED' | 'ACCURACY'
   created_at: string
 }
+
+/**
+ * How much of the individual-student report to render. `summary` stops after
+ * the overview, `standard` adds the question breakdown, `detailed` adds the
+ * student's work and the approved scheme for every question.
+ */
+export type ReportDetail = 'summary' | 'standard' | 'detailed'
 
 export type Submission = {
   id: string
@@ -292,6 +305,18 @@ export type SchemeCriterion = {
   source_page: number | null
   source_quote: string | null
   blueprint_version_id: string | null
+}
+
+export type SchemeCriteriaExtraction = {
+  version: SchemeVersion
+  criteria: SchemeCriterion[]
+  coverage: {
+    complete: boolean
+    questions: number
+    total_expected: number
+    total_criteria: number
+    problems: string[]
+  }
 }
 
 export type SchemeUpload = {

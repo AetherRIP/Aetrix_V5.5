@@ -1,18 +1,30 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { StatePanel, StatusChip } from '../components/app/StatePanel'
-import { CapabilityList, Panel, StepList } from '../components/app/PageBlocks'
+import { Panel } from '../components/app/PageBlocks'
 import { useEngineSession } from '../lib/api/session'
 import { useAuth } from '../lib/auth/AuthProvider'
 import {
-  classroomConnection,
-  disconnectClassroom,
-  startClassroomOAuth,
-  syncClassroom,
-  type ClassroomConnection,
-  type ClassroomSyncResult,
+  approveSubmission,
+  classroomRoster,
+  courseworkSubmissions,
+  createCoursework,
+  ingestSubmission,
+  listCoursework,
+  publishCoursework,
+  publishSubmissionGrade,
+  submissionReview,
+  syncClassroomRoster,
+  syncCourseworkSubmissions,
+  startSubmissionCorrection,
+  workspaceAssignments,
+  workspaceCourses,
+  type Coursework,
+  type RosterEntry,
+  type Submission,
+  type TeacherCourse,
+  type WorkspaceAssignment,
 } from '../lib/api/classroom'
-import { workspaceAllocations, type WorkspaceAllocation } from '../lib/api/allocations'
 import { useResource } from '../lib/api/useResource'
 
 export const Route = createFileRoute('/_app/classroom')({
@@ -20,9 +32,6 @@ export const Route = createFileRoute('/_app/classroom')({
 })
 
 type Notice = { tone: 'ok' | 'error'; message: string }
-type Busy = 'connect' | 'sync' | 'disconnect' | null
-
-const MANAGER_ROLES = new Set(['OWNER', 'ADMIN', 'PLATFORM_OWNER'])
 
 function formatMoment(value: string | null): string {
   if (!value) return 'never'
@@ -30,104 +39,109 @@ function formatMoment(value: string | null): string {
   return Number.isNaN(parsed.getTime()) ? 'unknown' : parsed.toLocaleString('en-GB')
 }
 
-function statusLabel(status: ClassroomConnection['status']): string {
-  if (status === 'CONNECTED') return 'Connected'
-  if (status === 'RECONNECT_REQUIRED') return 'Reconnect required'
-  return 'Not connected'
-}
-
-function statusTone(
-  status: ClassroomConnection['status'],
-): 'ok' | 'attention' | 'neutral' {
-  if (status === 'CONNECTED') return 'ok'
-  if (status === 'RECONNECT_REQUIRED') return 'attention'
+function stateTone(state: string): 'ok' | 'attention' | 'neutral' {
+  if (state === 'PUBLISHED' || state === 'INGESTED' || state === 'CORRECTED') return 'ok'
+  if (state === 'FAILED' || state === 'INGEST_FAILED' || state === 'CONFLICT') return 'attention'
   return 'neutral'
 }
 
+/**
+ * The teacher's Classroom page.
+ *
+ * Everything here is a workspace-scoped read or an explicitly confirmed action.
+ * No Google credential exists in this browser: the central account performs
+ * every Classroom call on the engine.  A course the platform has not allocated
+ * to this workspace is not listed, and the engine refuses it as nonexistent.
+ */
 function Classroom() {
   const { session } = useAuth()
   const engine = useEngineSession()
   const token = session?.access_token ?? null
   const tenantId = engine.tenantId
-  const canManage =
-    MANAGER_ROLES.has(engine.me?.role ?? '') ||
-    engine.capabilities.includes('workspace.classroom.connect')
 
-  const [connection, reloadConnection] = useResource<ClassroomConnection>(
-    `classroom-connection:${token ?? 'anonymous'}`,
-    token ? (signal) => classroomConnection({ token, signal }) : null,
-  )
-  const [allocations, reloadAllocations] = useResource<WorkspaceAllocation[]>(
-    `classroom-allocations:${tenantId ?? 'none'}:${token ?? 'anonymous'}`,
-    token && tenantId ? (signal) => workspaceAllocations(tenantId, { token, signal }) : null,
-  )
-  const [syncResult, setSyncResult] = useState<ClassroomSyncResult | null>(null)
+  const [courseId, setCourseId] = useState<string | null>(null)
+  const [courseworkId, setCourseworkId] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
-  const [busy, setBusy] = useState<Busy>(null)
-  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
 
-  const refresh = useCallback(() => {
-    reloadConnection()
-    reloadAllocations()
-  }, [reloadAllocations, reloadConnection])
+  const [courses, reloadCourses] = useResource<TeacherCourse[]>(
+    `classroom-courses:${tenantId ?? 'none'}:${token ?? 'anonymous'}`,
+    token && tenantId ? (signal) => workspaceCourses(tenantId, { token, signal }) : null,
+  )
 
-  const connect = async () => {
-    if (!token) return
-    setBusy('connect')
-    setNotice(null)
-    const result = await startClassroomOAuth({ token })
-    if (result.status === 'ok') {
-      // Google must show its own consent screen; the engine never proxies it.
-      window.location.assign(result.data.authorization_url)
-      return
+  const [assignments] = useResource<WorkspaceAssignment[]>(
+    `classroom-assignments:${tenantId ?? 'none'}:${token ?? 'anonymous'}`,
+    token && tenantId ? (signal) => workspaceAssignments(tenantId, { token, signal }) : null,
+  )
+
+  const [roster, reloadRoster] = useResource<RosterEntry[]>(
+    `classroom-roster:${tenantId ?? 'none'}:${courseId ?? 'none'}:${token ?? 'anonymous'}`,
+    token && tenantId && courseId
+      ? (signal) => classroomRoster(tenantId, courseId, { token, signal })
+      : null,
+  )
+
+  const [coursework, reloadCoursework] = useResource<Coursework[]>(
+    `classroom-coursework:${tenantId ?? 'none'}:${token ?? 'anonymous'}`,
+    token && tenantId ? (signal) => listCoursework(tenantId, { token, signal }) : null,
+  )
+
+  const [submissions, reloadSubmissions] = useResource<Submission[]>(
+    `classroom-submissions:${tenantId ?? 'none'}:${courseworkId ?? 'none'}:${token ?? 'anonymous'}`,
+    token && tenantId && courseworkId
+      ? (signal) => courseworkSubmissions(tenantId, courseworkId, { token, signal })
+      : null,
+  )
+
+  const courseList = courses.state === 'ok' ? courses.data : []
+  const courseworkList = coursework.state === 'ok' ? coursework.data : []
+  const selectedCoursework = useMemo(
+    () => courseworkList.find((row) => row.id === courseworkId) ?? null,
+    [courseworkId, courseworkList],
+  )
+
+  useEffect(() => {
+    if (!courseId && courseList.length > 0) setCourseId(courseList[0].course_id)
+  }, [courseId, courseList])
+
+  useEffect(() => {
+    if (
+      selectedCoursework &&
+      courseId &&
+      selectedCoursework.course_id !== courseId
+    ) {
+      setCourseworkId(null)
     }
+  }, [courseId, selectedCoursework])
+
+  const refreshAll = useCallback(() => {
+    reloadCourses()
+    reloadCoursework()
+    reloadRoster()
+    reloadSubmissions()
+  }, [reloadCoursework, reloadCourses, reloadRoster, reloadSubmissions])
+
+  const run = async (key: string, action: () => Promise<{ ok: boolean; message: string }>) => {
+    setBusy(key)
+    setNotice(null)
+    const result = await action()
     setBusy(null)
-    setNotice({ tone: 'error', message: result.reason })
+    setNotice({ tone: result.ok ? 'ok' : 'error', message: result.message })
+    refreshAll()
   }
 
-  const runSync = async () => {
-    if (!token) return
-    setBusy('sync')
-    setNotice(null)
-    const result = await syncClassroom({ token })
-    if (result.status === 'ok') {
-      setSyncResult(result.data)
-      setNotice({
-        tone: 'ok',
-        message: `Google listed ${result.data.counts.discovered} active course${
-          result.data.counts.discovered === 1 ? '' : 's'
-        }: ${result.data.counts.created} new, ${result.data.counts.updated} updated.`,
-      })
-    } else {
-      setNotice({ tone: 'error', message: result.reason })
-    }
-    setBusy(null)
-    refresh()
+  if (!token || !tenantId) {
+    return (
+      <Panel title="Allocated Classroom courses" note="Platform allocated">
+        <StatePanel tone="wip" title="Sign in to use Google Classroom">
+          <p>
+            Classroom actions run against the workspace you are signed in to. Sign in to see
+            the courses allocated to it; allocation itself is a platform decision.
+          </p>
+        </StatePanel>
+      </Panel>
+    )
   }
-
-  const disconnect = async () => {
-    if (!token) return
-    setBusy('disconnect')
-    setNotice(null)
-    const result = await disconnectClassroom({ token })
-    setBusy(null)
-    setConfirming(false)
-    if (result.status === 'ok') {
-      setSyncResult(null)
-      setNotice({
-        tone: 'ok',
-        message: result.data.revoked
-          ? 'Google Classroom was disconnected and Google confirmed the grant was revoked.'
-          : 'Google Classroom was disconnected here. Google did not confirm revocation; remove Aetrix from your Google account if the grant is still listed.',
-      })
-    } else {
-      setNotice({ tone: 'error', message: result.reason })
-    }
-    refresh()
-  }
-
-  const connected = connection.state === 'ok' ? connection.data : null
-  const actionsLocked = busy !== null
 
   return (
     <div className="app-stack">
@@ -137,242 +151,47 @@ function Classroom() {
         </div>
       ) : null}
 
-      <Panel title="Connection" note="Optional · read-only course access">
-        {connection.state === 'loading' ? (
-          <p className="panel-copy">Reading the Classroom connection…</p>
-        ) : connection.state === 'ok' ? (
-          connected ? (
-            <>
-              <div className="app-inline-actions">
-                <StatusChip tone={statusTone(connected.status)}>
-                  {statusLabel(connected.status)}
-                </StatusChip>
-                <span className="gem-footnote">
-                  {connected.configured
-                    ? `Authorised ${formatMoment(connected.connected_at)}`
-                    : 'OAuth client not configured on this deployment'}
-                </span>
-              </div>
-
-              {!connected.configured ? (
-                <p className="panel-copy">
-                  This engine has no Google OAuth client, so Classroom cannot be connected.
-                  Set <code>AETRIX_CLASSROOM__CLIENT_ID</code>,{' '}
-                  <code>AETRIX_CLASSROOM__CLIENT_SECRET</code> and{' '}
-                  <code>AETRIX_CLASSROOM__REDIRECT_URI</code>; until then the connection
-                  routes report CLASSROOM_NOT_CONFIGURED rather than showing a fake account.
-                </p>
-              ) : connected.status === 'NOT_CONNECTED' ? (
-                <p className="panel-copy">
-                  No Google Classroom authorisation is stored for this workspace. Connecting
-                  asks Google for read-only access to the teacher’s course list; it does not
-                  read coursework, submissions, students or grades.
-                </p>
-              ) : connected.status === 'RECONNECT_REQUIRED' ? (
-                <p className="panel-copy">
-                  Google rejected the stored authorisation, so its tokens were deleted.{' '}
-                  {connected.last_error_message ?? 'Connect Classroom again to read courses.'}
-                </p>
-              ) : (
-                <p className="panel-copy">
-                  The workspace authorisation is stored encrypted by the engine. Google does
-                  not expose a token to the browser and no screen can read one back.
-                </p>
-              )}
-
-              {connected.status !== 'NOT_CONNECTED' ? (
-                <ul className="panel-copy">
-                  <li>Connected by: {connected.connected_by_subject ?? 'unknown'}</li>
-                  <li>Granted scopes: {connected.granted_scopes.join(', ') || 'none reported'}</li>
-                  <li>Last course sync: {formatMoment(connected.last_synced_at)}</li>
-                  {connected.last_sync_status ? (
-                    <li>
-                      Last sync outcome: {connected.last_sync_status}
-                      {connected.last_sync_status === 'SUCCEEDED'
-                        ? ` (${connected.last_sync_counts.discovered ?? 0} discovered, ${
-                            connected.last_sync_counts.created ?? 0
-                          } new, ${connected.last_sync_counts.updated ?? 0} updated)`
-                        : ' — the connection was kept for another attempt'}
-                    </li>
-                  ) : null}
-                  {connected.last_error_code ? (
-                    <li>
-                      Last error: {connected.last_error_code}
-                      {connected.last_error_message ? ` — ${connected.last_error_message}` : ''}
-                    </li>
-                  ) : null}
-                </ul>
-              ) : null}
-
-              {canManage ? (
-                <div className="app-inline-actions">
-                  {connected.configured &&
-                  (connected.status === 'NOT_CONNECTED' ||
-                    connected.status === 'RECONNECT_REQUIRED') ? (
-                    <button
-                      type="button"
-                      className="btn btn--small btn--primary"
-                      onClick={() => void connect()}
-                      disabled={actionsLocked}
-                    >
-                      {busy === 'connect'
-                        ? 'Opening Google…'
-                        : connected.status === 'RECONNECT_REQUIRED'
-                          ? 'Reconnect Google Classroom'
-                          : 'Connect Google Classroom'}
-                    </button>
-                  ) : null}
-                  {connected.status === 'CONNECTED' ? (
-                    <button
-                      type="button"
-                      className="btn btn--small btn--primary"
-                      onClick={() => void runSync()}
-                      disabled={actionsLocked}
-                    >
-                      {busy === 'sync' ? 'Reading courses…' : 'Sync courses'}
-                    </button>
-                  ) : null}
-                  {connected.status !== 'NOT_CONNECTED' ? (
-                    confirming ? (
-                      <>
-                        <button
-                          type="button"
-                          className="btn btn--small btn--danger"
-                          onClick={() => void disconnect()}
-                          disabled={actionsLocked}
-                        >
-                          {busy === 'disconnect' ? 'Disconnecting…' : 'Confirm disconnect'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn--small"
-                          onClick={() => setConfirming(false)}
-                          disabled={actionsLocked}
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn btn--small"
-                        onClick={() => setConfirming(true)}
-                        disabled={actionsLocked}
-                      >
-                        Disconnect
-                      </button>
-                    )
-                  ) : null}
-                </div>
-              ) : (
-                <p className="panel-copy">
-                  Only a workspace owner or administrator can connect, sync or disconnect
-                  Classroom. You can still read the connection status and the classes allocated
-                  to this workspace.
-                </p>
-              )}
-            </>
-          ) : null
-        ) : (
+      <Panel title="Allocated Classroom courses" note="Assigned by platform administration">
+        {courses.state === 'loading' ? (
+          <p className="panel-copy">Reading this workspace’s courses…</p>
+        ) : courses.state === 'unavailable' || courses.state === 'error' ? (
+          <p className="panel-copy">{courses.reason}</p>
+        ) : courseList.length === 0 ? (
           <p className="panel-copy">
-            {connection.state === 'unavailable' || connection.state === 'error'
-              ? connection.reason
-              : 'The connection status is unavailable.'}
-          </p>
-        )}
-      </Panel>
-
-      {syncResult ? (
-        <Panel
-          title="Courses found by the last sync"
-          note={`${syncResult.counts.discovered} active · ${new Date(
-            syncResult.synced_at,
-          ).toLocaleString('en-GB')}`}
-        >
-          {syncResult.truncated ? (
-            <p className="panel-copy">
-              The configured course ceiling stopped this read before Google ran out. The list
-              below is partial and the sync reports it as truncated rather than complete.
-            </p>
-          ) : null}
-          {syncResult.courses.length === 0 ? (
-            <p className="panel-copy">
-              Google returned no ACTIVE courses for the connected teacher account.
-            </p>
-          ) : (
-            <div className="table-scroll">
-              <table className="data-table">
-                <caption className="visually-hidden">
-                  Courses returned by Google Classroom
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Class</th>
-                    <th scope="col">Course ID</th>
-                    <th scope="col">Section</th>
-                    <th scope="col">Verification</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {syncResult.courses.map((course) => (
-                    <tr key={course.course_id}>
-                      <th scope="row">{course.name}</th>
-                      <td className="mono">{course.course_id}</td>
-                      <td>{course.section ?? '—'}</td>
-                      <td>
-                        <StatusChip tone="ok">VERIFIED</StatusChip>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-      ) : null}
-
-      <Panel title="Allocated classes" note="Read-only; the platform operator assigns these">
-        {allocations.state === 'loading' ? (
-          <p className="panel-copy">Reading this workspace’s allocations…</p>
-        ) : allocations.state === 'unavailable' || allocations.state === 'error' ? (
-          <p className="panel-copy">{allocations.reason}</p>
-        ) : allocations.data.length === 0 ? (
-          <p className="panel-copy">
-            No Google Classroom course is currently allocated to this workspace. Allocation is
-            an operator action; a teacher cannot request or move a course.
+            No Classroom course is allocated to this workspace. Allocation is a platform
+            administrator action; teachers cannot request, move or reassign a course.
           </p>
         ) : (
           <div className="table-scroll">
             <table className="data-table">
-              <caption className="visually-hidden">Classes allocated to this workspace</caption>
+              <caption className="visually-hidden">Classroom courses allocated here</caption>
               <thead>
                 <tr>
                   <th scope="col">Class</th>
                   <th scope="col">Course ID</th>
-                  <th scope="col">Allocated</th>
-                  <th scope="col">Verification</th>
+                  <th scope="col">Students</th>
+                  <th scope="col">Coursework</th>
+                  <th scope="col">Select</th>
                 </tr>
               </thead>
               <tbody>
-                {allocations.data.map((row) => (
-                  <tr key={row.id}>
+                {courseList.map((course) => (
+                  <tr key={course.allocation_id}>
                     <td>
-                      <span className="data-table__strong">{row.class_name}</span>
-                      {row.class_section ? (
-                        <span className="gem-footnote">{row.class_section}</span>
-                      ) : null}
+                      <span className="data-table__strong">{course.name}</span>
+                      {course.section ? <span className="gem-footnote">{course.section}</span> : null}
                     </td>
-                    <td className="mono">{row.course_id}</td>
+                    <td className="mono">{course.course_id}</td>
+                    <td>{course.students}</td>
+                    <td>{course.coursework}</td>
                     <td>
-                      {new Date(row.allocated_at).toLocaleDateString('en-GB')}
-                      <span className="gem-footnote">
-                        {row.allocated_by_label ?? 'platform operator'}
-                      </span>
-                    </td>
-                    <td>
-                      <StatusChip tone={row.verification === 'VERIFIED' ? 'ok' : 'attention'}>
-                        {row.verification}
-                      </StatusChip>
+                      <button
+                        type="button"
+                        className={`btn btn--small ${courseId === course.course_id ? 'btn--primary' : ''}`}
+                        onClick={() => setCourseId(course.course_id)}
+                      >
+                        {courseId === course.course_id ? 'Selected' : 'Select'}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -382,77 +201,646 @@ function Classroom() {
         )}
       </Panel>
 
-      <Panel title="What the connection covers" note="Scopes are exact, not implied">
-        <CapabilityList
-          items={[
-            {
-              label: 'Google Classroom authorisation',
-              detail: connected?.configured
-                ? 'OAuth with the classroom.courses.readonly scope, access_type=offline and prompt=consent; tokens are stored encrypted.'
-                : 'Implemented, but this deployment has no Google OAuth client configured, so authorisation reports CLASSROOM_NOT_CONFIGURED.',
-              state: connected?.configured ? 'available' : 'pending',
-              icon: 'lock',
-            },
-            {
-              label: 'Course discovery',
-              detail:
-                'A sync reads the ACTIVE courses Google lists for the connected teacher and records them VERIFIED with source google_classroom.',
-              state: connected?.configured ? 'available' : 'pending',
-              icon: 'classroom',
-            },
-            {
-              label: 'Roster import',
-              detail:
-                'Not implemented: course discovery does not read students, coursework or submissions.',
-              state: 'pending',
-              icon: 'records',
-            },
-            {
-              label: 'Class allocation',
-              detail:
-                'The platform operator allocates discovered or recorded courses; this workspace can only read them.',
-              state: 'available',
-              icon: 'shield',
-            },
-          ]}
-        />
-      </Panel>
+      {courseId ? (
+        <Panel
+          title="Student roster"
+          note="Matched by Google user id, never by display name"
+        >
+          <div className="app-inline-actions">
+            <button
+              type="button"
+              className="btn btn--small btn--primary"
+              disabled={busy !== null}
+              onClick={() =>
+                void run('roster', async () => {
+                  const result = await syncClassroomRoster(tenantId, courseId, { token })
+                  if (result.status !== 'ok') return { ok: false, message: result.reason }
+                  const counts = result.data.counts
+                  return {
+                    ok: true,
+                    message:
+                      `Roster read: ${counts.discovered ?? 0} discovered, ` +
+                      `${counts.created ?? 0} new, ${counts.matched ?? 0} matched to existing ` +
+                      `students, ${counts.removed ?? 0} marked as left` +
+                      (result.data.problems.length
+                        ? `. ${result.data.problems.length} problem(s): ${result.data.problems[0]}`
+                        : result.data.truncated
+                          ? '. The roster hit the configured ceiling and is partial.'
+                          : '.'),
+                  }
+                })
+              }
+            >
+              {busy === 'roster' ? 'Synchronising roster…' : 'Synchronise roster'}
+            </button>
+          </div>
 
-      <Panel title="How a class reaches this workspace" note="Four steps, one owner each">
-        <StepList
-          steps={[
-            {
-              title: 'The operator allocates the class',
-              body: 'A platform owner or administrator assigns the Classroom course to exactly one workspace.',
-            },
-            {
-              title: 'The workspace connects Classroom',
-              body: 'An owner or administrator authorises read-only course access. Google shows its own consent screen.',
-            },
-            {
-              title: 'The workspace syncs courses',
-              body: 'Every ACTIVE course Google lists is upserted as a VERIFIED platform record, keyed by course id.',
-            },
-            {
-              title: 'Rosters and grades stay separate',
-              body: 'Coursework, student rosters and grade write-back are not part of this integration and are not claimed.',
-            },
-          ]}
-        />
-      </Panel>
+          {roster.state === 'loading' ? (
+            <p className="panel-copy">Reading the synchronized roster…</p>
+          ) : roster.state === 'unavailable' || roster.state === 'error' ? (
+            <p className="panel-copy">{roster.reason}</p>
+          ) : roster.data.length === 0 ? (
+            <p className="panel-copy">
+              No student has been synchronised for this course yet. The roster comes from Google
+              Classroom; matching fills a blank Aetrix name and never overwrites one a teacher
+              maintained.
+            </p>
+          ) : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <caption className="visually-hidden">Students synchronised from Classroom</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Student</th>
+                    <th scope="col">Google name</th>
+                    <th scope="col">Matched by</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Last seen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roster.data.map((entry) => (
+                    <tr key={entry.google_user_id}>
+                      <td>
+                        <span className="data-table__strong">
+                          {entry.display_name ?? entry.student_ref}
+                        </span>
+                        <span className="gem-footnote mono">{entry.student_ref}</span>
+                      </td>
+                      <td>{entry.google_name ?? '—'}</td>
+                      <td>{entry.match_source}</td>
+                      <td>
+                        <StatusChip tone={entry.status === 'ACTIVE' ? 'ok' : 'attention'}>
+                          {entry.status}
+                        </StatusChip>
+                      </td>
+                      <td>{formatMoment(entry.last_seen_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      ) : null}
 
-      <StatePanel
-        tone="wip"
-        title="Course discovery is implemented; rosters and grades are not"
-        capability="Google Classroom courses.list · classroom.courses.readonly"
-      >
-        <p>
-          The connection, encrypted token storage, refresh, revoked-access handling and course
-          sync are real. A sync lists courses only: it does not download coursework, import
-          student rosters or publish grades. Allocation remains an operator action enforced by
-          the platform.
+      <CourseworkPanel
+        tenantId={tenantId}
+        token={token}
+        courseId={courseId}
+        courses={courseList}
+        assignments={assignments.state === 'ok' ? assignments.data : []}
+        courseworkList={courseworkList}
+        courseworkState={coursework.state}
+        courseworkReason={
+          coursework.state === 'unavailable' || coursework.state === 'error'
+            ? coursework.reason
+            : null
+        }
+        busy={busy}
+        onSelect={setCourseworkId}
+        selectedId={courseworkId}
+        onRun={run}
+        onRefresh={refreshAll}
+      />
+
+      {selectedCoursework ? (
+        <SubmissionsPanel
+          tenantId={tenantId}
+          token={token}
+          coursework={selectedCoursework}
+          submissions={submissions.state === 'ok' ? submissions.data : []}
+          submissionsState={submissions.state}
+          submissionsReason={
+            submissions.state === 'unavailable' || submissions.state === 'error'
+              ? submissions.reason
+              : null
+          }
+          busy={busy}
+          onRun={run}
+          onRefresh={refreshAll}
+        />
+      ) : null}
+
+      <Panel title="How a grade reaches Classroom" note="Approval before publication">
+        <ol className="panel-copy">
+          <li>A submission is retrieved and ingested through the engine’s existing pipeline.</li>
+          <li>Marking runs through the single Aetrix V5.5 correction engine; nothing here marks.</li>
+          <li>Every uncertain question must be decided before the result can be approved.</li>
+          <li>A reviewer approves the final total and states a reason.</li>
+          <li>Publication writes the assigned grade, and only then is it visible to the student.</li>
+        </ol>
+        <p className="panel-copy">
+          Nothing is published automatically. A publication that Google did not confirm stays
+          <strong> UNKNOWN </strong>until a retry reconciles it against Google, so a retry never
+          writes a grade twice.
         </p>
-      </StatePanel>
+      </Panel>
     </div>
+  )
+}
+
+type RunAction = (
+  key: string,
+  action: () => Promise<{ ok: boolean; message: string }>,
+) => Promise<void>
+
+function CourseworkPanel({
+  tenantId,
+  token,
+  courseId,
+  courses,
+  assignments,
+  courseworkList,
+  courseworkState,
+  courseworkReason,
+  busy,
+  selectedId,
+  onSelect,
+  onRun,
+  onRefresh,
+}: {
+  tenantId: string
+  token: string
+  courseId: string | null
+  courses: TeacherCourse[]
+  assignments: WorkspaceAssignment[]
+  courseworkList: Coursework[]
+  courseworkState: string
+  courseworkReason: string | null
+  busy: string | null
+  selectedId: string | null
+  onSelect: (id: string) => void
+  onRun: RunAction
+  onRefresh: () => void
+}) {
+  const [assignmentId, setAssignmentId] = useState('')
+  const [title, setTitle] = useState('')
+  const [dueAt, setDueAt] = useState('')
+  const [maxPoints, setMaxPoints] = useState('')
+  const course = courses.find((row) => row.course_id === courseId) ?? null
+
+  return (
+    <Panel title="Classroom coursework" note="Created in Aetrix, published explicitly">
+      {courseworkState === 'loading' ? (
+        <p className="panel-copy">Reading coursework…</p>
+      ) : courseworkState === 'unavailable' || courseworkState === 'error' ? (
+        <p className="panel-copy">{courseworkReason}</p>
+      ) : courseworkList.length === 0 ? (
+        <p className="panel-copy">
+          No assignment has a Classroom coursework yet. Create one below, then publish it when
+          the assignment’s blueprint and mark scheme are approved.
+        </p>
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table">
+            <caption className="visually-hidden">Aetrix assignments published to Classroom</caption>
+            <thead>
+              <tr>
+                <th scope="col">Coursework</th>
+                <th scope="col">Coursework ID</th>
+                <th scope="col">State</th>
+                <th scope="col">Submissions</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {courseworkList.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <span className="data-table__strong">{row.title}</span>
+                    <span className="gem-footnote">{row.assignment_name}</span>
+                  </td>
+                  <td className="mono">{row.coursework_id ?? '—'}</td>
+                  <td>
+                    <StatusChip tone={stateTone(row.state)}>{row.state}</StatusChip>
+                    {row.last_error_message ? (
+                      <span className="gem-footnote">{row.last_error_message}</span>
+                    ) : null}
+                  </td>
+                  <td>{row.submissions}</td>
+                  <td>
+                    <div className="app-inline-actions">
+                      <button
+                        type="button"
+                        className={`btn btn--small ${selectedId === row.id ? 'btn--primary' : ''}`}
+                        onClick={() => onSelect(row.id)}
+                      >
+                        {selectedId === row.id ? 'Selected' : 'Open'}
+                      </button>
+                      {row.state !== 'PUBLISHED' ? (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void onRun(`publish:${row.id}`, async () => {
+                              const result = await publishCoursework(tenantId, row.id, { token })
+                              if (result.status !== 'ok') {
+                                return { ok: false, message: result.reason }
+                              }
+                              return {
+                                ok: true,
+                                message: `Published as coursework ${result.data.coursework_id}.`,
+                              }
+                            })
+                          }
+                        >
+                          {busy === `publish:${row.id}` ? 'Publishing…' : 'Publish'}
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {course ? (
+        <form
+          className="app-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const points = maxPoints.trim() ? Number(maxPoints) : undefined
+            void onRun('create', async () => {
+              const result = await createCoursework(
+                tenantId,
+                {
+                  assignment_id: assignmentId,
+                  classroom_class_id: course.classroom_class_id,
+                  title: title.trim() || undefined,
+                  due_at: dueAt ? new Date(dueAt).toISOString() : undefined,
+                  max_points: Number.isFinite(points) ? points : undefined,
+                },
+                { token },
+              )
+              if (result.status !== 'ok') return { ok: false, message: result.reason }
+              setTitle('')
+              setDueAt('')
+              setMaxPoints('')
+              onRefresh()
+              return {
+                ok: true,
+                message: `Drafted “${result.data.title}”. Publish it when you are ready.`,
+              }
+            })
+          }}
+        >
+          <label className="app-form__label" htmlFor="classroom-assignment">
+            Aetrix assignment
+          </label>
+          <select
+            id="classroom-assignment"
+            className="app-input"
+            value={assignmentId}
+            onChange={(event) => setAssignmentId(event.target.value)}
+            required
+          >
+            <option value="">Select an assignment…</option>
+            {assignments.map((assignment) => (
+              <option key={assignment.id} value={assignment.id}>
+                {assignment.name}
+              </option>
+            ))}
+          </select>
+
+          <label className="app-form__label" htmlFor="classroom-title">
+            Classroom title (defaults to the assignment name)
+          </label>
+          <input
+            id="classroom-title"
+            className="app-input"
+            value={title}
+            maxLength={300}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+
+          <label className="app-form__label" htmlFor="classroom-due">
+            Due date and time
+          </label>
+          <input
+            id="classroom-due"
+            className="app-input"
+            type="datetime-local"
+            value={dueAt}
+            onChange={(event) => setDueAt(event.target.value)}
+          />
+
+          <label className="app-form__label" htmlFor="classroom-points">
+            Maximum points
+          </label>
+          <input
+            id="classroom-points"
+            className="app-input"
+            type="number"
+            min={0}
+            step="0.5"
+            value={maxPoints}
+            onChange={(event) => setMaxPoints(event.target.value)}
+          />
+
+          <div className="app-inline-actions">
+            <button
+              type="submit"
+              className="btn btn--small btn--primary"
+              disabled={busy !== null || !assignmentId}
+            >
+              {busy === 'create' ? 'Drafting…' : 'Draft coursework'}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <p className="panel-copy">Select an allocated course to draft coursework for it.</p>
+      )}
+      {assignments.length === 0 ? (
+        <p className="panel-copy">
+          This workspace has no assignment yet. Create the assignment, its approved blueprint and
+          its approved mark scheme first; a coursework cannot exist without them.
+        </p>
+      ) : null}
+    </Panel>
+  )
+}
+
+function SubmissionsPanel({
+  tenantId,
+  token,
+  coursework,
+  submissions,
+  submissionsState,
+  submissionsReason,
+  busy,
+  onRun,
+  onRefresh,
+}: {
+  tenantId: string
+  token: string
+  coursework: Coursework
+  submissions: Submission[]
+  submissionsState: string
+  submissionsReason: string | null
+  busy: string | null
+  onRun: RunAction
+  onRefresh: () => void
+}) {
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [reason, setReason] = useState('')
+  const [returnToStudent, setReturnToStudent] = useState(true)
+  const [overwrite, setOverwrite] = useState(false)
+  const [review, setReview] = useState<Record<string, string>>({})
+
+  const loadReview = async (id: string) => {
+    const result = await submissionReview(tenantId, id, { token })
+    setReview((current) => ({
+      ...current,
+      [id]: result.status === 'ok' ? result.data.reason : result.reason,
+    }))
+  }
+
+  return (
+    <Panel
+      title={`Submissions · ${coursework.title}`}
+      note={coursework.state === 'PUBLISHED' ? 'Retrieved from Classroom' : 'Publish the coursework first'}
+    >
+      <div className="app-inline-actions">
+        <button
+          type="button"
+          className="btn btn--small btn--primary"
+          disabled={busy !== null || coursework.state !== 'PUBLISHED'}
+          onClick={() =>
+            void onRun('submissions', async () => {
+              const result = await syncCourseworkSubmissions(tenantId, coursework.id, { token })
+              if (result.status !== 'ok') return { ok: false, message: result.reason }
+              const counts = result.data.counts
+              return {
+                ok: true,
+                message:
+                  `${counts.discovered ?? 0} submission(s) found, ${counts.ingested ?? 0} ingested, ` +
+                  `${counts.ingest_failed ?? 0} refused, ${counts.without_student ?? 0} without a ` +
+                  `matched student` +
+                  (result.data.problems.length ? `. ${result.data.problems[0]}` : '.'),
+              }
+            })
+          }
+        >
+          {busy === 'submissions' ? 'Retrieving…' : 'Retrieve submissions'}
+        </button>
+      </div>
+
+      {submissionsState === 'loading' ? (
+        <p className="panel-copy">Reading stored submissions…</p>
+      ) : submissionsState === 'unavailable' || submissionsState === 'error' ? (
+        <p className="panel-copy">{submissionsReason}</p>
+      ) : submissions.length === 0 ? (
+        <p className="panel-copy">
+          No submission has been retrieved for this coursework. Students must turn work in on
+          Google Classroom; this page never invents a submission.
+        </p>
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table">
+            <caption className="visually-hidden">Student submissions and their progress</caption>
+            <thead>
+              <tr>
+                <th scope="col">Student</th>
+                <th scope="col">Ingestion</th>
+                <th scope="col">Marking</th>
+                <th scope="col">Approved</th>
+                <th scope="col">Published</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {submissions.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <span className="data-table__strong">
+                      {row.student_name ?? row.student_ref}
+                    </span>
+                    <span className="gem-footnote">
+                      {row.late ? 'Late · ' : ''}
+                      {row.submission_state ?? 'state unknown'}
+                    </span>
+                  </td>
+                  <td>
+                    <StatusChip tone={stateTone(row.state)}>{row.state}</StatusChip>
+                    {row.ingest_error ? (
+                      <span className="gem-footnote">{row.ingest_error}</span>
+                    ) : null}
+                  </td>
+                  <td>{row.correction_state ?? 'not started'}</td>
+                  <td>{row.approved_total != null ? `${row.approved_total}` : '—'}</td>
+                  <td>
+                    {row.last_publication_state ? (
+                      <StatusChip tone={stateTone(row.last_publication_state)}>
+                        {row.last_publication_state}
+                      </StatusChip>
+                    ) : (
+                      'not published'
+                    )}
+                  </td>
+                  <td>
+                    <div className="app-inline-actions">
+                      {row.state === 'DISCOVERED' || row.state === 'INGEST_FAILED' ? (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void onRun(`ingest:${row.id}`, async () => {
+                              const result = await ingestSubmission(tenantId, row.id, { token })
+                              if (result.status !== 'ok') return { ok: false, message: result.reason }
+                              return {
+                                ok: true,
+                                message:
+                                  result.data.state === 'INGESTED'
+                                    ? 'The attachment entered the ingestion pipeline.'
+                                    : (result.data.ingest_error ??
+                                      'The attachment was not ingested.'),
+                              }
+                            })
+                          }
+                        >
+                          {busy === `ingest:${row.id}` ? 'Ingesting…' : 'Retry ingestion'}
+                        </button>
+                      ) : null}
+                      {row.state === 'INGESTED' || row.state === 'CORRECTING' ? (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void onRun(`correct:${row.id}`, async () => {
+                              const result = await startSubmissionCorrection(tenantId, row.id, {
+                                token,
+                              })
+                              if (result.status !== 'ok') return { ok: false, message: result.reason }
+                              return {
+                                ok: true,
+                                message: result.data.created
+                                  ? `Correction job ${result.data.job_state}.`
+                                  : `This submission already has correction job ${result.data.job_state}.`,
+                              }
+                            })
+                          }
+                        >
+                          {busy === `correct:${row.id}` ? 'Starting…' : 'Start marking'}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        onClick={() => {
+                          setOpenId(openId === row.id ? null : row.id)
+                          void loadReview(row.id)
+                        }}
+                      >
+                        {openId === row.id ? 'Close' : 'Review'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {openId ? (
+        <div className="app-stack">
+          <p className="panel-copy">{review[openId] ?? 'Reading the review state…'}</p>
+          <div className="app-inline-actions">
+            <button
+              type="button"
+              className="btn btn--small btn--primary"
+              disabled={busy !== null}
+              onClick={() =>
+                void onRun(`approve:${openId}`, async () => {
+                  const result = await approveSubmission(tenantId, openId, undefined, { token })
+                  if (result.status !== 'ok') return { ok: false, message: result.reason }
+                  void loadReview(openId)
+                  return {
+                    ok: true,
+                    message: `Approved ${result.data.total} of ${result.data.maximum}.`,
+                  }
+                })
+              }
+            >
+              {busy === `approve:${openId}` ? 'Approving…' : 'Approve final result'}
+            </button>
+          </div>
+
+          <label className="app-form__label" htmlFor="publish-reason">
+            Reason for publishing (recorded in the audit trail)
+          </label>
+          <input
+            id="publish-reason"
+            className="app-input"
+            value={reason}
+            maxLength={500}
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <label className="panel-copy">
+            <input
+              type="checkbox"
+              checked={returnToStudent}
+              onChange={(event) => setReturnToStudent(event.target.checked)}
+            />{' '}
+            Return the work to the student after writing the grade
+          </label>
+          <label className="panel-copy">
+            <input
+              type="checkbox"
+              checked={overwrite}
+              onChange={(event) => setOverwrite(event.target.checked)}
+            />{' '}
+            Replace an assigned grade Classroom already holds
+          </label>
+          <div className="app-inline-actions">
+            <button
+              type="button"
+              className="btn btn--small btn--danger"
+              disabled={busy !== null || reason.trim().length < 5}
+              onClick={() =>
+                void onRun(`publish-grade:${openId}`, async () => {
+                  const result = await publishSubmissionGrade(
+                    tenantId,
+                    openId,
+                    {
+                      confirm: true,
+                      reason: reason.trim(),
+                      grade_field: 'assignedGrade',
+                      return_to_student: returnToStudent,
+                      allow_overwrite_external: overwrite,
+                    },
+                    { token },
+                  )
+                  if (result.status !== 'ok') return { ok: false, message: result.reason }
+                  onRefresh()
+                  const detail = result.data.response_detail as {
+                    returned_to_student?: boolean
+                    return_error?: string | null
+                  }
+                  return {
+                    ok: true,
+                    message:
+                      `Grade ${result.data.assigned_grade ?? result.data.draft_grade} written to Classroom.` +
+                      (detail.returned_to_student
+                        ? ' The work was returned to the student.'
+                        : detail.return_error
+                          ? ` The grade was written but the work was not returned: ${detail.return_error}`
+                          : ''),
+                  }
+                })
+              }
+            >
+              {busy === `publish-grade:${openId}` ? 'Publishing…' : 'Publish approved grade'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </Panel>
   )
 }

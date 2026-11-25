@@ -46,6 +46,7 @@ import { Route as AppAssistantTasksRouteImport } from './routes/_app.assistant.t
 import { Route as AppAssistantWorkRouteImport } from './routes/_app.assistant.work'
 import { Route as AppPlatformIndexRouteImport } from './routes/_app.platform.index'
 import { Route as AppPlatformAuditRouteImport } from './routes/_app.platform.audit'
+import { Route as AppPlatformClassroomRouteImport } from './routes/_app.platform.classroom'
 import { Route as AppPlatformGeminiRouteImport } from './routes/_app.platform.gemini'
 import { Route as AppPlatformHealthRouteImport } from './routes/_app.platform.health'
 import { Route as AppPlatformIntegrationsRouteImport } from './routes/_app.platform.integrations'
@@ -240,6 +241,11 @@ const AppPlatformAuditRoute = AppPlatformAuditRouteImport.update({
   path: '/platform/audit',
   getParentRoute: () => AppRoute,
 } as any)
+const AppPlatformClassroomRoute = AppPlatformClassroomRouteImport.update({
+  id: '/platform/classroom',
+  path: '/platform/classroom',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppPlatformGeminiRoute = AppPlatformGeminiRouteImport.update({
   id: '/platform/gemini',
   path: '/platform/gemini',
@@ -316,6 +322,7 @@ export interface FileRoutesByFullPath {
   '/assistant/tasks': typeof AppAssistantTasksRoute
   '/assistant/work': typeof AppAssistantWorkRoute
   '/platform/audit': typeof AppPlatformAuditRoute
+  '/platform/classroom': typeof AppPlatformClassroomRoute
   '/platform/gemini': typeof AppPlatformGeminiRoute
   '/platform/health': typeof AppPlatformHealthRoute
   '/platform/integrations': typeof AppPlatformIntegrationsRoute
@@ -361,6 +368,7 @@ export interface FileRoutesByTo {
   '/assistant/tasks': typeof AppAssistantTasksRoute
   '/assistant/work': typeof AppAssistantWorkRoute
   '/platform/audit': typeof AppPlatformAuditRoute
+  '/platform/classroom': typeof AppPlatformClassroomRoute
   '/platform/gemini': typeof AppPlatformGeminiRoute
   '/platform/health': typeof AppPlatformHealthRoute
   '/platform/integrations': typeof AppPlatformIntegrationsRoute
@@ -409,6 +417,7 @@ export interface FileRoutesById {
   '/_app/assistant/tasks': typeof AppAssistantTasksRoute
   '/_app/assistant/work': typeof AppAssistantWorkRoute
   '/_app/platform/audit': typeof AppPlatformAuditRoute
+  '/_app/platform/classroom': typeof AppPlatformClassroomRoute
   '/_app/platform/gemini': typeof AppPlatformGeminiRoute
   '/_app/platform/health': typeof AppPlatformHealthRoute
   '/_app/platform/integrations': typeof AppPlatformIntegrationsRoute
@@ -456,6 +465,7 @@ export interface FileRouteTypes {
     | '/assistant/tasks'
     | '/assistant/work'
     | '/platform/audit'
+    | '/platform/classroom'
     | '/platform/gemini'
     | '/platform/health'
     | '/platform/integrations'
@@ -501,6 +511,7 @@ export interface FileRouteTypes {
     | '/assistant/tasks'
     | '/assistant/work'
     | '/platform/audit'
+    | '/platform/classroom'
     | '/platform/gemini'
     | '/platform/health'
     | '/platform/integrations'
@@ -548,6 +559,7 @@ export interface FileRouteTypes {
     | '/_app/assistant/tasks'
     | '/_app/assistant/work'
     | '/_app/platform/audit'
+    | '/_app/platform/classroom'
     | '/_app/platform/gemini'
     | '/_app/platform/health'
     | '/_app/platform/integrations'
@@ -828,6 +840,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPlatformAuditRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/platform/classroom': {
+      id: '/_app/platform/classroom'
+      path: '/platform/classroom'
+      fullPath: '/platform/classroom'
+      preLoaderRoute: typeof AppPlatformClassroomRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/platform/gemini': {
       id: '/_app/platform/gemini'
       path: '/platform/gemini'
@@ -908,6 +927,7 @@ interface AppRouteChildren {
   AppAssistantTasksRoute: typeof AppAssistantTasksRoute
   AppAssistantWorkRoute: typeof AppAssistantWorkRoute
   AppPlatformAuditRoute: typeof AppPlatformAuditRoute
+  AppPlatformClassroomRoute: typeof AppPlatformClassroomRoute
   AppPlatformGeminiRoute: typeof AppPlatformGeminiRoute
   AppPlatformHealthRoute: typeof AppPlatformHealthRoute
   AppPlatformIntegrationsRoute: typeof AppPlatformIntegrationsRoute
@@ -941,6 +961,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAssistantTasksRoute: AppAssistantTasksRoute,
   AppAssistantWorkRoute: AppAssistantWorkRoute,
   AppPlatformAuditRoute: AppPlatformAuditRoute,
+  AppPlatformClassroomRoute: AppPlatformClassroomRoute,
   AppPlatformGeminiRoute: AppPlatformGeminiRoute,
   AppPlatformHealthRoute: AppPlatformHealthRoute,
   AppPlatformIntegrationsRoute: AppPlatformIntegrationsRoute,

@@ -25,7 +25,9 @@ import type {
   Member,
   Notification,
   PageMeta,
+  ReportDetail,
   ReportRow,
+  SchemeCriteriaExtraction,
   SchemeCriterion,
   SchemeUpload,
   SchemeVersion,
@@ -227,6 +229,17 @@ export const examService = {
       options,
     ),
 
+  extractSchemeCriteria: (
+    versionId: string,
+    blueprintVersionId: string,
+    options?: Opts,
+  ): Promise<ApiResult<SchemeCriteriaExtraction>> =>
+    apiPost<SchemeCriteriaExtraction>(
+      `/api/v1/schemes/${versionId}/criteria/extractions`,
+      { blueprint_version_id: blueprintVersionId },
+      options,
+    ),
+
   extract: (
     examId: string,
     schemeVersionId: string,
@@ -289,6 +302,18 @@ export const submissionService = {
 
   pageImage: (submissionId: string, pageIndex: number, options?: Opts): Promise<ApiResult<Blob>> =>
     apiBlob(`/api/v1/submissions/${submissionId}/pages/${pageIndex}`, options),
+
+  /**
+   * The individual-student correction report, rendered by the V5 report
+   * generator on the engine. It is a PDF, so it is fetched as a blob and the
+   * browser either opens it in a tab or saves it.
+   */
+  report: (
+    submissionId: string,
+    detail: ReportDetail,
+    options?: Opts,
+  ): Promise<ApiResult<Blob>> =>
+    apiBlob(`/api/v1/submissions/${submissionId}/report?detail=${detail}`, options),
 
   jobs: (submissionId: string, options?: Opts): Promise<ApiResult<Job[]>> =>
     apiGet<Job[]>(`/api/v1/submissions/${submissionId}/corrections`, options),

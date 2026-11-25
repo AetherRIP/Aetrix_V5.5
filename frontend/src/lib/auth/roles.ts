@@ -19,6 +19,7 @@ export type Permission =
   | 'platform.workspaces.read'
   | 'platform.workspaces.manage'
   | 'platform.allocations.manage'
+  | 'platform.classroom.manage'
   | 'platform.health.read'
   | 'platform.audit.read'
   | 'platform.providers.configure'
@@ -54,6 +55,7 @@ const PERMISSIONS: Record<AccountRole, readonly Permission[]> = {
     'platform.workspaces.read',
     'platform.workspaces.manage',
     'platform.allocations.manage',
+    'platform.classroom.manage',
     'platform.health.read',
     'platform.audit.read',
     'platform.providers.configure',
@@ -81,6 +83,7 @@ const PERMISSIONS: Record<AccountRole, readonly Permission[]> = {
     'platform.workspaces.read',
     'platform.workspaces.manage',
     'platform.allocations.manage',
+    'platform.classroom.manage',
     'platform.health.read',
     'platform.audit.read',
     'platform.providers.configure',
@@ -276,6 +279,7 @@ export type AppPath =
   | '/platform/health'
   | '/platform/audit'
   | '/platform/gemini'
+  | '/platform/classroom'
   | '/platform/integrations'
   | '/platform/settings'
   | '/assistant'
@@ -396,6 +400,7 @@ const PLATFORM_NAV: RoleNav = {
   ],
   groupLabel: 'Platform',
   secondary: [
+    { to: '/platform/classroom', label: 'Google Classroom', icon: 'classroom' },
     { to: '/platform/gemini', label: 'Gemini fleet', icon: 'blueprint' },
     { to: '/platform/integrations', label: 'AI providers', icon: 'blueprint' },
     { to: '/platform/settings', label: 'Settings', icon: 'lock' },
@@ -423,6 +428,7 @@ const OWNER_NAV: RoleNav = {
   ],
   groupLabel: 'Every area',
   secondary: [
+    { to: '/platform/classroom', label: 'Google Classroom', icon: 'classroom' },
     { to: '/platform/gemini', label: 'Gemini fleet', icon: 'blueprint' },
     { to: '/platform/integrations', label: 'AI providers', icon: 'blueprint' },
     { to: '/dashboard', label: 'Teacher dashboard', icon: 'chart' },

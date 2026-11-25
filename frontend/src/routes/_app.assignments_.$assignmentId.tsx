@@ -165,6 +165,27 @@ function AssignmentDetail() {
     }
   }
 
+  async function extractCriteria() {
+    if (!session.token || !reviewScheme || !blueprint || blueprint.status !== 'APPROVED') return
+    setBusy(true)
+    setMessage(null)
+    const result = await examService.extractSchemeCriteria(reviewScheme.id, blueprint.id, {
+      token: session.token,
+    })
+    setBusy(false)
+    if (result.status === 'ok') {
+      const { coverage } = result.data
+      setMessage(
+        `Transcribed ${result.data.criteria.length} mark points covering ` +
+          `${coverage.questions} questions and ${coverage.total_criteria} of ` +
+          `${coverage.total_expected} marks. Review them, then approve.`,
+      )
+      reloadCriteria()
+    } else {
+      setMessage(result.reason)
+    }
+  }
+
   async function extractBlueprint() {
     if (!examId || !session.token || !approvedScheme) return
     setBusy(true)
@@ -560,8 +581,8 @@ function AssignmentDetail() {
                       <tr>
                         <td colSpan={6} className="data-table__empty">
                           {reviewScheme
-                            ? 'No criteria were extracted for this scheme version. Re-extract the blueprint.'
-                            : 'Upload and approve a scheme, then extract the blueprint.'}
+                            ? 'No criteria have been transcribed for this scheme version. Approve the blueprint, then extract the criteria.'
+                            : 'Upload and approve a scheme, extract the blueprint, then extract the criteria.'}
                         </td>
                       </tr>
                     )}
@@ -569,6 +590,15 @@ function AssignmentDetail() {
                 </table>
               </div>
               <div className="app-inline-actions">
+                <button
+                  type="button"
+                  className="btn btn--small btn--outline"
+                  disabled={busy || !reviewScheme || !blueprint || blueprint.status !== 'APPROVED'}
+                  onClick={() => void extractCriteria()}
+                  title="Transcribe the printed mark points; requires an approved blueprint"
+                >
+                  {busy ? 'Transcribing…' : 'Extract criteria'}
+                </button>
                 <button
                   type="button"
                   className="btn btn--small btn--outline"

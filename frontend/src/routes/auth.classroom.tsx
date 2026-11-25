@@ -27,10 +27,11 @@ function callbackParams() {
 }
 
 /**
- * Google redirects here after the workspace manager consents. The code is
- * exchanged by the engine, not in the browser: this screen posts the code and
- * the signed state with the Supabase bearer token, and the engine refuses a
- * state issued for another workspace or another user.
+ * Google redirects here after a platform administrator consents to the central
+ * account. The code is exchanged by the engine, not in the browser: this screen
+ * posts the code and the signed state with the Supabase bearer token, and the
+ * engine refuses a state issued for another account, another workspace or an
+ * authority that changed in between.
  */
 function ClassroomCallback() {
   const { status, session } = useAuth()
@@ -62,7 +63,9 @@ function ClassroomCallback() {
     if (!token) {
       started.current = true
       setPhase('failed')
-      setMessage('Sign in again, then reconnect Google Classroom from the Classroom page.')
+      setMessage(
+        'Sign in again as a platform administrator, then reconnect the central Google account.',
+      )
       return
     }
 
@@ -72,7 +75,7 @@ function ClassroomCallback() {
       if (result.status === 'ok') {
         setPhase('done')
         window.setTimeout(() => {
-          void navigate({ to: '/classroom' })
+          void navigate({ to: '/platform/classroom' })
         }, 700)
       } else {
         setPhase('failed')
@@ -90,7 +93,7 @@ function ClassroomCallback() {
               <Icon name="review" size={20} /> Google Classroom was not connected
             </h1>
             <p className="callback__body">{message}</p>
-            <Link className="btn btn--primary btn--small" to="/classroom">
+            <Link className="btn btn--primary btn--small" to="/platform/classroom">
               Return to Google Classroom
             </Link>
           </>
@@ -100,7 +103,8 @@ function ClassroomCallback() {
               <Icon name="sparkle" size={20} /> Classroom connected
             </h1>
             <p className="callback__body">
-              The workspace authorisation was stored encrypted. Returning to the Classroom page.
+              The central account’s authorisation was stored encrypted. Returning to the
+              Classroom page.
             </p>
           </>
         ) : (
@@ -109,7 +113,8 @@ function ClassroomCallback() {
               <Icon name="sparkle" size={20} /> Connecting Google Classroom
             </h1>
             <p className="callback__body">
-              The engine is exchanging the authorisation code. This takes a moment.
+              The engine is exchanging the authorisation code for the central account. This
+              takes a moment.
             </p>
           </>
         )}

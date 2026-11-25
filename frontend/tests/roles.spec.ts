@@ -432,7 +432,7 @@ const ROUTE_CONTENT: { role: Role; path: string; card: string }[] = [
   { role: 'supervisor', path: '/gradebook', card: 'Marks' },
   { role: 'supervisor', path: '/analytics', card: 'Question-level performance' },
   { role: 'supervisor', path: '/assistants', card: 'What an assistant may do' },
-  { role: 'supervisor', path: '/classroom', card: 'How a class reaches this workspace' },
+  { role: 'supervisor', path: '/classroom', card: 'Allocated Classroom courses' },
   { role: 'assistant', path: '/assistant', card: 'Review rules' },
   { role: 'assistant', path: '/assistant/classes', card: 'What is in scope' },
   { role: 'assistant', path: '/assistant/work', card: 'A review, once marking exists' },
