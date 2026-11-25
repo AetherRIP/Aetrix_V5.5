@@ -120,6 +120,9 @@ class QuotaEstimate:
     #: allowance Google itself would report.
     accounting: str
     notes: tuple[str, ...]
+    #: Requests in the day window whose quota consumption Google never confirmed
+    #: (5xx or transport).  Counted per minute, excluded from the daily total.
+    unconfirmed_requests: int = 0
 
     @property
     def confidence(self) -> Confidence:
@@ -161,6 +164,7 @@ class QuotaEstimate:
             "cooldown_until": self.cooldown_until,
             "accounting": self.accounting,
             "exhausted": self.exhausted,
+            "unconfirmed_requests": self.unconfirmed_requests,
             "notes": list(self.notes),
         }
 
@@ -175,14 +179,22 @@ class QuotaEstimator:
         self.usage = UsageRepository(session)
 
     def limits_for(self, model: str) -> ModelQuota:
-        quota = self.settings.quota
-        configured = quota.model_limits.get(model)
+        """The configured allowance for one model, or an UNKNOWN one.
+
+        A model with no entry in ``quota.model_limits`` has **no** known
+        allowance.  Substituting the platform default here would make the screen
+        report a limit nobody configured, and the call gate would spend requests
+        against it; the honest answer is ``None`` per window, which the estimate
+        reports as ``UNKNOWN`` and the gate refuses.
+        """
+
+        configured = self.settings.quota.model_limits.get(model)
         if configured is not None:
             return configured
         return ModelQuota(
-            requests_per_minute=quota.requests_per_minute,
-            tokens_per_minute=quota.tokens_per_minute,
-            requests_per_day=quota.requests_per_day,
+            requests_per_minute=None,
+            tokens_per_minute=None,
+            requests_per_day=None,
             source="operator",
         )
 
@@ -201,11 +213,17 @@ class QuotaEstimator:
         # the call path enforces, so the estimate cannot disagree with the gate.
         minute_since = moment - timedelta(minutes=1)
         day_since = day_start(moment, zone)
+        # The per-minute window counts unconfirmed requests too (so a retry storm
+        # still hits the rate gate); the daily window below does not (an outage
+        # that served no paper must not consume a day).  Each window is counted
+        # once: counting the confirmed total and then adding an inclusive total
+        # would double every consumed reservation.
         minute_used = self.reservations.count_since_project(
             project_id,
             minute_since,
             moment,
             model=model,
+            include_unconfirmed=True,
         ) + self.usage.validation_count(project_id, model, minute_since)
         day_used = self.reservations.count_since_project(
             project_id,
@@ -217,6 +235,9 @@ class QuotaEstimator:
             moment - timedelta(minutes=1), project_id=project_id, model=model
         )
         tokens_used = tokens["input_tokens"] + tokens["output_tokens"]
+        unconfirmed = self.reservations.unconfirmed_count_project(
+            project_id, day_since, model=model
+        )
 
         cooldown = self.reservations.project_cooldown(project_id)
         active_cooldown = (
@@ -241,6 +262,17 @@ class QuotaEstimator:
             )
         if limits.tokens_per_minute is None:
             notes.append("No tokens-per-minute limit is known for this model.")
+        if limits.requests_per_day is None:
+            notes.append(
+                "No request allowance is configured for this model, so no "
+                "remaining capacity can be reported and the call gate refuses it."
+            )
+        if unconfirmed:
+            notes.append(
+                f"{unconfirmed} request(s) today failed without a provider "
+                "confirmation that they were metered; they are counted per "
+                "minute but not against the daily allowance."
+            )
         if effective_zone != zone:
             notes.append(
                 f"The configured quota zone {zone!r} is invalid; UTC midnight is in use."
@@ -270,6 +302,7 @@ class QuotaEstimator:
             cooldown_until=active_cooldown,
             accounting="AETRIX_RESERVATIONS_PLUS_VALIDATION",
             notes=tuple(notes),
+            unconfirmed_requests=unconfirmed,
         )
 
     def project_estimates(

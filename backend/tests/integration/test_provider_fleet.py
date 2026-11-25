@@ -29,7 +29,7 @@ from app.services.quota import QuotaEstimator, day_start, next_reset
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from tests.support import FakeProvider
+from tests.support import FakeProvider, single_model_chains
 
 
 def _settings(*, rpm: int = 100, rpd: int = 5000, limits: dict[str, ModelQuota] | None = None):
@@ -139,7 +139,7 @@ def test_import_reports_duplicates_and_rejections_without_losing_good_rows(
 
 
 def test_project_quota_is_not_multiplied_by_keys(db_session, identity) -> None:
-    settings = _settings(rpm=2)
+    settings = single_model_chains(_settings(rpm=2))
     _register(db_session, settings, "shared-proj", 5)
     service = _service(db_session, FakeProvider('{"questions": []}'), settings)
 
@@ -161,7 +161,7 @@ def test_project_quota_is_not_multiplied_by_keys(db_session, identity) -> None:
 
 
 def test_a_second_project_has_its_own_allowance(db_session, identity) -> None:
-    settings = _settings(rpm=1)
+    settings = single_model_chains(_settings(rpm=1))
     _register(db_session, settings, "proj-a", 1)
     service = _service(db_session, FakeProvider('{"questions": []}'), settings)
     _call(service, identity)

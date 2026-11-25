@@ -46,6 +46,13 @@ class GeminiProvider:
         self.timeout_seconds = timeout_seconds
         self._transport = transport
         self.thinking_budget = thinking_budget
+        #: Models that answered ``INVALID_ARGUMENT`` to ``thinkingConfig``.
+        #: Google rejects a zero thinking budget on models whose smallest
+        #: supported budget is positive (``gemini-3.5-flash-lite`` does), and its
+        #: 400 names no field.  The first such request is retried once without the
+        #: block and the model is remembered, so no later request pays a second
+        #: call to rediscover the same incompatibility.
+        self._thinking_refused: set[str] = set()
 
     def _client(self, timeout: float | None = None) -> httpx.Client:
         return httpx.Client(
@@ -69,14 +76,20 @@ class GeminiProvider:
             return {"text": item.text}
         raise ProviderRequestError("an empty provider input is not allowed")
 
-    def _payload(self, request: LLMRequest) -> dict[str, Any]:
+    def _payload(
+        self, request: LLMRequest, *, include_thinking: bool = True
+    ) -> dict[str, Any]:
         parts: list[dict[str, Any]] = [{"text": request.prompt}]
         parts.extend(self._part(item) for item in request.inputs)
         generation: dict[str, Any] = {
             "temperature": request.temperature,
             "maxOutputTokens": request.max_output_tokens,
         }
-        if self.thinking_budget is not None:
+        if (
+            include_thinking
+            and not request.omit_thinking_config
+            and self.thinking_budget is not None
+        ):
             # Gemini 3 bills thinking against maxOutputTokens. Without this a
             # small probe can spend its entire budget reasoning and return no
             # content at all, which is a request-shape problem, not a bad key.
@@ -153,8 +166,12 @@ class GeminiProvider:
                 **details,
             )
         if status >= 500:
+            # A 503 often carries ``Retry-After``.  It is passed through so the
+            # single retry waits as long as Google asked instead of guessing.
             raise ProviderServerError(
-                "The provider is temporarily unavailable.", **details
+                "The provider is temporarily unavailable.",
+                retry_after_seconds=retry_after,
+                **details,
             )
         if status == 404:
             raise ProviderRequestError(
@@ -244,27 +261,62 @@ class GeminiProvider:
             ),
         )
 
-    def generate(self, request: LLMRequest, api_key: SecretStr) -> LLMResponse:
-        url = f"{self.base_url}/models/{request.model}:generateContent"
-        started = time.perf_counter()
+    def _post(
+        self, url: str, payload: dict[str, Any], request: LLMRequest, api_key: SecretStr
+    ) -> httpx.Response:
         try:
             with self._client(request.timeout_seconds) as client:
-                response = client.post(
+                return client.post(
                     url,
                     headers={
                         "x-goog-api-key": api_key.get_secret_value(),
                         "content-type": "application/json",
                     },
-                    json=self._payload(request),
+                    json=payload,
                 )
-        except httpx.TimeoutException as error:
-            raise ProviderNetworkError(
-                "The provider request timed out.", reached_provider=False
-            ) from error
-        except httpx.HTTPError as error:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+            # The connection was never established, so the request provably never
+            # left the process and nothing could have been metered.
             raise ProviderNetworkError(
                 "The provider could not be reached.", reached_provider=False
             ) from error
+        except httpx.TimeoutException as error:
+            # A read timeout is not proof the request was free: the request was
+            # sent and Google may have metered it before the answer was lost.
+            # ``None`` records that nobody can say, which is what makes the
+            # reservation UNCONFIRMED rather than RELEASED.
+            raise ProviderNetworkError(
+                "The provider request timed out.", reached_provider=None
+            ) from error
+        except httpx.HTTPError as error:
+            # Any other transport error happened while the request was in flight.
+            raise ProviderNetworkError(
+                "The connection to the provider failed mid-request.",
+                reached_provider=None,
+            ) from error
+
+    def generate(self, request: LLMRequest, api_key: SecretStr) -> LLMResponse:
+        url = f"{self.base_url}/models/{request.model}:generateContent"
+        started = time.perf_counter()
+        payload = self._payload(
+            request, include_thinking=request.model not in self._thinking_refused
+        )
+        response = self._post(url, payload, request, api_key)
+        if (
+            response.status_code == 400
+            and "thinkingConfig" in payload["generationConfig"]
+        ):
+            # One bounded retry, only for the field Google refuses without naming
+            # it.  The rejected request is not billed, so the retry costs a round
+            # trip, not a paid call.  The model is remembered as incompatible
+            # only when the retry *succeeds*: remembering it after a second 400
+            # would let an unrelated malformed request blacklist the model for
+            # the life of the process and hide the real defect behind it.
+            payload = self._payload(request, include_thinking=False)
+            retry = self._post(url, payload, request, api_key)
+            if retry.status_code < 400:
+                self._thinking_refused.add(request.model)
+            response = retry
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         request_id = response.headers.get("x-goog-request-id")

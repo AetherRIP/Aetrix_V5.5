@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
+from ..core.monitoring_models import is_monitored_model
 from ..correction.guard import RESULT_SOURCE_REFUSED
 from ..jobs.states import RUNNABLE_STATES, JobState, ensure_transition, progress_for
 from .models import (
@@ -1557,32 +1558,11 @@ class QuotaReservationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def count_since(
-        self,
-        credential_id: uuid.UUID,
-        since: Any,
-        now: Any,
-        *,
-        model: str | None = None,
-    ) -> int:
-        conditions = [
-            ProviderQuotaReservation.credential_id == credential_id,
-            ProviderQuotaReservation.created_at >= since,
-            or_(
-                ProviderQuotaReservation.status == "CONSUMED",
-                (ProviderQuotaReservation.status == "RESERVED")
-                & (ProviderQuotaReservation.expires_at > now),
-            ),
-        ]
-        if model is not None:
-            conditions.append(ProviderQuotaReservation.model == model)
-        return int(
-            self.session.scalar(
-                select(func.count(ProviderQuotaReservation.id)).where(*conditions)
-            )
-            or 0
-        )
-
+    #: A credential-scoped ``count_since`` used to live here.  It was removed
+    #: rather than fixed: quota is shared per Google Cloud project, so a
+    #: credential-scoped count is the wrong unit, and the method also ignored
+    #: ``UNCONFIRMED`` — reusing it for a gate would have silently under-counted
+    #: an outage.  ``count_since_project`` is the only counter.
     def count_since_project(
         self,
         project_id: str,
@@ -1590,22 +1570,64 @@ class QuotaReservationRepository:
         now: Any,
         *,
         model: str | None = None,
+        include_unconfirmed: bool = False,
     ) -> int:
         """Reservations for one Google Cloud project and one model.
 
         This is the number that matters: quota is shared per project, and Gemini
         meters each model separately, so adding keys must not add capacity and a
         flash call must not consume the review model's allowance.
+
+        ``include_unconfirmed`` adds requests whose consumption Google never
+        confirmed (a 5xx or a transport failure).  The per-minute gate includes
+        them, because hammering an overloaded model is what turns one outage into
+        a retry storm.  The daily gate excludes them, because an outage that
+        served no paper must not consume the day's allowance.
+        """
+
+        counted = [
+            ProviderQuotaReservation.status == "CONSUMED",
+            (ProviderQuotaReservation.status == "RESERVED")
+            & (ProviderQuotaReservation.expires_at > now),
+        ]
+        if include_unconfirmed:
+            counted.append(ProviderQuotaReservation.status == "UNCONFIRMED")
+        conditions = [
+            ProviderCredential.project_id == project_id,
+            ProviderQuotaReservation.created_at >= since,
+            or_(*counted),
+        ]
+        if model is not None:
+            conditions.append(ProviderQuotaReservation.model == model)
+        return int(
+            self.session.scalar(
+                select(func.count(ProviderQuotaReservation.id))
+                .join(
+                    ProviderCredential,
+                    ProviderCredential.id == ProviderQuotaReservation.credential_id,
+                )
+                .where(*conditions)
+            )
+            or 0
+        )
+
+    def unconfirmed_count_project(
+        self,
+        project_id: str,
+        since: Any,
+        *,
+        model: str | None = None,
+    ) -> int:
+        """Requests in the window whose quota consumption Google did not confirm.
+
+        Reported beside the confirmed count so an operator can tell "the model
+        answered twenty requests" from "twenty requests failed without an answer".
         """
 
         conditions = [
             ProviderCredential.project_id == project_id,
             ProviderQuotaReservation.created_at >= since,
-            or_(
-                ProviderQuotaReservation.status == "CONSUMED",
-                (ProviderQuotaReservation.status == "RESERVED")
-                & (ProviderQuotaReservation.expires_at > now),
-            ),
+            ProviderQuotaReservation.status == "UNCONFIRMED",
         ]
         if model is not None:
             conditions.append(ProviderQuotaReservation.model == model)
@@ -1717,6 +1739,12 @@ class UsageRepository:
         provider_message: str | None = None,
         reached_provider: bool | None = None,
         finish_reason: str | None = None,
+        model_role: str | None = None,
+        model_chain_position: int | None = None,
+        attempt_index: int | None = None,
+        routing_decision: str | None = None,
+        cost_status: str | None = None,
+        queue_wait_ms: int | None = None,
     ) -> ProviderUsage:
         row = ProviderUsage(
             tenant_id=tenant_id,
@@ -1737,6 +1765,7 @@ class UsageRepository:
             success=success,
             request_id=request_id,
             latency_ms=latency_ms,
+            queue_wait_ms=queue_wait_ms,
             http_status=http_status,
             error_class=error_class,
             error_category=error_category,
@@ -1744,12 +1773,25 @@ class UsageRepository:
             provider_message=provider_message,
             reached_provider=reached_provider,
             finish_reason=finish_reason,
+            model_role=model_role,
+            model_chain_position=model_chain_position,
+            attempt_index=attempt_index,
+            routing_decision=routing_decision,
+            cost_status=cost_status,
         )
         self.session.add(row)
         self.session.flush()
         return row
 
     def summary(self, tenant_id: uuid.UUID) -> dict[str, Any]:
+        """This tenant's recorded provider usage, in the three-model view.
+
+        ``by_model`` is filtered by :mod:`app.core.monitoring_models` so no
+        surface can show a fourth model.  The totals stay unfiltered, because
+        they are the ledger's real numbers; ``excluded_requests`` is what makes
+        the difference visible instead of letting the rows look complete.
+        """
+
         rows = self.session.execute(
             select(
                 ProviderUsage.model,
@@ -1768,13 +1810,17 @@ class UsageRepository:
         cached_tokens = 0
         cost = Decimal("0")
         by_model: dict[str, int] = {}
+        excluded = 0
         for model, count, input_sum, output_sum, cached_sum, cost_sum in rows:
             requests += int(count)
             input_tokens += int(input_sum)
             output_tokens += int(output_sum)
             cached_tokens += int(cached_sum)
             cost += Decimal(cost_sum or 0)
-            by_model[model] = int(count)
+            if is_monitored_model(model):
+                by_model[model] = int(count)
+            else:
+                excluded += int(count)
         return {
             "tenant_id": tenant_id,
             "requests": requests,
@@ -1783,9 +1829,34 @@ class UsageRepository:
             "cached_tokens": cached_tokens,
             "cost_usd": float(cost),
             "by_model": by_model,
+            "excluded_requests": excluded,
         }
 
     # ── fleet aggregation ───────────────────────────────────────────────────
+
+    def tokens_since_project(
+        self, project_id: str, model: str, since: Any
+    ) -> int:
+        """Tokens one project/model pair has already spent in a window.
+
+        Google meters tokens per minute as well as requests, and the two
+        limits bite at different times: fifteen small calls pass the RPM check
+        while one 300K-token call blows the TPM ceiling.  Only reported tokens
+        are summed, so the answer is a lower bound and can be exceeded by at
+        most the call that is in flight.
+        """
+
+        value = self.session.scalar(
+            select(
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0)
+                + func.coalesce(func.sum(ProviderUsage.output_tokens), 0)
+            ).where(
+                ProviderUsage.project_id == project_id,
+                ProviderUsage.model == model,
+                ProviderUsage.created_at >= since,
+            )
+        )
+        return int(value or 0)
 
     def validation_count(
         self,
@@ -1872,7 +1943,20 @@ class UsageRepository:
             "reported_requests": int(reported_requests or 0),
         }
 
-    def model_window_stats(self, since: Any) -> list[dict[str, Any]]:
+    def model_window_stats(
+        self, since: Any, *, models: tuple[str, ...] | None = None
+    ) -> list[dict[str, Any]]:
+        """Usage per model since ``since``, optionally restricted to ``models``.
+
+        Monitoring passes the allowlist from :mod:`app.core.monitoring_models`,
+        so a retired or deprecated model keeps its rows but cannot appear as a
+        row in a three-model table.  ``excluded_requests`` is reported beside the
+        table by the caller, not silently dropped.
+        """
+
+        conditions = [ProviderUsage.created_at >= since]
+        if models is not None:
+            conditions.append(ProviderUsage.model.in_(tuple(models)))
         rows = self.session.execute(
             select(
                 ProviderUsage.model,
@@ -1881,7 +1965,7 @@ class UsageRepository:
                 func.coalesce(func.sum(ProviderUsage.output_tokens), 0),
                 func.count(ProviderUsage.id).filter(ProviderUsage.success.is_(False)),
             )
-            .where(ProviderUsage.created_at >= since)
+            .where(*conditions)
             .group_by(ProviderUsage.model)
             .order_by(ProviderUsage.model)
         ).all()
@@ -1895,6 +1979,23 @@ class UsageRepository:
             }
             for model, count, input_sum, output_sum, failures in rows
         ]
+
+    def excluded_model_requests(self, since: Any, models: tuple[str, ...]) -> int:
+        """Recorded requests whose model is outside ``models``.
+
+        This is how a filtered table reconciles with an unfiltered total.  The
+        rows are neither deleted nor reported as a zero-usage model.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(ProviderUsage.id)).where(
+                    ProviderUsage.created_at >= since,
+                    ProviderUsage.model.not_in(tuple(models)),
+                )
+            )
+            or 0
+        )
 
     def project_window_stats(self, since: Any) -> list[dict[str, Any]]:
         rows = self.session.execute(

@@ -395,7 +395,14 @@ class ProviderProjectCooldown(Base):
 class ProviderQuotaReservation(UUIDPrimaryKey, TenantScoped, Base):
     __tablename__ = "provider_quota_reservations"
     __table_args__ = (
-        CheckConstraint("status IN ('RESERVED','CONSUMED','RELEASED')", name="status"),
+        #: ``UNCONFIRMED`` is a request whose consumption Google did not confirm:
+        #: a 5xx or a transport failure.  It is recorded as an attempt and is
+        #: counted per minute, but it is *not* treated as a confirmed daily
+        #: charge — a provider outage must not exhaust the day's allowance.
+        CheckConstraint(
+            "status IN ('RESERVED','CONSUMED','RELEASED','UNCONFIRMED')",
+            name="status",
+        ),
         Index("ix_provider_reservation_credential", "credential_id", "created_at"),
         Index("ix_provider_reservation_project_model", "credential_id", "model", "created_at"),
     )
@@ -815,6 +822,10 @@ class ProviderUsage(UUIDPrimaryKey, Base):
     success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     request_id: Mapped[str | None] = mapped_column(String(120))
     latency_ms: Mapped[int | None] = mapped_column(Integer)
+    #: Time spent waiting for a credential lease and its quota reservation,
+    #: including any wait for a concurrent worker's brief bookkeeping.  Provider
+    #: latency is a separate number: queue time is Aetrix's own contention.
+    queue_wait_ms: Mapped[int | None] = mapped_column(Integer)
     http_status: Mapped[int | None] = mapped_column(Integer)
     error_class: Mapped[str | None] = mapped_column(String(80))
     #: Diagnostic detail.  Historical rows keep nulls because the ledger is
@@ -824,6 +835,21 @@ class ProviderUsage(UUIDPrimaryKey, Base):
     provider_message: Mapped[str | None] = mapped_column(String(300))
     reached_provider: Mapped[bool | None] = mapped_column(Boolean)
     finish_reason: Mapped[str | None] = mapped_column(String(40))
+    #: The correction role whose chain this attempt belongs to (primary, review,
+    #: lightweight).  Null on historical rows, which had one model per role.
+    model_role: Mapped[str | None] = mapped_column(String(20))
+    #: Zero-based position of this model in that role's ordered chain.  A row's
+    #: position is what makes a fallback visible after the fact.
+    model_chain_position: Mapped[int | None] = mapped_column(Integer)
+    #: Zero-based attempt number within this model, so a retry and a fallback are
+    #: distinguishable without reading two rows together.
+    attempt_index: Mapped[int | None] = mapped_column(Integer)
+    #: What the routing policy did after this attempt: SUCCESS,
+    #: RETRY_SAME_MODEL, ROTATE_CREDENTIAL, NEXT_MODEL or STOP.
+    routing_decision: Mapped[str | None] = mapped_column(String(40))
+    #: KNOWN when a configured rate produced ``cost_usd``; COST_UNKNOWN when the
+    #: model has no configured price.  Never a made-up zero.
+    cost_status: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

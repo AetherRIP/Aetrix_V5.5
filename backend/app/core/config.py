@@ -24,6 +24,14 @@ from uuid import UUID
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .marking_policy import (
+    DISABLED_MARKING_MODELS,
+    PRODUCTION_MARKING_MODEL,
+    is_disabled_marking_model,
+    marking_model_problem,
+)
+from .model_permissions import AICapability, role_configuration_problem
+
 DEV_ENCRYPTION_KEY = "dev-only-not-for-production-rotate-me-0000000000="
 
 #: The one correction engine this build contains.  Historical rows may name
@@ -222,11 +230,115 @@ class SecuritySettings(BaseModel):
         return value
 
 
+class ModelChainEntry(BaseModel):
+    """One model in an ordered fallback chain for one correction role.
+
+    The chain is ordered: the first enabled entry that answers is the one whose
+    reply is used.  Everything a model needs in order to be *reachable by this
+    deployment* lives here rather than in the correction engine, so adding a
+    model is a configuration change, not an engine change:
+
+    * ``max_attempts`` — the attempt budget for this model, over the platform
+      default.  A model that times out once should not consume the whole job's
+      budget.
+    * ``timeout_seconds`` — a per-model wall clock, because a slow reasoning
+      model and a fast lite model do not deserve the same timeout.
+    * ``max_output_tokens`` — a per-model ceiling, capped again by the caller.
+    * ``thinking_budget`` — request compatibility.  Some Gemini models refuse a
+      zero thinking budget with an unnamed 400; recording the value here makes
+      that a configuration fact instead of a request that is rediscovered.
+
+    ``None`` means "inherit the platform default", never "zero".
+    """
+
+    model: str = Field(min_length=1, max_length=120)
+    enabled: bool = True
+    max_attempts: int | None = Field(default=None, ge=1, le=8)
+    timeout_seconds: float | None = Field(default=None, ge=5, le=900)
+    max_output_tokens: int | None = Field(default=None, ge=256, le=65536)
+    thinking_budget: int | None = Field(default=None, ge=0, le=65536)
+    #: True for a model that answers 400 to ``thinkingConfig``.  Measured, not
+    #: guessed: ``gemini-3.5-flash-lite`` does, and the request omits the block
+    #: for it instead of spending a call to rediscover the same 400.
+    thinking_config_unsupported: bool = False
+
+    @field_validator("model")
+    @classmethod
+    def _model_shape(cls, value: str) -> str:
+        candidate = value.strip()
+        if not candidate or "/" in candidate or " " in candidate:
+            raise ValueError("a chain entry must be a bare model id")
+        return candidate
+
+
+#: The correction roles a chain may be configured for.  These are the same role
+#: names the prompt manifest and ``provider_model_selections`` already use, so a
+#: chain and an operator's saved selection cannot disagree about vocabulary.
+MODEL_CHAIN_ROLES = ("primary", "review", "lightweight")
+
+
+def _default_model_chains() -> dict[str, list[ModelChainEntry]]:
+    """The production chains.
+
+    ``primary`` is the marking chain and it has exactly one entry: the model
+    Math Checker V5 marks with.  A second entry would be an automatic fallback
+    to another marking model, which this build refuses.  When the model cannot
+    be used the job is parked with a provider error and no mark is invented.
+
+    ``review`` is the independent second examiner, used only by the optional
+    double check and the blind transcription.  It must not be the marking model
+    for a disagreement to mean anything, so it names ``gemini-2.5-flash`` and
+    **no marking-model fallback**: falling back into ``gemini-3.6-flash`` would
+    make the "independent" reading the model that produced the marks, which is
+    the defect the transcription comparison exists to detect.  A role with no
+    permitted model refuses at the routing boundary instead of borrowing the
+    marking model.
+
+    ``lightweight`` is extraction/classification work.  It never marks a paper;
+    the two Lite models that earlier experiments used for marking are disabled
+    here and cannot be selected as a fallback.
+    """
+
+    return {
+        "primary": [
+            ModelChainEntry(model=PRODUCTION_MARKING_MODEL),
+        ],
+        "review": [
+            ModelChainEntry(model="gemini-2.5-flash", timeout_seconds=180.0),
+        ],
+        "lightweight": [
+            ModelChainEntry(model="gemini-2.5-flash", timeout_seconds=120.0),
+        ],
+    }
+
+
 class ProviderSettings(BaseModel):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    model_primary: str = "gemini-3.6-flash"
-    model_review: str = "gemini-3.1-pro-preview"
-    model_lightweight: str = "gemini-3.1-flash-lite"
+    #: The one production marking model.  Configuration validation refuses any
+    #: other value, so this is not a preference an environment can override.
+    model_primary: str = PRODUCTION_MARKING_MODEL
+    #: The review role is the second examiner and the blind reader.  It is not a
+    #: marking model; the double check records disagreement instead of replacing
+    #: an award.
+    model_review: str = "gemini-2.5-flash"
+    model_lightweight: str = "gemini-2.5-flash"
+    #: The model each specialist role *would* use, and whether that role may run.
+    #: Neither role is implemented or active in this build: no code path reads
+    #: these values to make a call, so they cannot activate a pipeline.  They
+    #: exist so a validated model can be named per role without editing engine
+    #: code, under the per-role permissions in ``app.core.model_permissions``.
+    #: A reserved model may be named here; enabling its role is refused until
+    #: its permission is ENABLED.
+    transcription_model: str | None = None
+    transcription_role_enabled: bool = False
+    independent_review_model: str | None = None
+    independent_review_role_enabled: bool = False
+    #: Ordered fallback chains, per correction role.  A role's chain is the
+    #: models an operator's saved selection is prepended to; the chain itself is
+    #: what the provider service walks when a model fails.
+    model_chains: dict[str, list[ModelChainEntry]] = Field(
+        default_factory=_default_model_chains
+    )
     #: How long a project's models.list result is reused before it is fetched
     #: again. Discovery is cached per project and key fingerprint.
     model_catalogue_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
@@ -234,6 +346,24 @@ class ProviderSettings(BaseModel):
     max_attempts: int = Field(default=4, ge=1, le=8)
     thinking_budget: int = Field(default=0, ge=0)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    #: Retries allowed for a transient (5xx/network) failure on one model.  One,
+    #: and it cannot be raised past one: a second retry of an overloaded model
+    #: is the same request against the same project allowance.
+    transient_retries: int = Field(default=1, ge=0, le=1)
+    #: Ceiling for one backoff wait, including an honoured ``Retry-After``.
+    retry_max_backoff_seconds: float = Field(default=8.0, ge=0.0, le=60.0)
+    #: Fractional jitter on a computed backoff, so a fleet does not retry in step.
+    retry_jitter: float = Field(default=0.5, ge=0.0, le=1.0)
+    #: The hard ceiling on real HTTP requests one logical operation may send,
+    #: across every model in its chain.  Attempt budgets multiply inside a chain;
+    #: this is the number that does not.
+    max_requests_per_operation: int = Field(default=3, ge=1, le=8)
+    #: Consecutive transient failures for one (provider, model) that open the
+    #: breaker.  A 5xx is a property of the model, not of one key.
+    circuit_breaker_threshold: int = Field(default=3, ge=1, le=20)
+    #: How long the breaker stays open.  While it is open no credential is leased
+    #: and no request is sent, so an outage costs no quota.
+    circuit_breaker_seconds: float = Field(default=300.0, ge=0.0, le=3600.0)
     prompt_root: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parents[2] / "prompts"
     )
@@ -248,6 +378,122 @@ class ProviderSettings(BaseModel):
             "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00, "cached": 0.20},
         }
     )
+
+    @model_validator(mode="after")
+    def _production_marking_policy(self) -> ProviderSettings:
+        """Refuse a configuration that could mark with another model.
+
+        Three facts are checked at boot rather than discovered during a paid
+        run: the primary role names the one production marking model, the
+        marking chain has no fallback, and no chain names a disabled Lite model.
+        """
+
+        problem = marking_model_problem(self.model_primary)
+        if problem is not None:
+            raise ValueError(
+                f"AETRIX_PROVIDER__MODEL_PRIMARY is not usable for marking. {problem}"
+            )
+
+        primary = self.model_chains.get("primary") or []
+        enabled = [entry for entry in primary if entry.enabled]
+        if len(enabled) != 1 or enabled[0].model != PRODUCTION_MARKING_MODEL:
+            names = [entry.model for entry in enabled]
+            raise ValueError(
+                "The primary (marking) model chain must contain exactly one "
+                f"enabled entry, {PRODUCTION_MARKING_MODEL!r}, and no fallback. "
+                f"This deployment configures {names!r}. A fallback that changes "
+                "the marking model would make the recorded model a guess; remove "
+                "the extra entries."
+            )
+
+        for role, entries in self.model_chains.items():
+            for entry in entries:
+                if is_disabled_marking_model(entry.model):
+                    raise ValueError(
+                        f"Model chain {role!r} names {entry.model!r}, which is a "
+                        "disabled lightweight model. Enabled marking models are "
+                        f"{PRODUCTION_MARKING_MODEL!r}; disabled: "
+                        f"{sorted(DISABLED_MARKING_MODELS)!r}."
+                    )
+
+        # The per-role environment fallbacks are read when no database selection
+        # exists, so they are policy-checked too.  A Lite value here could
+        # otherwise become the review role's first attempt through the back door.
+        for field_name in ("model_review", "model_lightweight"):
+            value = getattr(self, field_name)
+            if is_disabled_marking_model(value):
+                raise ValueError(
+                    f"{field_name} is {value!r}, a disabled lightweight model. "
+                    f"Enabled marking models are {PRODUCTION_MARKING_MODEL!r}; "
+                    f"disabled: {sorted(DISABLED_MARKING_MODELS)!r}."
+                )
+        return self
+
+    @field_validator("transcription_model", "independent_review_model", mode="before")
+    @classmethod
+    def _blank_role_model_is_none(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _specialist_role_permissions(self) -> ProviderSettings:
+        """Refuse a specialist role that names a model its permission forbids.
+
+        A reserved model may be named — that is what the reservation records —
+        but its role cannot be enabled, because a reserved permission never
+        executes.  Only a validated change of the model's permission to ENABLED
+        can switch the role on.  A disabled model cannot be named at all.
+        """
+
+        role_fields = (
+            (
+                "transcription_model",
+                "transcription_role_enabled",
+                AICapability.TRANSCRIPTION,
+            ),
+            (
+                "independent_review_model",
+                "independent_review_role_enabled",
+                AICapability.INDEPENDENT_REVIEW,
+            ),
+        )
+        for model_field, enabled_field, capability in role_fields:
+            problem = role_configuration_problem(
+                getattr(self, model_field),
+                capability,
+                enabled=getattr(self, enabled_field),
+            )
+            if problem is not None:
+                raise ValueError(
+                    f"AETRIX_PROVIDER__{model_field.upper()}: {problem}"
+                )
+        return self
+
+    @field_validator("model_chains")
+    @classmethod
+    def _chain_roles(
+        cls, value: dict[str, list[ModelChainEntry]]
+    ) -> dict[str, list[ModelChainEntry]]:
+        """Reject a chain that names a role nothing reads, or has no enabled entry."""
+
+        unknown = sorted(set(value) - set(MODEL_CHAIN_ROLES))
+        if unknown:
+            raise ValueError(
+                f"unknown model-chain role(s) {unknown}; expected {list(MODEL_CHAIN_ROLES)}"
+            )
+        for role, entries in value.items():
+            if not entries:
+                raise ValueError(f"model chain {role!r} is empty")
+            if not any(entry.enabled for entry in entries):
+                raise ValueError(
+                    f"model chain {role!r} has no enabled entry, so it could never "
+                    "make a call"
+                )
+            models = [entry.model for entry in entries]
+            if len(models) != len(set(models)):
+                raise ValueError(f"model chain {role!r} repeats a model")
+        return value
 
 
 class ModelQuota(BaseModel):
@@ -265,6 +511,35 @@ class ModelQuota(BaseModel):
     source: str = Field(default="operator", pattern="^(operator|google)$")
 
 
+#: The operator's Google AI Studio snapshot for this deployment.
+#:
+#: These are *project* limits: every key in one Google Cloud project shares
+#: them, which is why they are attached to the project/model pair and never
+#: multiplied by the number of credentials.  ``source="operator"`` keeps the
+#: quota report honest: only a value read from a Google surface may be
+#: reported as CONFIRMED.  Gemma is deliberately absent, because its 16K TPM
+#: cannot carry a whole-paper request and it has not passed a compatibility
+#: test, so it must not be given an allowance that invites a failed run.
+def _default_model_limits() -> dict[str, ModelQuota]:
+    def limit(requests_per_minute: int, requests_per_day: int) -> ModelQuota:
+        return ModelQuota(
+            requests_per_minute=requests_per_minute,
+            tokens_per_minute=250_000,
+            requests_per_day=requests_per_day,
+            source="operator",
+        )
+
+    return {
+        "gemini-3.1-flash-lite": limit(15, 500),
+        "gemini-3.5-flash-lite": limit(15, 500),
+        "gemini-2.5-flash": limit(5, 20),
+        "gemini-3-flash-preview": limit(5, 20),
+        "gemini-3.6-flash": limit(5, 20),
+        "gemini-3.8-flash": limit(5, 20),
+        "gemini-4-hydrogen": limit(5, 20),
+    }
+
+
 class QuotaSettings(BaseModel):
     #: Platform defaults applied to a model with no explicit entry in
     #: ``model_limits``.  They are Aetrix policy, never a Google figure.
@@ -276,7 +551,9 @@ class QuotaSettings(BaseModel):
     #: Tokens-per-minute policy, per project and model.  ``None`` means unknown:
     #: the estimate reports UNKNOWN rather than dividing by a made-up number.
     tokens_per_minute: int | None = Field(default=None, ge=1)
-    model_limits: dict[str, ModelQuota] = Field(default_factory=dict)
+    model_limits: dict[str, ModelQuota] = Field(
+        default_factory=_default_model_limits
+    )
     #: Gemini's daily free-tier window resets at midnight Pacific time.
     daily_reset_timezone: str = "America/Los_Angeles"
     #: Usage above this share of a limit raises an "approaching quota" alert.

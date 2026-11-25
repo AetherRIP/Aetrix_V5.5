@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ...core.config import Settings, get_settings
 from ...core.errors import AppError, ErrorCode
 from ...core.ids import utcnow
+from ...core.monitoring_models import MONITORED_MODELS, is_monitored_model
 from ...core.security import Principal, platform_authority
 from ...db.models import ProviderCredential, ProviderUsage
 from ...db.repositories import (
@@ -406,7 +407,15 @@ def usage(
                 since, settings.quota.daily_reset_timezone
             )
         ],
-        by_model=[ModelUsageRead(**row) for row in repository.model_window_stats(since)],
+        # The three-model monitoring view.  ``excluded_requests`` is what keeps
+        # this table reconcilable with the unfiltered daily totals beside it.
+        by_model=[
+            ModelUsageRead(**row)
+            for row in repository.model_window_stats(since, models=MONITORED_MODELS)
+        ],
+        excluded_requests=repository.excluded_model_requests(
+            since, MONITORED_MODELS
+        ),
         by_project=[ProjectUsageRead(**row) for row in repository.project_window_stats(since)],
         recent_calls=[
             RecentProviderCallRead(
@@ -488,9 +497,27 @@ def models(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> ModelCatalogueRead:
-    """What the registered credentials can actually reach, read live."""
+    """What the registered credentials can actually reach, read live.
 
-    return ModelCatalogueRead(**discover_catalogue(session, settings, refresh=refresh))
+    The payload is restricted to the three monitored models so no table or
+    selector on the monitoring screen can offer a fourth.  The restriction is
+    applied to this *response*, not to :func:`discover_catalogue`, because
+    selection still has to validate against the full list Google returned; the
+    allowlist decides what is displayed, never what is permitted.
+    """
+
+    payload = discover_catalogue(session, settings, refresh=refresh)
+    listed = list(payload["models"])
+    shown = [model for model in listed if is_monitored_model(model["id"])]
+    excluded = len(listed) - len(shown)
+    payload["models"] = shown
+    payload["note"] = (
+        f"{payload['note']} This view lists the three monitored models only; "
+        f"{excluded} other model(s) returned by models.list are excluded from "
+        "it. Exclusion here is a monitoring decision and does not change any "
+        "execution permission."
+    )
+    return ModelCatalogueRead(**payload)
 
 
 @router.put("/models/selection/{role}", response_model=ModelSelectionRead)

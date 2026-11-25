@@ -72,3 +72,26 @@ def make_png(width: int = 1000, height: int = 1400, *, text: str | None = None) 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def single_model_chains(settings):
+    """Pin every correction role to exactly one model.
+
+    These tests ask a single-model question: after the project's allowance is
+    spent, is another *key in the same project* treated as fresh capacity?  With
+    a fallback chain a second call would legitimately move to the next model and
+    succeed, which is correct behaviour but not the property under test here.
+    Pinning one model per role keeps the original question intact.
+    """
+
+    from app.core.config import ModelChainEntry
+
+    provider = settings.provider
+    chains = {
+        "primary": [ModelChainEntry(model=provider.model_primary)],
+        "lightweight": [ModelChainEntry(model=provider.model_lightweight)],
+        "review": [ModelChainEntry(model=provider.model_review)],
+    }
+    return settings.model_copy(
+        update={"provider": provider.model_copy(update={"model_chains": chains})}
+    )

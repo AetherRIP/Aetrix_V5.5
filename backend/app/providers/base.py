@@ -40,6 +40,11 @@ class LLMRequest:
     #: Per-call override, in seconds. A validation probe must not inherit the
     #: long extraction timeout when Google is unresponsive.
     timeout_seconds: float | None = None
+    #: True when this model rejects ``thinkingConfig`` outright.  Google answers
+    #: 400 ``INVALID_ARGUMENT`` without naming the field, so the fact belongs to
+    #: the model's configuration: retrying without the block is a compatibility
+    #: setting, not a discovery that has to be paid for on every process start.
+    omit_thinking_config: bool = False
 
 
 @dataclass(frozen=True, slots=True)

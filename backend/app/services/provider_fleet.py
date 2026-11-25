@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from ..core.config import Settings
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
+from ..core.monitoring_models import filter_monitored
 from ..core.security import SecretBox, fingerprint
 from ..db.models import ProviderCredential, ProviderUsage
 from ..db.repositories import (
@@ -606,17 +607,22 @@ def remove_credential(
 def _models(
     settings: Settings, credentials: Iterable[ProviderCredential] = ()
 ) -> list[str]:
-    seen: dict[str, None] = {}
-    for model in (
+    """The monitored models whose allowance this project is reported against.
+
+    This is the fleet screen's model list, so it is the one allowlist and not the
+    union of everything the deployment happens to mention.  A registered key's
+    ``model_access`` cannot add a fourth column to a three-model table — and it
+    cannot remove one either, because a missing allowance has to be visible.
+    """
+
+    mentioned: list[str] = [
         settings.provider.model_primary,
         settings.provider.model_review,
         *settings.quota.model_limits.keys(),
-    ):
-        seen.setdefault(model, None)
+    ]
     for credential in credentials:
-        for model in credential.model_access or []:
-            seen.setdefault(model, None)
-    return list(seen)
+        mentioned.extend(credential.model_access or [])
+    return filter_monitored(mentioned)
 
 
 def _project_operational(

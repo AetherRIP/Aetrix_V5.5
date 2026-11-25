@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.core.config import get_settings
+from app.core.monitoring_models import MONITORED_MODELS
 from app.main import app
 from app.schemas.model_inventory import ModelInventoryRead
 from app.services.model_catalogue import effective_selection
@@ -84,22 +85,30 @@ def test_quota_snapshot_preserves_usage_above_the_supplied_limit() -> None:
     assert flash.quota.observation_time_supplied is False
 
 
-def test_inventory_route_is_exposed_and_serialises_the_complete_report() -> None:
+def test_inventory_route_is_exposed_and_serialises_the_monitored_view() -> None:
+    """The registry keeps 42 records; the monitoring view shows three.
+
+    The excluded models are counted rather than deleted, so a reader can tell
+    "not watched" from "never registered" and no historical row is rewritten.
+    """
+
     class EmptySelectionSession:
         def scalar(self, _statement: object) -> None:
             return None
 
     report = ModelInventoryRead(**inventory_report(EmptySelectionSession(), get_settings()))
 
-    assert len(report.models) == 42
-    assert report.counts.total == 42
+    assert [model.api_model_id for model in report.models] == list(MONITORED_MODELS)
+    assert report.counts.total == 3
+    assert report.excluded_models == 39
+    assert len(MODEL_RECORDS) == 42
     assert "/api/v1/admin/providers/models/inventory" in app.openapi()["paths"]
 
 
 def test_saved_selection_is_the_model_the_provider_call_path_uses() -> None:
     class StoredSelectionSession:
         def scalar(self, _statement: object) -> SimpleNamespace:
-            return SimpleNamespace(model="gemini-3.8-flash")
+            return SimpleNamespace(model="gemini-3.6-flash")
 
     session = StoredSelectionSession()
     settings = get_settings()
@@ -108,11 +117,11 @@ def test_saved_selection_is_the_model_the_provider_call_path_uses() -> None:
     service.settings = settings
 
     assert effective_selection(session, settings, "primary") == (
-        "gemini-3.8-flash",
+        "gemini-3.6-flash",
         "database",
     )
-    assert service._model_for("primary") == "gemini-3.8-flash"
-    assert service._model_for("review") == "gemini-3.8-flash"
+    assert service._model_for("primary") == "gemini-3.6-flash"
+    assert service._model_for("review") == "gemini-3.6-flash"
 
 
 def test_retired_and_agent_entries_keep_their_lifecycle_and_replacement() -> None:

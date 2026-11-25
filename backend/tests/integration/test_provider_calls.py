@@ -9,7 +9,7 @@ from app.providers.errors import ProviderAuthenticationError
 from app.services.provider_calls import ProviderCallService
 from sqlalchemy import select
 
-from tests.support import FakeProvider
+from tests.support import FakeProvider, single_model_chains
 
 
 def _service(db_session, provider, settings=None):
@@ -48,8 +48,17 @@ def test_usage_records_tokens_cost_and_prompt_version(
 
 
 def test_quota_reservation_blocks_a_second_call(identity, provider_credential, db_session) -> None:
-    settings = get_settings().model_copy(
-        update={"quota": get_settings().quota.model_copy(update={"requests_per_minute": 1})}
+    settings = single_model_chains(
+        get_settings().model_copy(
+            update={
+                # ``model_limits`` is pinned empty so the global policy this
+                # test sets is the one in force; a per-model snapshot entry
+                # would otherwise be the authoritative limit.
+                "quota": get_settings().quota.model_copy(
+                    update={"requests_per_minute": 1, "model_limits": {}}
+                )
+            }
+        )
     )
     fake = FakeProvider("{}")
     service = _service(db_session, fake, settings)

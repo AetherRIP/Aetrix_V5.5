@@ -34,6 +34,11 @@ class QuotaEstimateRead(BaseModel):
     cooldown_until: datetime | None
     accounting: str
     exhausted: bool
+    #: Requests in the day window whose consumption Google never confirmed (5xx
+    #: or a lost connection).  They count against the per-minute gate but not
+    #: the daily allowance, so they are reported beside it rather than folded
+    #: into ``requests_per_day.used``.
+    unconfirmed_requests: int = 0
     notes: list[str]
 
 
@@ -260,9 +265,13 @@ class UsageReportRead(BaseModel):
     since: datetime
     timezone: str
     daily: list[DailyUsageRead]
+    #: Only the three monitored models appear in this table.
     by_model: list[ModelUsageRead]
     by_project: list[ProjectUsageRead]
     recent_calls: list[RecentProviderCallRead]
+    #: Recorded requests for models outside the monitored view, so the filtered
+    #: table still reconciles with ``daily``, which is the ledger's real total.
+    excluded_requests: int = 0
 
 
 class AlertRead(BaseModel):

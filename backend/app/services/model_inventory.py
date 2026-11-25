@@ -21,6 +21,7 @@ from typing import Any, Literal
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings
+from ..core.monitoring_models import MONITORED_MODELS, is_monitored_model
 from .model_catalogue import SELECTION_ROLES, effective_selection
 
 Modality = Literal[
@@ -984,24 +985,48 @@ def inventory_counts(models: tuple[ModelRecord, ...] = MODEL_RECORDS) -> dict[st
     }
 
 
+def monitored_records() -> tuple[ModelRecord, ...]:
+    """The registered records in the three-model monitoring view.
+
+    The registry itself keeps every model it has ever described: removing a
+    record would rewrite the operator's inventory and lose the reason a model is
+    refused.  The *view* is filtered here, by the one allowlist every monitoring
+    surface reads, and every count is recomputed from the filtered set so a total
+    can never disagree with the rows beside it.
+    """
+
+    by_id = {
+        record.api_model_id: record
+        for record in MODEL_RECORDS
+        if record.api_model_id
+    }
+    return tuple(by_id[model] for model in MONITORED_MODELS if model in by_id)
+
+
 def inventory_report(session: Session, settings: Settings) -> dict[str, Any]:
-    models = [model_read(record, settings) for record in MODEL_RECORDS]
+    records = monitored_records()
+    models = [model_read(record, settings) for record in records]
     selections: dict[str, str] = {}
     sources: dict[str, str] = {}
     for role in SELECTION_ROLES:
         model, source = effective_selection(session, settings, role)
         selections[role] = model
         sources[role] = source
+    excluded = sum(1 for record in MODEL_RECORDS if not is_monitored_model(record.api_model_id))
     return {
         "imported_at": IMPORTED_AT,
         "models": models,
-        "counts": inventory_counts(),
+        "counts": inventory_counts(records),
         "selections": selections,
         "selection_sources": sources,
+        "excluded_models": excluded,
         "note": (
             "The inventory is configuration-backed and registered independently of "
             "project availability. Quota and usage are the operator's AI Studio "
             "snapshot imported 2026-11-10; the snapshot did not include a time of "
-            "day. A model is not available merely because it is registered."
+            "day. A model is not available merely because it is registered. This "
+            "view is limited to the three monitored models; "
+            f"{excluded} other registered model(s) are outside it and their "
+            "historical usage is retained, never rewritten."
         ),
     }
