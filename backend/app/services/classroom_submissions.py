@@ -55,6 +55,18 @@ from .classroom_google import (
 )
 from .classroom_oauth import ClassroomOAuthService
 
+#: The Google submission states whose work may be ingested.  A submission the
+#: student has only opened carries no attachments, so ingesting it would record
+#: a failure for work that was never turned in.
+INGESTIBLE_SUBMISSION_STATES = frozenset({"TURNED_IN", "RETURNED"})
+
+
+def is_ingestible(submission_state: str | None) -> bool:
+    """Whether a Classroom submission state represents work handed in."""
+
+    return submission_state in INGESTIBLE_SUBMISSION_STATES
+
+
 #: The formats the ingestion pipeline validates.  Anything else is refused with
 #: an explicit reason rather than being passed through.
 SUPPORTED_MIME_TYPES = {
@@ -562,6 +574,15 @@ class ClassroomSubmissionService:
                 self.session.add(link_row)
                 self.session.flush()
                 counts["created"] += 1
+
+            if not is_ingestible(record.state):
+                # Record that the work exists, but do not call it a failed
+                # ingest: Google reports no attachment until the student turns
+                # the work in.  The next sync ingests it once it is TURNED_IN.
+                if link_row.state not in {"INGESTED", "CORRECTING", "CORRECTED"}:
+                    link_row.state = "DISCOVERED"
+                    link_row.ingest_error = None
+                continue
 
             # ``_ingest`` delegates to ``DocumentService``, which commits its
             # own work and with it this session's pending rows.  A savepoint

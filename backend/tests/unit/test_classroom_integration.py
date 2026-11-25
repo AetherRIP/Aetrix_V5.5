@@ -194,6 +194,17 @@ def test_teachers_are_read_from_the_teachers_segment() -> None:
 # -- submissions ------------------------------------------------------------
 
 
+def test_only_work_the_student_turned_in_is_ingested() -> None:
+    """An opened-but-unsubmitted assignment carries no work to ingest."""
+
+    from app.services.classroom_submissions import is_ingestible
+
+    assert is_ingestible("TURNED_IN") is True
+    assert is_ingestible("RETURNED") is True
+    for state in ("CREATED", "NEW", "RECLAIMED_BY_STUDENT", "", None):
+        assert is_ingestible(state) is False
+
+
 def test_submissions_parse_attachments_and_paginate() -> None:
     calls: list[httpx.Request] = []
 
