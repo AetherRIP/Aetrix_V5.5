@@ -138,8 +138,8 @@ export function ClassStaff({
 
       {state === 'unavailable' ? (
         <p className="ws-staff__note">
-          Assigning a teacher or assistant to this class needs the newer engine; it is not
-          available on the deployed build yet.
+          Staff can only be assigned from the workspace that owns this class. The engine
+          answers as if the class did not exist outside it, so nothing is guessed here.
         </p>
       ) : (
         <button
