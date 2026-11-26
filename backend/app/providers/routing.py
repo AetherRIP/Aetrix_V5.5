@@ -7,12 +7,13 @@ the chain, so it can be tested without a database, a network or a real key.
 Three mechanisms are deliberately kept apart, because conflating them is how a
 call path lies about what it did:
 
-* **credential rotation** — same model, different key.  Only useful when the
-  failure is about the key, or when the replacement key bills against a
-  genuinely different Google Cloud project.  Keys inside one project share one
-  quota pool, so swapping them buys nothing.
+* **credential rotation** — same model, different key.  Only for a failure that
+  is about the key (401/403).  A 429 never rotates: Aetrix cannot tell whether
+  the sibling key shares the exhausted Google project, so leasing it would be an
+  attempt to evade a quota rather than to recover from a fault.
 * **model fallback** — a different model.  This is the only mechanism that
-  recovers from a project-wide quota ceiling or a model that is unavailable.
+  recovers from a quota ceiling or a model that is unavailable.  Production
+  marking uses a one-entry chain, so in practice a 429 stops the job.
 * **per-question recovery** — a different *request shape* inside one job.  It
   lives in the pipeline and is not decided here.
 
@@ -136,24 +137,17 @@ def decide(
     attempts_allowed: int,
     next_model_available: bool,
     other_credential_available: bool,
-    independent_credential_available: bool,
-    independent_project_verified: bool = False,
 ) -> RoutingAction:
     """The routing decision for one failed attempt.
 
     ``attempt_index`` is zero-based within the current model, so
     ``attempt_index + 1 < attempts_allowed`` means another attempt remains.
 
-    ``independent_credential_available`` means a different credential that bills
-    against a *different Google Cloud project*; only that can recover a
-    project-scoped quota failure.  ``other_credential_available`` is any other
-    eligible key at all, which is enough for a key-specific failure.
-
-    ``independent_project_verified`` says Google's Resource Manager has confirmed
-    that the other project is a distinct, live project.  A quota fallback across
-    projects is refused without it: an operator-typed project id that is a typo,
-    a duplicate or a deleted project would otherwise look like fresh capacity and
-    the call would spend an attempt to be told the same 429.
+    ``other_credential_available`` describes a different eligible Aetrix pool.
+    It is enough to answer a key-specific failure, and deliberately not enough to
+    answer a quota refusal: the keys are separate pools but may share one Google
+    project, and no response Aetrix can observe establishes that a spare key has
+    an allowance of its own.
     """
 
     exhausted = attempt_index + 1 >= attempts_allowed
@@ -170,16 +164,11 @@ def decide(
         return RoutingAction.STOP
 
     if kind is FailureKind.QUOTA:
-        # A 429 is shared by every key in the project, so rotating inside one
-        # project is a paid no-op that also hides the real ceiling.  Rotating to
-        # an independent project costs an attempt, so it is only decided when
-        # that attempt exists *and* the other project's identity is verified.
-        if (
-            independent_credential_available
-            and independent_project_verified
-            and not exhausted
-        ):
-            return RoutingAction.ROTATE_CREDENTIAL
+        # Never another key.  Regardless of whether the spare credential has its
+        # own Aetrix pool, Aetrix cannot establish that it bills a different
+        # Google project; leasing it would be quota evasion dressed as recovery.
+        # A different *model* is a separate allowance only when the chain has one,
+        # which production marking does not.
         return RoutingAction.NEXT_MODEL if next_model_available else RoutingAction.STOP
 
     if kind in (

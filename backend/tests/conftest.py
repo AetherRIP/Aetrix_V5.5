@@ -15,6 +15,7 @@ before the first migration instead of altering the project database.
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -295,7 +296,10 @@ def open_access_client(clean_tables, tmp_path, monkeypatch):
 @pytest.fixture
 def provider_credential(identity, db_session) -> ProviderCredential:
     box = SecretBox(get_settings().security.encryption_key.get_secret_value())
+    identifier = uuid.uuid4()
     credential = ProviderCredential(
+        id=identifier,
+        pool_id=f"gemini-key-{identifier}",
         tenant_id=identity.tenant_a.id,
         project_id="fixture-project",
         account_label="fixture-key",

@@ -1222,3 +1222,51 @@ def download_drive_file(
             .strip()
         )
         return b"".join(chunks), content_type
+
+
+def export_drive_file(
+    settings: ClassroomSettings,
+    access_token: str,
+    file_id: str,
+    *,
+    mime_type: str = "application/pdf",
+    max_bytes: int | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> tuple[bytes, str]:
+    """Export a Google Workspace document through Drive's PDF export path.
+
+    Only a Workspace type with a lossless page layout is exported; the caller
+    decides which types qualify.  The byte ceiling is enforced exactly as it is
+    for a direct download, so an export cannot exhaust memory.
+    """
+
+    ceiling = max_bytes if max_bytes is not None else settings.max_attachment_bytes
+    url = f"{settings.drive_base_url.rstrip('/')}/files/{file_id}/export"
+    with _client(settings, transport) as client, client.stream(
+        "GET",
+        url,
+        headers=_headers(access_token),
+        params={"mimeType": mime_type, "alt": "media"},
+    ) as response:
+        if response.status_code >= 400:
+            response.read()
+            raise _api_error(response, "Google Drive refused the document export.")
+        declared = response.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > ceiling:
+            raise ClassroomUpstreamError(
+                UpstreamKind.PERMANENT,
+                f"The exported document is larger than the {ceiling} byte limit.",
+                status_code=413,
+            )
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_bytes():
+            total += len(chunk)
+            if total > ceiling:
+                raise ClassroomUpstreamError(
+                    UpstreamKind.PERMANENT,
+                    f"The exported document is larger than the {ceiling} byte limit.",
+                    status_code=413,
+                )
+            chunks.append(chunk)
+        return b"".join(chunks), mime_type

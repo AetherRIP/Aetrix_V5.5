@@ -10,9 +10,11 @@ the code and a passing check demonstrate.
 1. **Describe what the code does.** Marking, SymPy verification, results, teacher review,
    overrides and approvals are implemented through `aetrix_v5_5`. Historical jobs and results
    keep the engine and version that produced them (`aetrix_legacy`, `mathchecker_v5`) and are
-   never rewritten. Cohort intelligence,
-   Supabase Storage, malware scanning, rate limiting, the authenticated data frontend,
-   Cloudflare data bindings and production deployment are **not implemented**.
+   never rewritten. Question-level cohort intelligence is implemented over stored results
+   at `GET /workspaces/{id}/cohort`; topic aggregates stay unavailable because no stored
+   topic metadata exists. Supabase Storage, malware scanning, rate limiting, the
+   authenticated data frontend, Cloudflare data bindings and production deployment are
+   **not implemented**.
    The live provider is `UNVERIFIED`; the benchmark holdout has zero certified papers.
 2. **Tenant isolation is not optional.** Resolve the tenant from the verified JWT claim in
    `backend/app/api/deps.py`; never from a request body. Cross-tenant reads must look

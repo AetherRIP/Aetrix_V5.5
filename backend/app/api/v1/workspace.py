@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from ...core.security import Principal
 from ...db.session import get_db_session
+from ...schemas.cohort import CohortRead
 from ...schemas.workspace import (
-    AuditEventRead,
+    AuditEventPage,
     DashboardRead,
     GradebookRead,
     InboxItemRead,
@@ -18,6 +21,7 @@ from ...schemas.workspace import (
     NotificationRead,
     ReportRow,
 )
+from ...services.cohort import CohortService
 from ...services.workspace import WorkspaceService
 from ..deps import get_principal
 
@@ -61,6 +65,21 @@ def get_gradebook(
     return WorkspaceService(session).gradebook(principal, workspace_id, assignment_id)
 
 
+@router.get("/workspaces/{workspace_id}/cohort", response_model=CohortRead)
+def get_cohort(
+    workspace_id: uuid.UUID,
+    assignment_id: uuid.UUID = Query(...),
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> CohortRead:
+    """Question-level cohort performance for one assignment.
+
+    Reads stored results only; it never calls a provider and never changes a row.
+    """
+
+    return CohortService(session).analyse(principal, workspace_id, assignment_id)
+
+
 @router.get(
     "/workspaces/{workspace_id}/notifications", response_model=list[NotificationRead]
 )
@@ -87,39 +106,75 @@ def get_marking_history(
     )
 
 
-@router.get("/workspaces/{workspace_id}/audit", response_model=list[AuditEventRead])
+@router.get("/workspaces/{workspace_id}/audit", response_model=AuditEventPage)
 def get_workspace_audit(
     workspace_id: uuid.UUID,
     action: str | None = Query(default=None, max_length=120),
     entity_type: str | None = Query(default=None, max_length=80),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    entity_id: str | None = Query(default=None, max_length=200),
+    actor: str | None = Query(default=None, max_length=320),
+    actor_type: Literal["USER", "SYSTEM", "WORKER"] | None = Query(default=None),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    before: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
     principal: Principal = Depends(get_principal),
     session: Session = Depends(get_db_session),
-) -> list[AuditEventRead]:
+) -> AuditEventPage:
+    """The caller's workspace ledger, newest first.
+
+    Read-only.  ``before`` is the id of the last event on the previous page; the
+    service resolves it inside the caller's scope and continues with a keyset
+    boundary, so a page cannot drift when new events arrive between requests.
+    """
+
     return WorkspaceService(session).audit(
         principal,
         workspace_id,
         action=action,
         entity_type=entity_type,
+        entity_id=entity_id,
+        actor=actor,
+        actor_type=actor_type,
+        date_from=date_from,
+        date_to=date_to,
+        before=before,
         limit=limit,
-        offset=offset,
     )
 
 
-@router.get("/admin/audit", response_model=list[AuditEventRead])
+@router.get("/admin/audit", response_model=AuditEventPage)
 def get_platform_audit(
+    workspace_id: uuid.UUID | None = Query(default=None),
     action: str | None = Query(default=None, max_length=120),
     entity_type: str | None = Query(default=None, max_length=80),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    entity_id: str | None = Query(default=None, max_length=200),
+    actor: str | None = Query(default=None, max_length=320),
+    actor_type: Literal["USER", "SYSTEM", "WORKER"] | None = Query(default=None),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    before: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
     principal: Principal = Depends(get_principal),
     session: Session = Depends(get_db_session),
-) -> list[AuditEventRead]:
+) -> AuditEventPage:
+    """Cross-tenant ledger for the platform operator.
+
+    ``workspace_id`` narrows the view to one tenant; omitting it reads every
+    tenant plus platform-level events.  Authorization is the verified platform
+    role, never a workspace membership role.
+    """
+
     return WorkspaceService(session).platform_audit(
         principal,
+        tenant_id=workspace_id,
         action=action,
         entity_type=entity_type,
+        entity_id=entity_id,
+        actor=actor,
+        actor_type=actor_type,
+        date_from=date_from,
+        date_to=date_to,
+        before=before,
         limit=limit,
-        offset=offset,
     )

@@ -1,11 +1,12 @@
 """Role-specific model permissions, including the routing gate.
 
 Marking is one capability with one model.  Transcription and independent review
-are separate capabilities, and the agreed policy grants them to nobody today:
+are separate capabilities, granted to the designated review model:
 
 ===================  =========  =============  ==================
 Model                Marking    Transcription  Independent review
 ===================  =========  =============  ==================
+gemini-2.5-flash     DISABLED   ENABLED        ENABLED
 gemini-3.6-flash     ENABLED    RESERVED       RESERVED
 gemini-3.5-flash-lite DISABLED  RESERVED       DISABLED
 gemini-3.1-flash-lite DISABLED  RESERVED       DISABLED
@@ -48,49 +49,79 @@ from app.core.model_permissions import (
 from pydantic import ValidationError
 
 FLASH = PRODUCTION_MARKING_MODEL
+#: The designated review model: the second examiner and the blind reader.
+FLASH_REVIEW = "gemini-2.5-flash"
 FLASH_LITE_35 = "gemini-3.5-flash-lite"
 FLASH_LITE_31 = "gemini-3.1-flash-lite"
 PRO_PREVIEW = "gemini-3.1-pro-preview"
+HYDROGEN = "gemini-4-hydrogen"
+FLASH_38 = "gemini-3.8-flash"
+#: The three verified primary marking models, in declared priority order.
+PRIMARIES = (HYDROGEN, FLASH_38, FLASH)
 
 
 # -- the agreed table --------------------------------------------------------
 
 
 def test_the_permission_matrix_matches_the_agreed_policy() -> None:
-    assert permission_for(FLASH, AICapability.MARKING) is PermissionStatus.ENABLED
-    # Being the marking model is not a grant to read or review.
-    assert permission_for(FLASH, AICapability.TRANSCRIPTION) is PermissionStatus.RESERVED
+    # All three verified primaries may mark; none may review or transcribe.
+    for model in PRIMARIES:
+        assert permission_for(model, AICapability.MARKING) is PermissionStatus.ENABLED
+        assert (
+            permission_for(model, AICapability.TRANSCRIPTION)
+            is PermissionStatus.RESERVED
+        )
+        assert (
+            permission_for(model, AICapability.INDEPENDENT_REVIEW)
+            is PermissionStatus.RESERVED
+        )
+
+    # The two checkers each hold exactly one specialist role, and neither marks.
+    assert permission_for(FLASH_LITE_31, AICapability.MARKING) is PermissionStatus.DISABLED
     assert (
-        permission_for(FLASH, AICapability.INDEPENDENT_REVIEW)
+        permission_for(FLASH_LITE_31, AICapability.TRANSCRIPTION)
+        is PermissionStatus.ENABLED
+    )
+    assert (
+        permission_for(FLASH_LITE_31, AICapability.INDEPENDENT_REVIEW)
+        is PermissionStatus.DISABLED
+    )
+
+    assert permission_for(FLASH_LITE_35, AICapability.MARKING) is PermissionStatus.DISABLED
+    assert (
+        permission_for(FLASH_LITE_35, AICapability.INDEPENDENT_REVIEW)
+        is PermissionStatus.ENABLED
+    )
+    assert (
+        permission_for(FLASH_LITE_35, AICapability.TRANSCRIPTION)
         is PermissionStatus.RESERVED
     )
 
-    for lite in (FLASH_LITE_35, FLASH_LITE_31):
-        assert permission_for(lite, AICapability.MARKING) is PermissionStatus.DISABLED
+    # The retired review model holds no grant at all.
+    for capability in AICapability:
         assert (
-            permission_for(lite, AICapability.TRANSCRIPTION) is PermissionStatus.RESERVED
-        )
-        assert (
-            permission_for(lite, AICapability.INDEPENDENT_REVIEW)
-            is PermissionStatus.DISABLED
-        )
+            permission_for(FLASH_REVIEW, capability) is PermissionStatus.DISABLED
+        ), capability
 
 
-def test_no_model_is_permitted_for_independent_review() -> None:
-    """The review role has no executable model, and that is the policy."""
+def test_exactly_one_model_is_permitted_for_independent_review() -> None:
+    """The evidence checker, and never a marking model."""
 
-    assert not is_permitted(FLASH, AICapability.INDEPENDENT_REVIEW)
-    assert not is_permitted(FLASH_LITE_35, AICapability.INDEPENDENT_REVIEW)
-    assert not is_permitted(FLASH_LITE_31, AICapability.INDEPENDENT_REVIEW)
     assert permitted_models(
-        AICapability.INDEPENDENT_REVIEW, [FLASH, FLASH_LITE_35, FLASH_LITE_31]
-    ) == []
+        AICapability.INDEPENDENT_REVIEW, [*PRIMARIES, FLASH_LITE_35, FLASH_LITE_31]
+    ) == [FLASH_LITE_35]
+    for model in PRIMARIES:
+        assert not is_permitted(model, AICapability.INDEPENDENT_REVIEW)
 
 
-def test_no_model_is_permitted_for_transcription_yet() -> None:
+def test_exactly_one_model_is_permitted_for_blind_transcription() -> None:
+    """The transcription checker, and never the model that marked the paper."""
+
     assert permitted_models(
-        AICapability.TRANSCRIPTION, [FLASH, FLASH_LITE_35, FLASH_LITE_31]
-    ) == []
+        AICapability.TRANSCRIPTION, [*PRIMARIES, FLASH_LITE_35, FLASH_LITE_31]
+    ) == [FLASH_LITE_31]
+    for model in PRIMARIES:
+        assert not is_permitted(model, AICapability.TRANSCRIPTION)
 
 
 # -- marking stays exactly as it was ----------------------------------------
@@ -141,21 +172,25 @@ def test_production_marking_continues_to_use_gemini_3_6_flash_only() -> None:
 # -- reserved roles cannot execute -----------------------------------------
 
 
-def test_a_lite_model_may_be_named_for_transcription_without_marking() -> None:
+def test_a_checker_is_named_for_its_own_role_and_never_for_marking() -> None:
+    # The evidence checker is reserved for transcription, and permitted for the
+    # role it actually performs.
+    settings = ProviderSettings(transcription_model=FLASH_LITE_35)
+    assert settings.transcription_model == FLASH_LITE_35
+    assert is_reserved(FLASH_LITE_35, AICapability.TRANSCRIPTION)
+    assert not is_permitted(FLASH_LITE_35, AICapability.TRANSCRIPTION)
+    assert is_permitted(FLASH_LITE_35, AICapability.INDEPENDENT_REVIEW)
+
+    # A checker never marks, however permissive its other role is.
     for lite in (FLASH_LITE_35, FLASH_LITE_31):
-        settings = ProviderSettings(transcription_model=lite)
-
-        assert settings.transcription_model == lite
-        assert settings.transcription_role_enabled is False
-        assert is_reserved(lite, AICapability.TRANSCRIPTION)
-        assert not is_permitted(lite, AICapability.TRANSCRIPTION)
-
-        enabled_primary = [
-            entry.model for entry in settings.model_chains["primary"] if entry.enabled
-        ]
-        assert settings.model_primary == FLASH
-        assert enabled_primary == [FLASH]
         assert permission_problem(lite, AICapability.MARKING) is not None
+        with pytest.raises(ValidationError):
+            ProviderSettings(model_primary=lite)
+
+    enabled_primary = [
+        entry.model for entry in ProviderSettings().model_chains["primary"] if entry.enabled
+    ]
+    assert enabled_primary == [FLASH]
 
 
 def test_the_marking_model_may_be_named_for_a_specialist_role_but_not_enabled() -> None:
@@ -186,12 +221,12 @@ def test_the_marking_model_may_be_named_for_a_specialist_role_but_not_enabled() 
 
 
 def test_reserved_roles_cannot_execute_until_explicitly_enabled() -> None:
-    reserved = (
-        (FLASH, AICapability.TRANSCRIPTION),
-        (FLASH, AICapability.INDEPENDENT_REVIEW),
-        (FLASH_LITE_35, AICapability.TRANSCRIPTION),
-        (FLASH_LITE_31, AICapability.TRANSCRIPTION),
+    reserved = tuple(
+        (model, capability)
+        for model in PRIMARIES
+        for capability in (AICapability.TRANSCRIPTION, AICapability.INDEPENDENT_REVIEW)
     )
+    reserved += ((FLASH_LITE_35, AICapability.TRANSCRIPTION),)
 
     for model, capability in reserved:
         # Naming the model (role off) is the reservation, and is accepted.
@@ -213,15 +248,15 @@ def test_reserved_roles_cannot_execute_until_explicitly_enabled() -> None:
 
 
 def test_a_disabled_capability_cannot_even_name_its_model() -> None:
-    # 3.1 Flash Lite is disabled for review, so it cannot be named for it.
+    # 3.1 Flash Lite holds the transcription role only; review is disabled for
+    # it, so it cannot even be named for review.
     with pytest.raises(ValidationError) as error:
         ProviderSettings(independent_review_model=FLASH_LITE_31)
     assert FLASH_LITE_31 in str(error.value)
 
-    # 3.5 Flash Lite is disabled for review too.
-    with pytest.raises(ValidationError) as error:
-        ProviderSettings(independent_review_model=FLASH_LITE_35)
-    assert FLASH_LITE_35 in str(error.value)
+    # The retired review model may not be named for either role.
+    with pytest.raises(ValidationError):
+        ProviderSettings(independent_review_model=FLASH_REVIEW)
 
 
 def test_an_unknown_model_is_not_permitted_by_default() -> None:
@@ -284,13 +319,13 @@ def test_a_chain_of_unpermitted_models_produces_an_actionable_refusal() -> None:
     message = role_exhausted_problem(
         "review",
         AICapability.INDEPENDENT_REVIEW,
-        ["gemini-2.5-flash", "gemini-3.6-flash"],
+        [FLASH_LITE_31, FLASH],
     )
 
     assert "review" in message
     assert "independent_review" in message
-    assert "gemini-2.5-flash (DISABLED)" in message
-    assert "gemini-3.6-flash (RESERVED)" in message
+    assert f"{FLASH_LITE_31} (DISABLED)" in message
+    assert f"{FLASH} (RESERVED)" in message
     assert "Nothing was sent to the provider" in message
 
 
@@ -298,27 +333,42 @@ def test_the_policy_report_separates_active_reserved_and_disabled() -> None:
     report = model_permission_report()
 
     assert report["marking_model"] == FLASH
-    assert report["specialist_roles_implemented"] is False
-    assert "not implemented" in report["note"]
+    assert report["marking_models"] == list(PRIMARIES)
+    assert report["specialist_roles_implemented"] is True
+    assert "primary models" in report["note"]
     assert report["role_capabilities"]["review"] == "independent_review"
     assert report["purpose_capabilities"]["transcription"] == "transcription"
 
-    assert report["permitted"]["marking"] == [FLASH]
+    # Three models may mark; nothing else may, and the pool is not a fallback.
+    assert report["permitted"]["marking"] == list(PRIMARIES)
     assert report["reserved"]["marking"] == []
-    assert report["disabled"]["marking"] == [FLASH_LITE_35, FLASH_LITE_31, PRO_PREVIEW]
-
-    assert report["permitted"]["transcription"] == []
-    assert report["permitted"]["independent_review"] == []
-    assert report["reserved"]["transcription"] == [
-        FLASH,
+    assert report["disabled"]["marking"] == [
+        FLASH_REVIEW,
         FLASH_LITE_35,
         FLASH_LITE_31,
+        PRO_PREVIEW,
     ]
-    assert report["reserved"]["independent_review"] == [FLASH]
 
-    assert report["models"][FLASH]["marking"] == "ENABLED"
-    assert report["models"][FLASH]["transcription"] == "RESERVED"
+    # Each independent role belongs to exactly one model, and it is not a
+    # marking model; the primaries may only be named for those roles.
+    assert report["permitted"]["transcription"] == [FLASH_LITE_31]
+    assert report["permitted"]["independent_review"] == [FLASH_LITE_35]
+    assert report["reserved"]["transcription"] == [
+        HYDROGEN,
+        FLASH_38,
+        FLASH,
+        FLASH_LITE_35,
+    ]
+    assert report["reserved"]["independent_review"] == [HYDROGEN, FLASH_38, FLASH]
+
+    for model in PRIMARIES:
+        assert report["models"][model]["marking"] == "ENABLED"
+        assert report["models"][model]["transcription"] == "RESERVED"
+        assert report["models"][model]["independent_review"] == "RESERVED"
+    assert report["models"][FLASH_REVIEW]["marking"] == "DISABLED"
+    assert report["models"][FLASH_REVIEW]["transcription"] == "DISABLED"
+    assert report["models"][FLASH_REVIEW]["independent_review"] == "DISABLED"
     assert report["models"][FLASH_LITE_35]["transcription"] == "RESERVED"
-    assert report["models"][FLASH_LITE_31]["transcription"] == "RESERVED"
+    assert report["models"][FLASH_LITE_31]["transcription"] == "ENABLED"
     assert report["models"][FLASH_LITE_31]["independent_review"] == "DISABLED"
     assert report["models"][PRO_PREVIEW]["independent_review"] == "DISABLED"

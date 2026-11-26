@@ -80,11 +80,13 @@ function AiDisclosure() {
         </p>
         <p>
           Marking material is sent to Google’s Gemini API at{' '}
-          <code>generativelanguage.googleapis.com</code>. The pilot is configured with{' '}
-          <code>gemini-3.6-flash</code> as the primary model and{' '}
-          <code>gemini-3.1-pro-preview</code> for review; the operator can change these. Aetrix
-          does not send account passwords, provider credentials, workspace membership or the
-          rest of your workspace to the model as part of marking.
+          <code>generativelanguage.googleapis.com</code>. Production marking runs on{' '}
+          <code>gemini-3.6-flash</code> only, and the job records the model that actually
+          answered. The optional second opinion and the blind transcription use a separate
+          review role. The lightweight models <code>gemini-3.5-flash-lite</code> and{' '}
+          <code>gemini-3.1-flash-lite</code> are disabled for marking and are never used as a
+          fallback. Aetrix does not send account passwords, provider credentials, workspace
+          membership or the rest of your workspace to the model as part of marking.
         </p>
       </LegalSection>
 

@@ -138,26 +138,33 @@ function row(page: Page, label: string) {
   return page.locator('.hub-stat').filter({ hasText: label })
 }
 
+/** One channel of the health instrument, scoped by its own label. */
+function channel(page: Page, label: string) {
+  return page.locator('.health-channel').filter({
+    has: page.locator('.health-channel__label', { hasText: new RegExp(`^${label}$`) }),
+  })
+}
+
 test.describe('engine status', () => {
   test('reports a connected backend without the awaited-engine wording', async ({ context }) => {
     const page = await open(context, '/platform/health')
 
-    await expect(row(page, 'API')).toContainText('Connected')
-    await expect(row(page, 'Correction engine')).toContainText('Online')
-    await expect(row(page, 'Worker')).toContainText('Online')
-    await expect(row(page, 'Database')).toContainText('Connected')
+    await expect(channel(page, 'API')).toContainText('Connected')
+    await expect(channel(page, 'Correction engine')).toContainText('Online')
+    await expect(channel(page, 'Worker')).toContainText('Online')
+    await expect(channel(page, 'Database')).toContainText('Connected')
     // A configured provider is never upgraded to "available": it was not called.
-    await expect(row(page, 'Provider')).toContainText('Unknown')
+    await expect(channel(page, 'Provider')).toContainText('Unknown')
 
-    // The component table reports deployment separately from operation, so a
+    // The component ledger reports deployment separately from operation, so a
     // running worker is never shown as "Not deployed".
-    const workerRow = page.locator('tbody tr').filter({ hasText: 'Background worker' })
+    const workerRow = page.locator('.health-component').filter({ hasText: 'Background worker' })
     await expect(workerRow).toContainText('Deployed')
     await expect(workerRow).toContainText('Available')
     await expect(workerRow).toContainText('Not ready')
     await expect(workerRow).not.toContainText('Not deployed')
 
-    const providerRow = page.locator('tbody tr').filter({ hasText: 'AI provider' })
+    const providerRow = page.locator('.health-component').filter({ hasText: 'AI provider' })
     await expect(providerRow).toContainText('Unverified')
     await expect(providerRow).not.toContainText('Available')
 
@@ -181,8 +188,8 @@ test.describe('engine status', () => {
     const response = await page.goto('/platform/health', { waitUntil: 'load' })
     expect(response?.status()).toBe(200)
 
-    await expect(row(page, 'API')).toContainText('Unknown')
-    await expect(row(page, 'Worker')).toContainText('Unknown')
+    await expect(channel(page, 'API')).toContainText('Unknown')
+    await expect(channel(page, 'Worker')).toContainText('Unknown')
     await expect(page.locator('body')).not.toContainText('Connected')
     await expect(page.locator('body')).not.toContainText('Awaits the engine')
   })

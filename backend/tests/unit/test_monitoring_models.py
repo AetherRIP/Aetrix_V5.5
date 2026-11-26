@@ -142,25 +142,22 @@ class _Reservations:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def count_since_project(
-        self, project_id, since, now, *, model=None, include_unconfirmed=False
+    def count_since_credential(
+        self, credential_id, since, now, *, model=None, include_unconfirmed=False
     ):
         self.calls.append({"model": model, "include_unconfirmed": include_unconfirmed})
         return 0
 
-    def unconfirmed_count_project(self, project_id, since, *, model=None) -> int:
+    def unconfirmed_count_credential(self, credential_id, since, *, model=None) -> int:
         return 0
 
 
 class _Usage:
-    def validation_count(self, project_id, model, since) -> int:
+    def validation_count_for_credential(self, credential_id, model, since) -> int:
         return 0
 
-    def tokens_since_project(self, project_id, model, since) -> int:
+    def tokens_since_credential(self, credential_id, model, since) -> int:
         return 0
-
-    def window_stats(self, since, *, project_id=None, model=None):
-        return {"input_tokens": 0, "output_tokens": 0}
 
 
 def _pool(model_limits=None):
@@ -180,7 +177,7 @@ def test_the_minute_window_counts_unconfirmed_requests_and_the_day_does_not() ->
 
     pool = _pool()
 
-    assert pool._within_quota("project-one", FLASH) is True
+    assert pool._within_quota(uuid.uuid4(), FLASH) is True
 
     flags = [call["include_unconfirmed"] for call in pool.reservations.calls]
     assert flags == [True, False]

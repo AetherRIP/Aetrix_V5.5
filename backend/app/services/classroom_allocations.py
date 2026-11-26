@@ -50,6 +50,7 @@ from ..schemas.classroom_integration import (
     ClassroomCourseRead,
     ClassroomSyncRunRead,
 )
+from .classroom_access import allowed_course_ids
 from .platform_accounts import ensure_platform_admin
 
 DISCOVERY_REASON_CONFIGURED = (
@@ -626,7 +627,8 @@ class ClassroomAllocationService:
     ) -> list[WorkspaceAllocationRead]:
         if workspace_id != actor.tenant_id:
             raise AppError(ErrorCode.NOT_FOUND, "Workspace not found.")
-        rows = self.session.execute(
+        allowed = allowed_course_ids(self.session, actor)
+        statement = (
             select(ClassroomAllocation, ClassroomClass)
             .join(
                 ClassroomClass,
@@ -636,7 +638,11 @@ class ClassroomAllocationService:
                 ClassroomAllocation.workspace_id == workspace_id,
                 ClassroomAllocation.status == "ACTIVE",
             )
-            .order_by(ClassroomAllocation.allocated_at.desc())
+        )
+        if allowed is not None:
+            statement = statement.where(ClassroomAllocation.course_id.in_(allowed))
+        rows = self.session.execute(
+            statement.order_by(ClassroomAllocation.allocated_at.desc())
         ).all()
         return [
             WorkspaceAllocationRead(

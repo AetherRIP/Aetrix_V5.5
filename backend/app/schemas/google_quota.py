@@ -55,6 +55,73 @@ class GoogleQuotaRunRead(BaseModel):
     error_message: str | None
 
 
+class GoogleProjectModelHealthRead(BaseModel):
+    model: str
+    requests: int
+    successes: int
+    failures: int
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    last_http_status: int | None
+    #: AVAILABLE needs an observed success; FAILING only failures; UNKNOWN no
+    #: traffic.  This is Aetrix telemetry, never a Google quota statement.
+    state: Literal["AVAILABLE", "FAILING", "UNKNOWN"]
+
+
+class GoogleProjectSignalsRead(BaseModel):
+    counts: dict[str, int]
+    models: list[GoogleProjectModelHealthRead]
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    average_latency_ms: float | None
+    confidence: Literal["CONFIRMED", "ESTIMATED", "UNKNOWN"]
+
+
+class GoogleProjectHealthRead(BaseModel):
+    state: Literal[
+        "HEALTHY",
+        "DEGRADED",
+        "OUTAGE",
+        "AUTH_FAILURE",
+        "PERMISSION_FAILURE",
+        "RATE_LIMITED",
+        "QUOTA_EXHAUSTED",
+        "UNKNOWN",
+    ]
+    state_confidence: Literal["CONFIRMED", "ESTIMATED", "UNKNOWN"]
+    reason: str
+    quota_status: Literal["KNOWN", "WARNING", "EXHAUSTED", "UNKNOWN"]
+    quota_confidence: Literal["CONFIRMED", "ESTIMATED", "UNKNOWN"]
+    quota_reason: str
+    last_sample_at: datetime | None
+    sample_stale: bool
+    last_attempt_at: datetime | None
+    last_status: str | None
+    last_error_code: str | None
+    recovered: bool
+    signals: GoogleProjectSignalsRead
+
+
+class GoogleProjectAlertRead(BaseModel):
+    id: str
+    kind: str
+    severity: Literal["critical", "warning", "info"]
+    project_id: str | None
+    title: str
+    detail: str
+    since: datetime | None
+
+
+class GoogleMonitorRead(BaseModel):
+    state: Literal["OK", "STALE", "UNAVAILABLE", "UNKNOWN"]
+    last_cycle_at: datetime | None
+    age_seconds: int | None
+    interval_seconds: int
+    grace_seconds: int
+    detail: str
+    last_cycle: dict[str, object] = Field(default_factory=dict)
+
+
 class GoogleQuotaProjectRead(BaseModel):
     project_id: str
     verification: Verification
@@ -72,6 +139,7 @@ class GoogleQuotaProjectRead(BaseModel):
     usage_observed: int
     quotas: list[GoogleQuotaValueRead]
     runs: list[GoogleQuotaRunRead]
+    health: GoogleProjectHealthRead
 
 
 class GoogleQuotaFleetRead(BaseModel):
@@ -82,6 +150,10 @@ class GoogleQuotaFleetRead(BaseModel):
     stale_after_seconds: int
     declared_projects: int
     verified_projects: int
+    healthy_projects: int
+    degraded_projects: int
+    unknown_projects: int
+    quota_warnings: int
     quotas_total: int
     usage_observed: int
     stale_projects: int
@@ -125,6 +197,8 @@ class GoogleQuotaReportRead(BaseModel):
     service: str
     fleet: GoogleQuotaFleetRead
     projects: list[GoogleQuotaProjectRead]
+    monitor: GoogleMonitorRead
+    alerts: list[GoogleProjectAlertRead]
     apis: list[GoogleApiRequirementRead]
     ai_studio: GoogleAIStudioRead
     coverage: GoogleQuotaCoverageRead

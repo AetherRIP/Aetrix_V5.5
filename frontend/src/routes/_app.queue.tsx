@@ -442,7 +442,11 @@ function CancelDialog({
   onClose: () => void
 }) {
   const panelRef = useDialogFocus()
-  return (
+  // Portalled for the same reason as the detail record: `.hub-page` keeps a
+  // transform after its entrance animation, which makes a fixed layer size
+  // itself to the page instead of the viewport and pushes the actions below
+  // the fold.
+  return createPortal(
     <div
       className="app-modal app-modal--confirm"
       onMouseDown={(event) => {
@@ -497,7 +501,8 @@ function CancelDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -516,7 +521,7 @@ function RecoverDialog({
   const [reason, setReason] = useState('')
   const valid = reason.trim().length >= 5
 
-  return (
+  return createPortal(
     <div
       className="app-modal app-modal--confirm"
       onMouseDown={(event) => {
@@ -587,7 +592,8 @@ function RecoverDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

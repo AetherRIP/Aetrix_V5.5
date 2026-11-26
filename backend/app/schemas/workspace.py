@@ -135,6 +135,14 @@ class MarkingHistoryPage(BaseModel):
 
 
 class AuditEventRead(BaseModel):
+    """One recorded event, as an auditor reads it.
+
+    ``created_at`` is when the engine wrote the event.  There is deliberately no
+    second "retrieved at" field per row: retrieval is a property of the page
+    (``AuditEventPage.retrieved_at``), and repeating it per row would invite the
+    two to be confused.
+    """
+
     id: UUID
     created_at: datetime
     action: str
@@ -143,4 +151,27 @@ class AuditEventRead(BaseModel):
     actor_type: str
     actor_id: str | None
     actor_label: str | None
+    #: The request that wrote the event, so a row can be correlated with logs.
+    request_id: str | None = None
+    #: Content digests bind the event to the before/after state without keeping
+    #: a second copy of it.  They are not payloads and contain no secret.
+    before_hash: str | None = None
+    after_hash: str | None = None
+    #: The owning workspace.  Set for a platform-wide read so the trail names
+    #: where each event came from; null for a platform-level event.
+    tenant_id: UUID | None = None
+    tenant_name: str | None = None
     detail: dict[str, Any]
+
+
+class AuditEventPage(BaseModel):
+    """One bounded, keyset-paginated slice of the ledger, newest first."""
+
+    items: list[AuditEventRead]
+    #: True when older events exist past this page.
+    has_more: bool
+    #: Pass as ``before`` to read the next page; null on the last page.
+    next_before: UUID | None = None
+    limit: int
+    #: When this page was produced.  Distinct from every row's ``created_at``.
+    retrieved_at: datetime

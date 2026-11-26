@@ -65,7 +65,16 @@ class ErrorCode(StrEnum):
     CLASSROOM_PUBLISH_CONFLICT = "CLASSROOM_PUBLISH_CONFLICT"
     #: The attachment format cannot enter the ingestion pipeline.
     CLASSROOM_ATTACHMENT_UNSUPPORTED = "CLASSROOM_ATTACHMENT_UNSUPPORTED"
+    #: Automatic monitoring is not enabled for this coursework.
+    CLASSROOM_MONITORING_DISABLED = "CLASSROOM_MONITORING_DISABLED"
+    #: A submission is not in a state from which the requested action is valid.
+    CLASSROOM_SUBMISSION_NOT_ELIGIBLE = "CLASSROOM_SUBMISSION_NOT_ELIGIBLE"
+    #: A submission state transition was not permitted.
+    CLASSROOM_SUBMISSION_STATE_INVALID = "CLASSROOM_SUBMISSION_STATE_INVALID"
     NOT_SUPPORTED = "NOT_SUPPORTED"
+    #: A sender exceeded the messaging burst allowance.  The persisted count is
+    #: the authority; this is not a client-side throttle.
+    RATE_LIMITED = "RATE_LIMITED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -103,7 +112,11 @@ _STATUS_BY_CODE: dict[ErrorCode, int] = {
     ErrorCode.CLASSROOM_GRADE_NOT_APPROVED: 409,
     ErrorCode.CLASSROOM_PUBLISH_CONFLICT: 409,
     ErrorCode.CLASSROOM_ATTACHMENT_UNSUPPORTED: 422,
+    ErrorCode.CLASSROOM_MONITORING_DISABLED: 409,
+    ErrorCode.CLASSROOM_SUBMISSION_NOT_ELIGIBLE: 409,
+    ErrorCode.CLASSROOM_SUBMISSION_STATE_INVALID: 409,
     ErrorCode.NOT_SUPPORTED: 501,
+    ErrorCode.RATE_LIMITED: 429,
     ErrorCode.INTERNAL_ERROR: 500,
 }
 

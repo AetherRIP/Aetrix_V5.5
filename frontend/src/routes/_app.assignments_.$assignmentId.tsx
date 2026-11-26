@@ -5,6 +5,7 @@ import { Panel } from '../components/app/PageBlocks'
 import { StatePanel } from '../components/app/StatePanel'
 import { useEngineSession } from '../lib/api/session'
 import { useResource } from '../lib/api/useResource'
+import { useCapability } from '../lib/capabilities'
 import type {
   Assignment,
   Blueprint,
@@ -87,6 +88,12 @@ function AssignmentDetail() {
   const [schemeFile, setSchemeFile] = useState<File | null>(null)
   const [approvalReason, setApprovalReason] = useState('')
   const [uploads, setUploads] = useState<UploadOutcome[]>([])
+  const [criterionQuestion, setCriterionQuestion] = useState('')
+  const [criterionCode, setCriterionCode] = useState('M1')
+  const [criterionMarks, setCriterionMarks] = useState('1')
+  const [criterionText, setCriterionText] = useState('')
+  const [criterionAnswer, setCriterionAnswer] = useState('')
+  const [editingCriterion, setEditingCriterion] = useState<string | null>(null)
 
   const approvedScheme =
     schemesState.state === 'ok'
@@ -97,6 +104,31 @@ function AssignmentDetail() {
       ? schemesState.data.find((version) => version.status === 'DRAFT')
       : undefined
   const blueprint = blueprintState.state === 'ok' ? blueprintState.data : null
+  const criteriaRows = criteriaState.state === 'ok' ? criteriaState.data : []
+  // A question with subquestions is marked through its children, never the
+  // parent, so the editor totals each scoreable leaf and nothing else.
+  const criterionLeaves: { id: string; max: number }[] = []
+  for (const question of blueprint?.structure.questions ?? []) {
+    const leaves = question.subquestions.length ? question.subquestions : [question]
+    for (const leaf of leaves) {
+      if (!leaf.excluded) criterionLeaves.push({ id: leaf.question_id, max: leaf.max_marks })
+    }
+  }
+  const criterionTotals = criterionLeaves.map((leaf) => ({
+    ...leaf,
+    used: criteriaRows
+      .filter((criterion) => criterion.question_id === leaf.id)
+      .reduce((total, criterion) => total + criterion.marks, 0),
+  }))
+  // Manual authoring needs an engine build that implements it. The deployed
+  // engine may be older, and the editor must not appear there.
+  const authoring = useCapability('scheme_criteria_authoring')
+  const canAuthorCriteria = Boolean(
+    authoring &&
+      reviewScheme &&
+      blueprint?.status === 'APPROVED' &&
+      !reviewScheme.criteria_approved_at,
+  )
   const jobs = jobsState.state === 'ok' ? jobsState.data : []
   const jobsBySubmission = new Map(
     jobs
@@ -181,6 +213,115 @@ function AssignmentDetail() {
           `${coverage.total_expected} marks. Review them, then approve.`,
       )
       reloadCriteria()
+    } else {
+      setMessage(result.reason)
+    }
+  }
+
+  async function saveCriterion(event: React.FormEvent) {
+    event.preventDefault()
+    if (!session.token || !reviewScheme || !blueprint) return
+    const question = criterionQuestion || criterionLeaves[0]?.id
+    const marks = Number.parseInt(criterionMarks, 10)
+    if (!question || !Number.isFinite(marks) || marks < 1 || !criterionText.trim()) {
+      setMessage('Enter a question, a positive mark value and the criterion text.')
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    if (editingCriterion) {
+      const result = await examService.updateSchemeCriterion(
+        reviewScheme.id,
+        editingCriterion,
+        {
+          blueprint_version_id: blueprint.id,
+          marks,
+          description: criterionText.trim(),
+          expected_answer: criterionAnswer.trim() || null,
+        },
+        { token: session.token },
+      )
+      setBusy(false)
+      if (result.status !== 'ok') {
+        setMessage(result.reason)
+        return
+      }
+      setMessage('Criterion updated. Approve the criteria when the set is complete.')
+    } else {
+      const code = criterionCode.trim().toUpperCase() || 'M1'
+      const ordinal = criteriaRows.filter(
+        (criterion) =>
+          criterion.question_id === question && criterion.code.toUpperCase() === code,
+      ).length
+      const result = await examService.createSchemeCriterion(
+        reviewScheme.id,
+        {
+          blueprint_version_id: blueprint.id,
+          question_id: question,
+          code,
+          marks,
+          ordinal,
+          description: criterionText.trim(),
+          expected_answer: criterionAnswer.trim() || null,
+        },
+        { token: session.token },
+      )
+      setBusy(false)
+      if (result.status !== 'ok') {
+        setMessage(result.reason)
+        return
+      }
+      setMessage(`Criterion ${code} added for question ${question}.`)
+    }
+    setEditingCriterion(null)
+    setCriterionText('')
+    setCriterionAnswer('')
+    setCriterionMarks('1')
+    reloadCriteria()
+  }
+
+  function startEditCriterion(criterion: SchemeCriterion) {
+    setEditingCriterion(criterion.id)
+    setCriterionQuestion(criterion.question_id)
+    setCriterionCode(criterion.code)
+    setCriterionMarks(String(criterion.marks))
+    setCriterionText(criterion.description)
+    setCriterionAnswer(criterion.expected_answer ?? '')
+    setMessage(null)
+  }
+
+  async function removeCriterion(criterionId: string) {
+    if (!session.token || !reviewScheme) return
+    if (!window.confirm('Remove this mark point? It is not stored until you add it again.')) return
+    setBusy(true)
+    setMessage(null)
+    const result = await examService.deleteSchemeCriterion(reviewScheme.id, criterionId, {
+      token: session.token,
+    })
+    setBusy(false)
+    if (result.status === 'ok') {
+      if (editingCriterion === criterionId) setEditingCriterion(null)
+      setMessage('Criterion removed.')
+      reloadCriteria()
+    } else {
+      setMessage(result.reason)
+    }
+  }
+
+  async function reviseCriteria() {
+    if (!session.token || !reviewScheme) return
+    setBusy(true)
+    setMessage(null)
+    const result = await examService.reviseSchemeVersion(reviewScheme.id, {
+      token: session.token,
+    })
+    setBusy(false)
+    if (result.status === 'ok') {
+      setMessage(
+        `Created scheme version v${result.data.version}. Its criteria are a copy and are not ` +
+          'approved yet; edit them, then approve against the blueprint.',
+      )
+      reloadSchemes()
     } else {
       setMessage(result.reason)
     }
@@ -310,6 +451,14 @@ function AssignmentDetail() {
           <div className="app-split">
             <Panel title="Marking contract" note="What the engine will mark against">
               <dl className="app-definitions">
+                <div>
+                  <dt>Class</dt>
+                  <dd>
+                    {assignment?.class_name ?? (
+                      <span className="app-hint">Unassigned (legacy assignment)</span>
+                    )}
+                  </dd>
+                </div>
                 <div>
                   <dt>Review mode</dt>
                   <dd className="mono">{assignment?.review_mode ?? '—'}</dd>
@@ -546,6 +695,7 @@ function AssignmentDetail() {
                       <th scope="col">Expected answer</th>
                       <th scope="col">Award / withhold</th>
                       <th scope="col">Scheme text</th>
+                      <th scope="col">Review</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -575,11 +725,35 @@ function AssignmentDetail() {
                               <span className="mono app-hint">p.{criterion.source_page}</span>
                             ) : null}
                           </td>
+                          <td>
+                            {canAuthorCriteria ? (
+                              <div className="app-inline-actions">
+                                <button
+                                  type="button"
+                                  className="btn btn--small btn--outline"
+                                  disabled={busy}
+                                  onClick={() => startEditCriterion(criterion)}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn--small btn--outline"
+                                  disabled={busy}
+                                  onClick={() => void removeCriterion(criterion.id)}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={6} className="data-table__empty">
+                        <td colSpan={7} className="data-table__empty">
                           {reviewScheme
                             ? 'No criteria have been transcribed for this scheme version. Approve the blueprint, then extract the criteria.'
                             : 'Upload and approve a scheme, extract the blueprint, then extract the criteria.'}
@@ -589,6 +763,131 @@ function AssignmentDetail() {
                   </tbody>
                 </table>
               </div>
+              {criterionTotals.length ? (
+                <p className="mono app-hint">
+                  Marks per question:{' '}
+                  {criterionTotals
+                    .map((leaf) => `${leaf.id} ${leaf.used}/${leaf.max}`)
+                    .join(' · ')}
+                  {' · '}
+                  total {criterionTotals.reduce((sum, leaf) => sum + leaf.used, 0)}/
+                  {criterionTotals.reduce((sum, leaf) => sum + leaf.max, 0)}
+                </p>
+              ) : null}
+
+              {canAuthorCriteria ? (
+                <form className="app-form" onSubmit={saveCriterion}>
+                  <p className="app-card__body">
+                    Mark points can be typed here without a provider call. Each question may not
+                    exceed its blueprint maximum, and nothing is usable for marking until the whole
+                    set is approved.
+                  </p>
+                  <div className="app-form__row">
+                    <label className="app-form__label" htmlFor="criterion-question">
+                      Question
+                    </label>
+                    <select
+                      id="criterion-question"
+                      className="app-input"
+                      value={criterionQuestion || criterionLeaves[0]?.id || ''}
+                      onChange={(event) => setCriterionQuestion(event.target.value)}
+                      disabled={Boolean(editingCriterion)}
+                    >
+                      {criterionLeaves.map((leaf) => (
+                        <option key={leaf.id} value={leaf.id}>
+                          {leaf.id} (max {leaf.max})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="app-form__row">
+                    <label className="app-form__label" htmlFor="criterion-code">
+                      Code
+                    </label>
+                    <input
+                      id="criterion-code"
+                      className="app-input"
+                      value={criterionCode}
+                      onChange={(event) => setCriterionCode(event.target.value)}
+                      maxLength={20}
+                      disabled={Boolean(editingCriterion)}
+                    />
+                  </div>
+                  <div className="app-form__row">
+                    <label className="app-form__label" htmlFor="criterion-marks">
+                      Marks
+                    </label>
+                    <input
+                      id="criterion-marks"
+                      className="app-input"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={criterionMarks}
+                      onChange={(event) => setCriterionMarks(event.target.value)}
+                    />
+                  </div>
+                  <div className="app-form__row">
+                    <label className="app-form__label" htmlFor="criterion-text">
+                      Criterion wording
+                    </label>
+                    <input
+                      id="criterion-text"
+                      className="app-input"
+                      value={criterionText}
+                      onChange={(event) => setCriterionText(event.target.value)}
+                      maxLength={4000}
+                      required
+                    />
+                  </div>
+                  <div className="app-form__row">
+                    <label className="app-form__label" htmlFor="criterion-answer">
+                      Expected answer (optional)
+                    </label>
+                    <input
+                      id="criterion-answer"
+                      className="app-input"
+                      value={criterionAnswer}
+                      onChange={(event) => setCriterionAnswer(event.target.value)}
+                      maxLength={4000}
+                    />
+                  </div>
+                  <div className="app-inline-actions">
+                    <button type="submit" className="btn btn--small btn--primary" disabled={busy}>
+                      {editingCriterion ? 'Save criterion' : 'Add mark point'}
+                    </button>
+                    {editingCriterion ? (
+                      <button
+                        type="button"
+                        className="btn btn--small btn--outline"
+                        onClick={() => {
+                          setEditingCriterion(null)
+                          setCriterionText('')
+                          setCriterionAnswer('')
+                          setCriterionMarks('1')
+                        }}
+                      >
+                        Cancel edit
+                      </button>
+                    ) : null}
+                  </div>
+                </form>
+              ) : authoring && reviewScheme?.criteria_approved_at ? (
+                <div className="app-inline-actions">
+                  <button
+                    type="button"
+                    className="btn btn--small btn--outline"
+                    disabled={busy}
+                    onClick={() => void reviseCriteria()}
+                  >
+                    {busy ? 'Creating…' : 'Create a new version to edit'}
+                  </button>
+                  <span className="mono app-hint">
+                    Approved criteria are immutable; a new version starts unapproved.
+                  </span>
+                </div>
+              ) : null}
+
               <div className="app-inline-actions">
                 <button
                   type="button"

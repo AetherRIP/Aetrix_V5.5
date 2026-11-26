@@ -33,6 +33,12 @@ from ...schemas.api import (
     WorkspaceRead,
 )
 from ...schemas.blueprint import BlueprintPut, BlueprintRead
+from ...services.classroom_access import allowed_course_ids
+from ...services.classroom_job_access import (
+    require_assignment_access,
+    require_submission_access,
+    visible_jobs,
+)
 from ...services.exams import (
     AssignmentService,
     BlueprintService,
@@ -85,10 +91,14 @@ def list_workspace_assignments(
     session: Session = Depends(get_db_session),
 ) -> list[AssignmentRead]:
     _workspace_read(principal, session, workspace_id)
-    return [
-        AssignmentRead.model_validate(row)
-        for row in AssignmentRepository(session).list(principal.tenant_id)
-    ]
+    allowed = allowed_course_ids(session, principal)
+    rows = AssignmentRepository(session).list(principal.tenant_id)
+    if allowed is not None:
+        # A class-scoped account sees the assignments of its own classes only.
+        # Legacy rows with no course stay out of that list rather than looking
+        # like work for a class the account does not hold.
+        rows = [row for row in rows if row.course_id in allowed]
+    return [AssignmentRead.model_validate(row) for row in rows]
 
 
 @router.get("/assignments/{assignment_id}", response_model=AssignmentRead)
@@ -100,6 +110,7 @@ def get_assignment(
     assignment = AssignmentRepository(session).get(principal.tenant_id, assignment_id)
     if assignment is None:
         raise AppError(ErrorCode.NOT_FOUND, "Assignment not found.")
+    require_assignment_access(session, principal, assignment.id)
     return AssignmentRead.model_validate(assignment)
 
 
@@ -111,8 +122,10 @@ def list_assignment_submissions(
     principal: Principal = Depends(get_principal),
     session: Session = Depends(get_db_session),
 ) -> list[SubmissionRead]:
-    if AssignmentRepository(session).get(principal.tenant_id, assignment_id) is None:
+    assignment = AssignmentRepository(session).get(principal.tenant_id, assignment_id)
+    if assignment is None:
         raise AppError(ErrorCode.NOT_FOUND, "Assignment not found.")
+    require_assignment_access(session, principal, assignment.id)
     return [
         SubmissionRead.model_validate(row)
         for row in SubmissionRepository(session).list_for_assignment(
@@ -130,6 +143,7 @@ def get_submission(
     submission = SubmissionRepository(session).get(principal.tenant_id, submission_id)
     if submission is None:
         raise AppError(ErrorCode.NOT_FOUND, "Submission not found.")
+    require_submission_access(session, principal, submission)
     return SubmissionRead.model_validate(submission)
 
 
@@ -139,8 +153,10 @@ def list_submission_corrections(
     principal: Principal = Depends(get_principal),
     session: Session = Depends(get_db_session),
 ) -> list[JobRead]:
-    if SubmissionRepository(session).get(principal.tenant_id, submission_id) is None:
+    submission = SubmissionRepository(session).get(principal.tenant_id, submission_id)
+    if submission is None:
         raise AppError(ErrorCode.NOT_FOUND, "Submission not found.")
+    require_submission_access(session, principal, submission)
     return [
         JobRead.model_validate(row)
         for row in JobRepository(session).list_for_submission(
@@ -158,7 +174,9 @@ def list_workspace_corrections(
     _workspace_read(principal, session, workspace_id)
     return [
         JobRead.model_validate(row)
-        for row in JobRepository(session).list(principal.tenant_id)
+        for row in visible_jobs(
+            session, principal, JobRepository(session).list(principal.tenant_id)
+        )
     ]
 
 
@@ -209,6 +227,8 @@ def create_assignment(
     principal: Principal = Depends(get_principal),
     session: Session = Depends(get_db_session),
 ) -> AssignmentRead:
+    # The service checks the role before it checks the class, so an account
+    # without exam authority sees 403 rather than a validation message.
     assignment = AssignmentService(session).create(principal, payload)
     return AssignmentRead.model_validate(assignment)
 

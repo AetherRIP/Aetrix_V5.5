@@ -16,6 +16,7 @@ job, and a submission already processed is not re-marked by a synchronization.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -46,9 +47,10 @@ from ..schemas.classroom_integration import (
     SubmissionSyncRequest,
 )
 from ..storage.base import Storage, StorageError
-from .classroom_access import ensure_teaching, require_allocation
+from .classroom_access import ensure_teaching, require_course_access
 from .classroom_google import (
     ClassroomUpstreamError,
+    SubmissionRecord,
     UpstreamKind,
     download_drive_file,
     list_submissions,
@@ -65,6 +67,92 @@ def is_ingestible(submission_state: str | None) -> bool:
     """Whether a Classroom submission state represents work handed in."""
 
     return submission_state in INGESTIBLE_SUBMISSION_STATES
+
+
+def active_roster(
+    session: Session, *, tenant_id: uuid.UUID, course_id: str
+) -> dict[str, ClassroomRosterEntry]:
+    """The course's active roster, keyed by Google identity.
+
+    Matching is by Google user id, never by display name, so a renamed or
+    duplicated name cannot attach work to the wrong student.
+    """
+
+    return {
+        entry.google_user_id: entry
+        for entry in session.scalars(
+            select(ClassroomRosterEntry).where(
+                ClassroomRosterEntry.tenant_id == tenant_id,
+                ClassroomRosterEntry.course_id == course_id,
+                ClassroomRosterEntry.status == "ACTIVE",
+            )
+        )
+    }
+
+
+def attachment_payload(record: SubmissionRecord) -> list[dict[str, str | None]]:
+    """What Google reported about each attachment, in Google's order."""
+
+    return [
+        {
+            "kind": item.kind,
+            "title": item.title,
+            "drive_file_id": item.drive_file_id,
+            "alternate_link": item.alternate_link,
+            "mime_type": item.mime_type,
+        }
+        for item in record.attachments
+    ]
+
+
+def record_listing(
+    session: Session,
+    link: ClassroomCourseworkLink,
+    entry: ClassroomRosterEntry,
+    record: SubmissionRecord,
+    *,
+    now: datetime,
+) -> tuple[ClassroomSubmissionLink, bool]:
+    """Find or record the link for one submission Google listed.
+
+    Detection only: it writes what Google reported and returns the row with
+    whether it was created, so the caller decides what may happen next.  Both
+    the teacher's sync and automatic monitoring record discovery here instead of
+    keeping two copies of the same upsert.
+    """
+
+    row = session.scalar(
+        select(ClassroomSubmissionLink).where(
+            ClassroomSubmissionLink.tenant_id == link.tenant_id,
+            ClassroomSubmissionLink.google_submission_id == record.submission_id,
+        )
+    )
+    attachments = attachment_payload(record)
+    if row is not None:
+        row.attachments = attachments
+        row.submission_state = record.state
+        row.late = record.late
+        row.last_synced_at = now
+        return row, False
+
+    row = ClassroomSubmissionLink(
+        tenant_id=link.tenant_id,
+        coursework_link_id=link.id,
+        assignment_id=link.assignment_id,
+        course_id=link.course_id,
+        coursework_id=link.coursework_id or "",
+        google_submission_id=record.submission_id,
+        google_user_id=record.user_id,
+        student_id=entry.student_id,
+        state="DISCOVERED",
+        submission_state=record.state,
+        late=record.late,
+        attachments=attachments,
+        last_synced_at=now,
+    )
+    session.add(row)
+    session.flush()
+    return row, True
 
 
 #: The formats the ingestion pipeline validates.  Anything else is refused with
@@ -101,9 +189,7 @@ class ClassroomSubmissionService:
         self.session = session
         self.settings = settings
         self.storage = storage
-        self.oauth = oauth or ClassroomOAuthService(
-            session, settings, transport=transport
-        )
+        self.oauth = oauth or ClassroomOAuthService(session, settings, transport=transport)
         self.submissions = SubmissionRepository(session)
         self.audit = AuditService(session)
 
@@ -163,9 +249,7 @@ class ClassroomSubmissionService:
                     ClassroomSubmissionLink.tenant_id == tenant_id,
                     ClassroomSubmissionLink.coursework_link_id == coursework_link_id,
                 )
-                .order_by(
-                    Student.student_ref.asc(), ClassroomSubmissionLink.id.asc()
-                )
+                .order_by(Student.student_ref.asc(), ClassroomSubmissionLink.id.asc())
             ).all()
         )
         link_ids = [row[0].id for row in rows]
@@ -185,13 +269,9 @@ class ClassroomSubmissionService:
                 latest.setdefault(link_id, state)
         return [(*row, latest.get(row[0].id)) for row in rows]
 
-    def list(
-        self, principal: Principal, coursework_link_id: uuid.UUID
-    ) -> list[SubmissionRead]:
+    def list(self, principal: Principal, coursework_link_id: uuid.UUID) -> list[SubmissionRead]:
         link = self._coursework(principal.tenant_id, coursework_link_id)
-        require_allocation(
-            self.session, principal.tenant_id, course_id=link.course_id
-        )
+        require_course_access(self.session, principal, course_id=link.course_id)
         return [
             self._read(sub, ref, name, job_state, publication_state)
             for sub, ref, name, job_state, publication_state in self._rows(
@@ -199,9 +279,7 @@ class ClassroomSubmissionService:
             )
         ]
 
-    def _coursework(
-        self, tenant_id: uuid.UUID, link_id: uuid.UUID
-    ) -> ClassroomCourseworkLink:
+    def _coursework(self, tenant_id: uuid.UUID, link_id: uuid.UUID) -> ClassroomCourseworkLink:
         link = self.session.scalar(
             select(ClassroomCourseworkLink).where(
                 ClassroomCourseworkLink.id == link_id,
@@ -225,6 +303,7 @@ class ClassroomSubmissionService:
 
     def read(self, principal: Principal, link_id: uuid.UUID) -> SubmissionRead:
         link = self._link(principal.tenant_id, link_id)
+        require_course_access(self.session, principal, course_id=link.course_id)
         rows = self._rows(principal.tenant_id, link.coursework_link_id)
         for sub, ref, name, job_state, publication_state in rows:
             if sub.id == link.id:
@@ -286,16 +365,12 @@ class ClassroomSubmissionService:
     def ingest(self, principal: Principal, link_id: uuid.UUID) -> SubmissionRead:
         ensure_teaching(principal)
         link = self._link(principal.tenant_id, link_id)
-        require_allocation(
-            self.session, principal.tenant_id, course_id=link.course_id
-        )
+        require_course_access(self.session, principal, course_id=link.course_id)
         self._ingest(principal, link)
         self.session.commit()
         return self.read(principal, link_id)
 
-    def _ingest(
-        self, principal: Principal, link: ClassroomSubmissionLink
-    ) -> None:
+    def _ingest(self, principal: Principal, link: ClassroomSubmissionLink) -> None:
         if link.state in {"INGESTED", "CORRECTING", "CORRECTED"}:
             return
 
@@ -398,9 +473,7 @@ class ClassroomSubmissionService:
             )
         except AppError as error:
             link.state = "INGEST_FAILED"
-            link.ingest_error = _safe_message(
-                f"The document was rejected: {error.message}"
-            )
+            link.ingest_error = _safe_message(f"The document was rejected: {error.message}")
             self.audit.record(
                 tenant_id=principal.tenant_id,
                 action="classroom.submission.ingest_failed",
@@ -417,9 +490,7 @@ class ClassroomSubmissionService:
             return
         except (SQLAlchemyError, StorageError) as error:
             link.state = "INGEST_FAILED"
-            link.ingest_error = _safe_message(
-                f"Ingestion failed: {type(error).__name__}."
-            )
+            link.ingest_error = _safe_message(f"Ingestion failed: {type(error).__name__}.")
             return
 
         link.submission_id = submission.id
@@ -446,31 +517,19 @@ class ClassroomSubmissionService:
         )
 
     # -- synchronisation --------------------------------------------------
-    def sync(
-        self, principal: Principal, payload: SubmissionSyncRequest
-    ) -> SubmissionSyncRead:
+    def sync(self, principal: Principal, payload: SubmissionSyncRequest) -> SubmissionSyncRead:
         ensure_teaching(principal)
         link = self._coursework(principal.tenant_id, payload.coursework_link_id)
         if link.state != "PUBLISHED" or not link.coursework_id:
             raise AppError(
                 ErrorCode.CLASSROOM_ASSIGNMENT_NOT_PUBLISHED,
-                "Submissions can only be read for coursework published to "
-                "Google Classroom.",
+                "Submissions can only be read for coursework published to Google Classroom.",
             )
-        require_allocation(
-            self.session, principal.tenant_id, course_id=link.course_id
-        )
+        require_course_access(self.session, principal, course_id=link.course_id)
 
-        roster: dict[str, ClassroomRosterEntry] = {
-            entry.google_user_id: entry
-            for entry in self.session.scalars(
-                select(ClassroomRosterEntry).where(
-                    ClassroomRosterEntry.tenant_id == principal.tenant_id,
-                    ClassroomRosterEntry.course_id == link.course_id,
-                    ClassroomRosterEntry.status == "ACTIVE",
-                )
-            )
-        }
+        roster = active_roster(
+            self.session, tenant_id=principal.tenant_id, course_id=link.course_id
+        )
         if not roster:
             raise AppError(
                 ErrorCode.CLASSROOM_ROSTER_INCOMPLETE,
@@ -524,56 +583,18 @@ class ClassroomSubmissionService:
                 )
                 continue
 
-            existing = self.session.scalar(
-                select(ClassroomSubmissionLink).where(
-                    ClassroomSubmissionLink.tenant_id == principal.tenant_id,
-                    ClassroomSubmissionLink.google_submission_id
-                    == record.submission_id,
-                )
-            )
-            attachments = [
-                {
-                    "kind": item.kind,
-                    "title": item.title,
-                    "drive_file_id": item.drive_file_id,
-                    "alternate_link": item.alternate_link,
-                    "mime_type": item.mime_type,
-                }
-                for item in record.attachments
-            ]
-            if existing is not None:
-                existing.attachments = attachments
-                existing.submission_state = record.state
-                existing.late = record.late
-                existing.last_synced_at = now
-                if record.state == "RECLAIMED_BY_STUDENT":
-                    existing.state = "WITHDRAWN"
-                    counts["unchanged"] += 1
-                    continue
-                if existing.state in {"INGESTED", "CORRECTING", "CORRECTED"}:
-                    counts["unchanged"] += 1
-                    continue
-                counts["updated"] += 1
-                link_row = existing
-            else:
-                link_row = ClassroomSubmissionLink(
-                    tenant_id=principal.tenant_id,
-                    coursework_link_id=link.id,
-                    assignment_id=link.assignment_id,
-                    course_id=link.course_id,
-                    coursework_id=link.coursework_id or "",
-                    google_submission_id=record.submission_id,
-                    google_user_id=record.user_id,
-                    student_id=entry.student_id,
-                    state="DISCOVERED",
-                    submission_state=record.state,
-                    late=record.late,
-                    attachments=attachments,
-                    last_synced_at=now,
-                )
-                self.session.add(link_row)
-                self.session.flush()
+            link_row, created = record_listing(self.session, link, entry, record, now=now)
+            if created:
                 counts["created"] += 1
+            elif record.state == "RECLAIMED_BY_STUDENT":
+                link_row.state = "WITHDRAWN"
+                counts["unchanged"] += 1
+                continue
+            elif link_row.state in {"INGESTED", "CORRECTING", "CORRECTED"}:
+                counts["unchanged"] += 1
+                continue
+            else:
+                counts["updated"] += 1
 
             if not is_ingestible(record.state):
                 # Record that the work exists, but do not call it a failed
@@ -595,9 +616,7 @@ class ClassroomSubmissionService:
             except AppError as error:
                 link_row.state = "INGEST_FAILED"
                 link_row.ingest_error = _safe_message(error.message)
-                problems.append(
-                    f"Submission {record.submission_id}: {error.message}"
-                )
+                problems.append(f"Submission {record.submission_id}: {error.message}")
             except SQLAlchemyError as error:
                 problems.append(
                     f"Submission {record.submission_id} could not be recorded: "
@@ -609,9 +628,7 @@ class ClassroomSubmissionService:
             elif link_row.state == "INGEST_FAILED":
                 counts["ingest_failed"] += 1
                 if link_row.ingest_error:
-                    problems.append(
-                        f"Submission {record.submission_id}: {link_row.ingest_error}"
-                    )
+                    problems.append(f"Submission {record.submission_id}: {link_row.ingest_error}")
 
         status = "PARTIAL" if (listing.truncated or problems) else "SUCCEEDED"
         self._record_run(
@@ -675,11 +692,10 @@ class ClassroomSubmissionService:
         )
 
     # -- correction -------------------------------------------------------
-    def start_correction(
-        self, principal: Principal, link_id: uuid.UUID
-    ) -> CorrectionStartRead:
+    def start_correction(self, principal: Principal, link_id: uuid.UUID) -> CorrectionStartRead:
         ensure_teaching(principal)
         link = self._link(principal.tenant_id, link_id)
+        require_course_access(self.session, principal, course_id=link.course_id)
         if link.state == "INGEST_FAILED":
             raise AppError(
                 ErrorCode.CONFLICT,

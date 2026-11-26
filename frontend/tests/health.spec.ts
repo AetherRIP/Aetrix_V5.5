@@ -15,10 +15,10 @@ import type { Page } from '@playwright/test'
 
 const API = (process.env.VITE_AETRIX_API_URL ?? '').replace(/\/$/, '')
 
-/** One metric row, scoped by its label rather than any text in the row. */
-function metric(page: Page, label: string) {
-  return page.locator('.hub-stat').filter({
-    has: page.locator('.hub-stat__label', { hasText: new RegExp(`^${label}$`) }),
+/** One channel of the instrument, scoped by its label rather than any text. */
+function channel(page: Page, label: string) {
+  return page.locator('.health-channel').filter({
+    has: page.locator('.health-channel__label', { hasText: new RegExp(`^${label}$`) }),
   })
 }
 
@@ -79,14 +79,16 @@ test.describe('engine health integration', () => {
 
     // The values on screen come from that response, and each subsystem keeps
     // its own wording: "Connected" is the API answering, "Ready" is readiness.
-    await expect(metric(page, 'API').locator('.hub-stat__value')).toHaveText('Connected')
-    await expect(metric(page, 'API').locator('.hub-stat__note')).toContainText('aetrix-engine')
-    await expect(metric(page, 'Database').locator('.hub-stat__value')).toHaveText('Connected')
-    await expect(metric(page, 'Readiness').locator('.hub-stat__value')).toHaveText('Ready')
+    await expect(channel(page, 'API').locator('.health-channel__state')).toHaveText('Connected')
+    await expect(channel(page, 'API')).toContainText('aetrix-engine')
+    await expect(channel(page, 'Database').locator('.health-channel__state')).toHaveText(
+      'Connected',
+    )
+    await expect(channel(page, 'Readiness').locator('.health-channel__state')).toHaveText('Ready')
 
     // The worker is a separate observation. A local engine with no worker
     // process must not be reported as online because the API answered.
-    await expect(metric(page, 'Worker').locator('.hub-stat__value')).toHaveText('Unknown')
+    await expect(channel(page, 'Worker').locator('.health-channel__state')).toHaveText('Unknown')
 
     // Every engine request went to the origin this build was compiled with.
     const engineRequests = requested.filter((url) => url.startsWith(`${API}/`))
@@ -104,10 +106,9 @@ test.describe('engine health integration', () => {
 
     await page.goto('/platform/health', { waitUntil: 'load' })
 
-    await expect(metric(page, 'API').locator('.hub-stat__value')).toHaveText('Unknown')
-    await expect(metric(page, 'API').locator('.hub-stat__note')).toContainText(
-      'could not be reached',
-    )
+    await expect(channel(page, 'API').locator('.health-channel__state')).toHaveText('Unknown')
+    await expect(page.locator('body')).not.toContainText('Connected')
+    await expect(page.getByText(/could not be reached/i)).toBeVisible()
     await expect(page.getByRole('heading', { name: 'The engine did not answer' })).toBeVisible()
     await expect(page.getByText(/An unreachable endpoint is reported as unreachable/i)).toBeVisible()
   })

@@ -8,6 +8,12 @@ approve the scheme it just uploaded.
 
 from __future__ import annotations
 
+from app.db.models import (
+    ClassroomAllocation,
+    ClassroomClass,
+    ClassroomClassAssignment,
+)
+
 from tests.support import make_pdf
 
 
@@ -23,9 +29,50 @@ def _register(client, headers, assignment_id, student_ref: str):
     )
 
 
+def _assign_reviewer_to_a_class(db_session, paper, identity) -> None:
+    """Attach the fixture assignment to a class the reviewer holds.
+
+    A reviewer's upload is class-scoped: it is allowed for a class they are
+    assigned to, and refused for a legacy assignment that names no class.
+    """
+
+    classroom = ClassroomClass(
+        course_id="uploader-course",
+        name="Uploader class",
+        verification="VERIFIED",
+        source="FIXTURE",
+        created_by_subject=identity.user_a.subject,
+    )
+    db_session.add(classroom)
+    db_session.flush()
+    allocation = ClassroomAllocation(
+        classroom_class_id=classroom.id,
+        workspace_id=identity.tenant_a.id,
+        course_id=classroom.course_id,
+        class_name=classroom.name,
+        workspace_name=identity.tenant_a.name,
+        allocated_by_subject=identity.user_a.subject,
+    )
+    db_session.add(allocation)
+    db_session.flush()
+    db_session.add(
+        ClassroomClassAssignment(
+            allocation_id=allocation.id,
+            workspace_id=identity.tenant_a.id,
+            user_id=identity.reviewer.id,
+            assigned_by_user_id=identity.user_a.id,
+        )
+    )
+    paper.assignment.classroom_allocation_id = allocation.id
+    paper.assignment.course_id = allocation.course_id
+    paper.assignment.class_name = allocation.class_name
+    db_session.commit()
+
+
 def test_a_reviewer_registers_and_uploads_a_submission(
-    client, paper, identity, auth_headers
+    client, paper, identity, auth_headers, db_session
 ) -> None:
+    _assign_reviewer_to_a_class(db_session, paper, identity)
     headers = auth_headers(identity.reviewer)
 
     registered = _register(client, headers, paper.assignment.id, "reviewer-student")

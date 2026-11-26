@@ -8,6 +8,8 @@ import { Brand } from '../ui/Brand'
 import { Icon } from '../ui/Icons'
 import { AccountSwitcher } from './AccountSwitcher'
 import { CommandPalette } from './CommandPalette'
+import { NotificationBell } from './NotificationBell'
+import { MessagingPanel } from './MessagingPanel'
 
 /** Trailing slashes are normal on static hosting, so the comparison strips them. */
 function useActivePath() {
@@ -613,6 +615,8 @@ export function AppShell({
                 <kbd className="app-topbar__search-key">⌘K</kbd>
               </button>
             ) : null}
+            <MessagingPanel />
+            <NotificationBell />
             {meta ? <span className="app-topbar__role mono">{meta.label}</span> : null}
             <span className="app-topbar__theme">
               <ThemeSwitch />

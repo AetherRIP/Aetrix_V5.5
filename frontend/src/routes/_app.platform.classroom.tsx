@@ -316,7 +316,7 @@ function PlatformClassroom() {
         title="Discovered courses"
         note={
           courses.state === 'ok'
-            ? `${courses.data.length} shown · allocate on the Allocation screen`
+            ? `${courses.data.length} shown · allocate a class on the Workspaces screen`
             : 'Course discovery'
         }
       >
@@ -333,7 +333,7 @@ function PlatformClassroom() {
             placeholder="name, section or course id"
           />
           <Link to="/platform/workspaces" className="btn btn--small">
-            Open allocation
+            Allocate a class
           </Link>
         </div>
 

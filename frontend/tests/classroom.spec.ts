@@ -252,6 +252,10 @@ test.describe('workspace Google Classroom courses', () => {
 
     await page.goto('/classroom', { waitUntil: 'load' })
 
+    await expect(
+      page.getByRole('region', { name: 'Your class workflow' }),
+    ).toContainText('Create the assignment in Aetrix')
+
     const panel = page.getByRole('region', { name: 'Allocated Classroom courses' })
     await expect(panel).toContainText('10A Mathematics')
     await expect(panel).toContainText('600100')

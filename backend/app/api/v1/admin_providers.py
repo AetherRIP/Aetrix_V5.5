@@ -53,10 +53,16 @@ from ...schemas.provider_admin import (
     KeyPage,
     KeyRead,
     ModelUsageRead,
+    ProjectIdentityDeclare,
     ProjectUsageRead,
     RecentProviderCallRead,
     UsageReportRead,
     ValidationRead,
+)
+from ...services.credential_pools import (
+    POOL_NOTE,
+    pool_enabled,
+    quarantine_for,
 )
 from ...services.google_quota import (
     QuotaSyncUnavailable,
@@ -71,10 +77,11 @@ from ...services.model_catalogue import (
 )
 from ...services.model_inventory import inventory_report
 from ...services.provider_fleet import (
-    PROJECT_VERIFICATION,
     add_credential,
+    declare_project_identity,
     fleet_alerts,
     fleet_overview,
+    fleet_projects,
     import_credentials,
     operational_status,
     remove_credential,
@@ -82,6 +89,7 @@ from ...services.provider_fleet import (
     usage_category,
     validate_credential,
 )
+from ...services.quota import CredentialPoolEstimate, QuotaEstimator
 from ..deps import get_principal, get_provider
 
 router = APIRouter(prefix="/admin/providers", tags=["provider administration"])
@@ -108,12 +116,15 @@ def key_read(
     contributor_name: str | None = None,
     latest: ProviderUsage | None = None,
     last_failure: ProviderUsage | None = None,
+    estimate: CredentialPoolEstimate | None = None,
 ) -> KeyRead:
     stats = stats or {}
     from ...core.ids import utcnow
 
+    quarantine = quarantine_for(credential, utcnow())
     return KeyRead(
         id=credential.id,
+        pool_id=credential.pool_id,
         contributor_id=credential.contributor_id,
         contributor_name=contributor_name,
         revoked_at=credential.revoked_at,
@@ -130,7 +141,31 @@ def key_read(
             latest=latest,
             now=utcnow(),
         ),
-        project_verification=PROJECT_VERIFICATION,
+        project_verification=credential.project_identity,
+        project_identity_reason=credential.project_identity_reason,
+        enabled=pool_enabled(credential),
+        routable=pool_enabled(credential) and not quarantine.active,
+        google_quota_status=(
+            estimate.google_quota_status if estimate else "UNKNOWN"
+        ),
+        google_quota_note=estimate.google_quota_note if estimate else None,
+        quarantined=quarantine.active,
+        quarantine_until=quarantine.until,
+        quarantine_kind=quarantine.kind,
+        quarantine_reason=quarantine.reason,
+        remaining_today=(
+            estimate.requests_per_day.remaining if estimate else None
+        ),
+        remaining_minute=(
+            estimate.requests_per_minute.remaining if estimate else None
+        ),
+        reservations_today=estimate.reservations_today if estimate else 0,
+        reservations_minute=estimate.reservations_minute if estimate else 0,
+        validations_today=estimate.validations_today if estimate else 0,
+        last_quota_exhausted_at=credential.last_quota_exhausted_at,
+        last_quota_reason=credential.last_quota_reason,
+        consecutive_failures=credential.consecutive_failures,
+        pool_note=POOL_NOTE,
         model_access=list(credential.model_access or []),
         cooldown_until=credential.cooldown_until,
         last_success_at=credential.last_success_at,
@@ -202,6 +237,7 @@ def overview(
 def list_keys(
     _: Principal = Depends(require_fleet_admin),
     session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
     project_id: str | None = None,
     health: str | None = None,
     q: str | None = Query(default=None, max_length=120),
@@ -222,6 +258,12 @@ def list_keys(
     latest = repository.latest_by_credential(ids)
     latest_failures = repository.latest_failures_by_credential(ids)
     names = {row.id: row.display_name for row in ContributorRepository(session).list()}
+    # One pool estimate per credential, against the production marking model: the
+    # row answers "may this key be spent, and against what recorded budget?"
+    # They are read together, because a page of fifteen keys used to cost two
+    # round trips each before it could answer for the first one.
+    quota = QuotaEstimator(session, settings)
+    estimates = quota.pool_estimates(rows, settings.provider.model_primary)
     return KeyPage(
         items=[
             key_read(
@@ -230,6 +272,7 @@ def list_keys(
                 names.get(row.contributor_id) if row.contributor_id else None,
                 latest.get(row.id),
                 latest_failures.get(row.id),
+                estimates.get(row.id),
             )
             for row in rows
         ],
@@ -255,6 +298,9 @@ def create_key(
         model_access=payload.model_access,
         tier=payload.tier,
         auth_type=payload.auth_type,
+        # Adding a key with an explicit project is the administrator's assertion
+        # of identity: recorded as DECLARED, never as Google-verified.
+        declared_by=str(principal.user_id),
     )
     _audit(
         session,
@@ -270,7 +316,12 @@ def create_key(
             "auth_type": credential.auth_type,
         },
     )
-    return key_read(credential, None)
+    # The new pool's own budget is known even though Google-level capacity is
+    # UNKNOWN until the project is established; report both, not blanks.
+    estimate = QuotaEstimator(session, settings).pool_estimate(
+        credential, settings.provider.model_primary
+    )
+    return key_read(credential, None, estimate=estimate)
 
 
 @router.post("/keys/import", response_model=list[ImportOutcomeRead])
@@ -284,6 +335,7 @@ def import_keys(
         session,
         settings,
         [entry.model_dump() for entry in payload.keys],
+        declared_by=str(principal.user_id),
     )
     added = sum(1 for outcome in outcomes if outcome.outcome == "added")
     _audit(
@@ -325,15 +377,68 @@ def validate_key(
     return ValidationRead(**result)
 
 
+@router.post("/keys/{credential_id}/project-identity", response_model=KeyRead)
+def declare_key_project(
+    credential_id: uuid.UUID,
+    payload: ProjectIdentityDeclare,
+    principal: Principal = Depends(require_fleet_admin),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> KeyRead:
+    """Assert, on the record, which Google Cloud project a key bills.
+
+    The key is usable either way, as its own Aetrix pool.  What the assertion
+    changes is whether Google-level capacity can be stated: without it the pool's
+    Google quota status is UNKNOWN, because several keys may share one project.
+    The audit entry keeps the actor and the previous id, so a later correction is
+    traceable.
+    """
+
+    credential = _credential_or_404(session, credential_id)
+    previous = credential.project_id
+    updated = declare_project_identity(
+        session,
+        credential,
+        project_id=payload.project_id,
+        declared_by=str(principal.user_id),
+        note=payload.note,
+    )
+    _audit(
+        session,
+        principal,
+        action="provider.key.project_declared",
+        entity_type="provider_credential",
+        entity_id=str(updated.id),
+        tenant_id=updated.tenant_id,
+        detail={
+            "previous_project_id": previous,
+            "project_id": updated.project_id,
+            "identity": updated.project_identity,
+            "fingerprint": updated.key_fingerprint,
+        },
+    )
+    estimate = QuotaEstimator(session, settings).pool_estimate(
+        updated, settings.provider.model_primary
+    )
+    return key_read(updated, None, estimate=estimate)
+
+
 @router.post("/keys/{credential_id}/enabled", response_model=KeyRead)
 def set_key_enabled(
     credential_id: uuid.UUID,
     payload: EnabledRequest,
     principal: Principal = Depends(require_fleet_admin),
     session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> KeyRead:
     credential = _credential_or_404(session, credential_id)
     set_enabled(session, credential, enabled=payload.enabled)
+    # The response is a pool view like any other: without its estimate the key
+    # would be reported as Google quota UNKNOWN and its budget as unknown purely
+    # because this endpoint skipped the accounting.
+    estimate = QuotaEstimator(session, settings).pool_estimate(
+        credential, settings.provider.model_primary
+    )
     _audit(
         session,
         principal,
@@ -343,7 +448,7 @@ def set_key_enabled(
         tenant_id=credential.tenant_id,
         detail={"enabled": payload.enabled, "health": credential.health},
     )
-    return key_read(credential, None)
+    return key_read(credential, None, estimate=estimate)
 
 
 @router.delete("/keys/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -380,8 +485,9 @@ def projects(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> list[dict[str, object]]:
-    overview_payload = fleet_overview(session, settings)
-    return list(overview_payload["projects_detail"])
+    # Only the project rows: computing the whole overview here made a page that
+    # groups keys by project pay for counters it never displays.
+    return list(fleet_projects(session, settings))
 
 
 @router.get("/usage", response_model=UsageReportRead)

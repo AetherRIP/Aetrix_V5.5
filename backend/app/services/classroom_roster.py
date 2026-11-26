@@ -50,7 +50,11 @@ from ..schemas.classroom_integration import (
     RosterSyncRead,
     TeacherCourseRead,
 )
-from .classroom_access import ensure_teaching, require_allocation
+from .classroom_access import (
+    allowed_course_ids,
+    ensure_teaching,
+    require_course_access,
+)
 from .classroom_google import ClassroomUpstreamError, list_students
 from .classroom_oauth import ClassroomOAuthService
 
@@ -78,7 +82,8 @@ class ClassroomRosterService:
 
     # -- reads -----------------------------------------------------------
     def courses(self, principal: Principal) -> list[TeacherCourseRead]:
-        rows = self.session.execute(
+        allowed = allowed_course_ids(self.session, principal)
+        statement = (
             select(ClassroomAllocation, ClassroomClass)
             .join(
                 ClassroomClass,
@@ -88,7 +93,11 @@ class ClassroomRosterService:
                 ClassroomAllocation.workspace_id == principal.tenant_id,
                 ClassroomAllocation.status == "ACTIVE",
             )
-            .order_by(ClassroomAllocation.class_name.asc())
+        )
+        if allowed is not None:
+            statement = statement.where(ClassroomAllocation.course_id.in_(allowed))
+        rows = self.session.execute(
+            statement.order_by(ClassroomAllocation.class_name.asc())
         ).all()
         if not rows:
             return []
@@ -162,7 +171,7 @@ class ClassroomRosterService:
         )
 
     def roster(self, principal: Principal, course_id: str) -> list[RosterEntryRead]:
-        require_allocation(self.session, principal.tenant_id, course_id=course_id)
+        require_course_access(self.session, principal, course_id=course_id)
         return [
             self._read(entry, student)
             for entry, student in self._rows(principal.tenant_id, course_id)
@@ -207,8 +216,8 @@ class ClassroomRosterService:
 
     def sync(self, principal: Principal, course_id: str) -> RosterSyncRead:
         ensure_teaching(principal)
-        _allocation, classroom = require_allocation(
-            self.session, principal.tenant_id, course_id=course_id
+        _allocation, classroom = require_course_access(
+            self.session, principal, course_id=course_id
         )
         if classroom.course_state != "ACTIVE":
             raise AppError(
@@ -353,7 +362,7 @@ class ClassroomRosterService:
         payload: RosterLinkRequest,
     ) -> RosterEntryRead:
         ensure_teaching(principal)
-        require_allocation(self.session, principal.tenant_id, course_id=course_id)
+        require_course_access(self.session, principal, course_id=course_id)
         entry = self._entry_for(
             principal.tenant_id, course_id, payload.google_user_id
         )

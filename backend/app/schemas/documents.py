@@ -127,6 +127,31 @@ class SchemeCriteriaApprove(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class SchemeCriterionCreate(BaseModel):
+    """One mark point a person types, validated against an approved paper."""
+
+    blueprint_version_id: UUID
+    question_id: str = Field(min_length=1, max_length=40)
+    code: str = Field(min_length=1, max_length=20)
+    marks: int = Field(ge=1, le=100)
+    ordinal: int = Field(default=0, ge=0, le=999)
+    description: str = Field(min_length=1, max_length=4000)
+    expected_answer: str | None = Field(default=None, max_length=4000)
+    award_conditions: str | None = Field(default=None, max_length=2000)
+    withhold_conditions: str | None = Field(default=None, max_length=2000)
+
+
+class SchemeCriterionUpdate(BaseModel):
+    """A correction before approval; omitted fields are left alone."""
+
+    blueprint_version_id: UUID | None = None
+    marks: int | None = Field(default=None, ge=1, le=100)
+    description: str | None = Field(default=None, min_length=1, max_length=4000)
+    expected_answer: str | None = Field(default=None, max_length=4000)
+    award_conditions: str | None = Field(default=None, max_length=2000)
+    withhold_conditions: str | None = Field(default=None, max_length=2000)
+
+
 class PageMappingRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -19,6 +19,8 @@ import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppGradebookRouteImport } from './routes/_app.gradebook'
 import { Route as AppHistoryRouteImport } from './routes/_app.history'
 import { Route as AppInboxRouteImport } from './routes/_app.inbox'
+import { Route as AppManualCorrectionRouteImport } from './routes/_app.manual-correction'
+import { Route as AppMessagesRouteImport } from './routes/_app.messages'
 import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
 import { Route as AppQueueRouteImport } from './routes/_app.queue'
 import { Route as AppReportsRouteImport } from './routes/_app.reports'
@@ -102,6 +104,16 @@ const AppHistoryRoute = AppHistoryRouteImport.update({
 const AppInboxRoute = AppInboxRouteImport.update({
   id: '/inbox',
   path: '/inbox',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppManualCorrectionRoute = AppManualCorrectionRouteImport.update({
+  id: '/manual-correction',
+  path: '/manual-correction',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMessagesRoute = AppMessagesRouteImport.update({
+  id: '/messages',
+  path: '/messages',
   getParentRoute: () => AppRoute,
 } as any)
 const AppNotificationsRoute = AppNotificationsRouteImport.update({
@@ -298,6 +310,8 @@ export interface FileRoutesByFullPath {
   '/gradebook': typeof AppGradebookRoute
   '/history': typeof AppHistoryRoute
   '/inbox': typeof AppInboxRoute
+  '/manual-correction': typeof AppManualCorrectionRoute
+  '/messages': typeof AppMessagesRoute
   '/notifications': typeof AppNotificationsRoute
   '/queue': typeof AppQueueRoute
   '/reports': typeof AppReportsRoute
@@ -344,6 +358,8 @@ export interface FileRoutesByTo {
   '/gradebook': typeof AppGradebookRoute
   '/history': typeof AppHistoryRoute
   '/inbox': typeof AppInboxRoute
+  '/manual-correction': typeof AppManualCorrectionRoute
+  '/messages': typeof AppMessagesRoute
   '/notifications': typeof AppNotificationsRoute
   '/queue': typeof AppQueueRoute
   '/reports': typeof AppReportsRoute
@@ -392,6 +408,8 @@ export interface FileRoutesById {
   '/_app/gradebook': typeof AppGradebookRoute
   '/_app/history': typeof AppHistoryRoute
   '/_app/inbox': typeof AppInboxRoute
+  '/_app/manual-correction': typeof AppManualCorrectionRoute
+  '/_app/messages': typeof AppMessagesRoute
   '/_app/notifications': typeof AppNotificationsRoute
   '/_app/queue': typeof AppQueueRoute
   '/_app/reports': typeof AppReportsRoute
@@ -441,6 +459,8 @@ export interface FileRouteTypes {
     | '/gradebook'
     | '/history'
     | '/inbox'
+    | '/manual-correction'
+    | '/messages'
     | '/notifications'
     | '/queue'
     | '/reports'
@@ -487,6 +507,8 @@ export interface FileRouteTypes {
     | '/gradebook'
     | '/history'
     | '/inbox'
+    | '/manual-correction'
+    | '/messages'
     | '/notifications'
     | '/queue'
     | '/reports'
@@ -534,6 +556,8 @@ export interface FileRouteTypes {
     | '/_app/gradebook'
     | '/_app/history'
     | '/_app/inbox'
+    | '/_app/manual-correction'
+    | '/_app/messages'
     | '/_app/notifications'
     | '/_app/queue'
     | '/_app/reports'
@@ -649,6 +673,20 @@ declare module '@tanstack/react-router' {
       path: '/inbox'
       fullPath: '/inbox'
       preLoaderRoute: typeof AppInboxRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/manual-correction': {
+      id: '/_app/manual-correction'
+      path: '/manual-correction'
+      fullPath: '/manual-correction'
+      preLoaderRoute: typeof AppManualCorrectionRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/messages': {
+      id: '/_app/messages'
+      path: '/messages'
+      fullPath: '/messages'
+      preLoaderRoute: typeof AppMessagesRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/notifications': {
@@ -915,6 +953,8 @@ interface AppRouteChildren {
   AppGradebookRoute: typeof AppGradebookRoute
   AppHistoryRoute: typeof AppHistoryRoute
   AppInboxRoute: typeof AppInboxRoute
+  AppManualCorrectionRoute: typeof AppManualCorrectionRoute
+  AppMessagesRoute: typeof AppMessagesRoute
   AppNotificationsRoute: typeof AppNotificationsRoute
   AppQueueRoute: typeof AppQueueRoute
   AppReportsRoute: typeof AppReportsRoute
@@ -949,6 +989,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppGradebookRoute: AppGradebookRoute,
   AppHistoryRoute: AppHistoryRoute,
   AppInboxRoute: AppInboxRoute,
+  AppManualCorrectionRoute: AppManualCorrectionRoute,
+  AppMessagesRoute: AppMessagesRoute,
   AppNotificationsRoute: AppNotificationsRoute,
   AppQueueRoute: AppQueueRoute,
   AppReportsRoute: AppReportsRoute,

@@ -395,10 +395,14 @@ matter for cost:
   valuable question; that is defensible, but it means selection precision against
   known errors is only 8.9% (BALANCED) and 13.3% (ACCURACY) against an 8.8% base
   rate of wrong items.
-- The confidence threshold contributes almost nothing, because a low-confidence
-  award is already `NEEDS_REVIEW` during marking and the double check only
-  re-marks `MARKED` rows. ACCURACY's higher threshold is therefore inert; its
-  extra value comes from the larger budget and the confident sample.
+- The confidence threshold is **active**, contrary to an earlier Phase 4 note
+  that called it inert. Marking routes an award below `min_confidence` (0.6 by
+  default) to `NEEDS_REVIEW`, so a `MARKED` row may carry confidence anywhere
+  from 0.6 to 0.949. ACCURACY's 0.95 threshold reviews those rows; BALANCED's
+  0.6 threshold does not. The effect on this sample is modest because
+  `FULL_MARKS_VALUABLE` dominates selection, but the comparison is real and is
+  pinned by
+  `test_the_accuracy_threshold_is_active_above_the_operator_default`.
 
 The mode and switch interaction is covered by tests: `double_check_enabled=false`
 disables second opinions in every mode (`DISABLED`, `SKIPPED`) while transcription
@@ -462,6 +466,108 @@ The reference is `candidate_not_teacher_certified`, so these figures are
 provisional and the 95% target cannot be evaluated from them. The holdout
 contains zero papers.
 
+## Phase 5 — independent audit and validation preparation
+
+Baseline `d6585cb`; existing AMI and user files were left untouched and nothing
+was committed. The audit read the implementation rather than the tests and found
+three defects, all fixed here:
+
+1. **Stale verification verdicts.** A retried question kept the `INTEGRITY`,
+   `MATHEMATICAL` and `SCHEME_MATHEMATICAL` verdicts of the reply it replaced,
+   because persistence was upsert-only. The marking kinds are now deleted as a set
+   before the new verdicts are written, and an unusable reply also clears the
+   components and evidence of the attempt it replaces. A stale `MATHEMATICAL`
+   verdict can therefore no longer appear against a reply that made no
+   mathematical comparison.
+2. **Cancellation before the guard.** Cancellation was checked after marking,
+   transcription and double check, but a request arriving in the final gap could
+   still reach `_apply_guard` and start presenting a finished run. A check before
+   the guard now discards the rows and returns `CANCELLED`.
+3. **Misleading confidence-threshold claim.** The Phase 4 note called ACCURACY's
+   0.95 threshold inert. It is active: marking only routes below
+   `min_confidence` (0.6) to review, so `MARKED` rows can carry 0.6-0.949 and
+   ACCURACY reviews them while BALANCED does not. The note above is corrected and
+   `test_the_accuracy_threshold_is_active_above_the_operator_default` pins it.
+
+Also added:
+
+- `settings.marking.marking_prompt_version` pins marking prompt v1 or v2 and is
+  recorded on every result row and engine run, so the baseline and the rewritten
+  prompt can be compared on identical papers without editing an asset.
+- Failure-path integration tests against real PostgreSQL: cancellation during
+  marking, transcription and before the guard; crash before and after the
+  verification commit; a database statement failure inside the transaction; stale
+  verdict replacement on retry; `UPLOADED` and `REJECTED` documents blocking
+  before any request; prompt pinning and default provenance.
+- The evaluation harness now refuses uncertified, single-marker, unadjudicated or
+  incompletely covered references and runs; scores only papers present in both the
+  reference and the run; records excluded runs and provenance; reports
+  over/under-awards and review false positives/negatives separately; and states
+  that its bootstrap unit is the paper.
+- `experiment/live_validation/validate_dataset.py` plus `reference.schema.json`
+  and `reference/README.md`: two-marker evidence, independent adjudication,
+  certification fields, a SHA-256 integrity manifest, and a command that exits 2
+  before any experiment if the dataset is incomplete or changed.
+- `experiment/prompt_cost/prepare_count_tokens.py` and `COUNT_TOKENS.md`: the two
+  exact `countTokens` bodies for v1 and v2 are written locally; **zero requests
+  were sent**. `EXPERIMENT_MATRIX.md` defines the four configurations, caps
+  (2,120 requests including recovery contingency), projections, metrics, analysis
+  and stopping conditions.
+
+Verification (this phase, disposable PostgreSQL 16):
+
+```
+backend pytest (unit + integration)   809 passed, 1 warning, 322.61 s, exit 0
+migrations from an empty database    4 passed (tests/integration/test_schema.py)
+ruff check app tests experiment      all checks passed
+```
+
+No AMI or frontend file was modified (`git status` shows no `frontend/` entry and
+`ami/` remains untracked). Nothing was committed or pushed.
+
+Remaining issues:
+
+| Severity | Issue | Status |
+| --- | --- | --- |
+| Blocker | Zero teacher-certified papers; the reference directory is empty | external material required |
+| Blocker | No approved provider budget/key; live provider remains `UNVERIFIED` | approval required |
+| High | Accuracy of the engine and of the review modes is unmeasured | blocked on the two items above |
+| Low | The harness requires every disagreement to name the same certified adjudicator | intentional strictness; a multi-adjudicator dataset would need a contract change |
+| Low | `marking_prompt_version` is an environment setting, not a UI control | sufficient for the prepared experiment |
+| Resolved | A pinned prompt changed midway through one job could mix versions across rows | engine now fails closed before spending a request; harness refuses mixed per-question versions |
+
+## Review-mode measurement reconciliation
+
+Re-ran ECONOMY, BALANCED and ACCURACY offline over the same six preserved raw runs
+and the same 38 scored questions per run. `experiment/review_modes/coverage.json`
+is untouched; the re-run writes `reconciliation.json` and
+`RECONCILIATION.md`. Every Phase 4 metric and reason count reproduces **exactly**:
+38.00 / 47.33 / 51.83 requests per paper, 0 / 56 / 83 selections, 0 / 5 / 11 known
+errors selected, 8.9% / 13.3% selection precision.
+
+The corrected threshold claim is now quantified. Two `MARKED` rows in the sample
+carry confidence in `[0.85, 0.95)` (`a_run2/26`, `c_run5/36`, both 0.90 and both
+correct). ACCURACY selects both **specifically because of the 0.95 threshold**;
+they displace `a_run2/2` and `c_run5/16b`, so the threshold adds **two questions,
+zero known errors and zero requests**. The 12-question budget is full: the
+threshold changes which questions are reviewed, not how many. "Inert" was the
+wrong mechanism and roughly the right net effect on this sample; it is not inert
+in general, and the test pins the mechanism.
+
+Selection reasons (question-level, ACCURACY second opinions): 65
+`FULL_MARKS_VALUABLE`, 2 `LOW_CONFIDENCE`, 4 deterministic high-confidence sample,
+0 other. BALANCED: 48 full marks; all 8 transcriptions `BLANK_ZERO`. ACCURACY: 12
+transcriptions, all `BLANK_ZERO`. Reconstructed rows carry no scheme concerns or
+history, so other reasons are a lower bound, not evidence they never occur.
+Incremental BALANCED -> ACCURACY is +27 requests for +6 known errors reached
+(4.5 requests per additional known error selected); this is **selection**, not
+detection.
+
+Provenance is now enforced per question: a run file must carry the result row's
+`prompt_version` on every item, matching the run's marking version, and the report
+records engine/config/prompt for every question. A retry that would add rows from
+a different prompt version fails closed before any request; a test covers it.
+
 ## Provider usage
 
 **Zero live provider requests were made in this session.** Every pipeline test
@@ -479,3 +585,368 @@ model was rotated, no credential was created, and no production data was changed
    experiment must measure.
 4. The local PostgreSQL cluster used for these runs is a disposable pgserver
    instance under `.tmp/` (gitignored); it is not part of the product.
+
+## Phase 6 — a reproducible gate, and an approval that binds its rules
+
+### 1. The integration gate could not run from a clean cluster
+
+`pytest tests/integration` failed at setup on a fresh local PostgreSQL 16: the RLS
+migrations revoke from `anon` and `authenticated`, which Supabase defines and a
+bare cluster does not. CI creates them (`.github/workflows/ci.yml`); the pytest
+bootstrap did not, so "the suite migrates to head" was only true of a cluster
+someone had prepared by hand. `tests/conftest.py` now creates the two roles when
+they are missing, before `alembic upgrade head`. This is test bootstrap only: no
+product schema, migration or database change.
+
+With that in place the full suite ran from a new database through every revision,
+including the restored `0026_scheme_criteria_approval` →
+`0027_transcription_checks` branch, the `0028_merge_heads` merge, and `0029`/`0030`.
+
+### 2. Approval now records the marking rules it covered
+
+`mark_scheme_versions.criteria_approved_at` said a person had reviewed the
+criteria. It could not say *which* criteria: editing a tolerance, changing a mark
+point, adding a dependency or re-targeting an alternative left the timestamp valid,
+and the engine would mark against rules nobody approved. `criteria_blueprint_hash`
+was written by the importer but never read, so nothing detected the drift.
+
+Now:
+
+- `scheme_criteria.criteria_rules_hash(criteria, structure)` is a SHA-256 over each
+  rule's identity (`question_id`, `code`, `ordinal`), marks, description, printed
+  answer, required evidence, dependencies, alternative routes, award and withhold
+  conditions, plus the blueprint leaves the rules were reviewed against. Row order
+  does not change it.
+- Migration `0031_scheme_criteria_rules_hash` adds
+  `mark_scheme_versions.criteria_rules_hash` (nullable, no backfill).
+- The importer records the digest when it approves, and the marking gate
+  (`criteria_readiness`) recomputes it from the stored rows before any provider
+  request. A different digest is `SCHEME_CRITERIA_RULES_CHANGED`; an approval that
+  records none is `SCHEME_CRITERIA_RULES_UNVERIFIED`. Both refuse the run with no
+  rows and no request. An incomplete criteria set still reports
+  `SCHEME_CRITERIA_INCOMPLETE`, because that defect is independent of approval.
+- `scripts/import_scheme_criteria.py --approve-existing --approve-by <id>
+  --reason "..."` re-approves rows that are already imported. It refuses unless the
+  document's rules match the stored rows exactly (exit 5) and edits no criterion
+  row; it records the digest, approver, time and reason only.
+
+**Consequence for an existing deployment:** a scheme approved before this revision
+has no digest, so the gate refuses it until it is re-approved with
+`--approve-existing`. That refusal is deliberate: the approval cannot be shown to
+cover the rows stored beside it, and inventing a digest would assert a review
+nobody performed. No historical result, award or job is affected, because results
+keep the engine and version that produced them.
+
+### 3. Verification (this phase, disposable PostgreSQL 16)
+
+```
+ruff check app tests scripts/import_scheme_criteria.py     All checks passed
+pytest tests/unit -q                                       728 passed in 8.06 s
+pytest tests/integration -q                                291 passed, 1 warning in 330.63 s, exit 0
+  (from the head of migration 0031, after the from-zero run below)
+pytest test_schema.py test_whole_paper_marking.py -q       13 passed in 23.05 s
+  (on a brand-new database `aetrix_fresh`, migrated to head, exit 0)
+alembic heads                                              0031_scheme_criteria_rules_hash (head)
+```
+
+`ruff check scripts` (all scripts) still reports five pre-existing findings in
+`finish_job.py`, `mark_downloads.py`, `retry_job.py`, `validate_live_credentials.py`
+and `watch_marking.py`, none of which this work touched.
+
+No provider request was made, no live database was migrated, no job was resumed,
+and no frontend or AMI file was modified.
+
+## Phase 7 — criterion identity, route exclusion, term counts, paper recovery
+
+Phase 6 made approval record the rules it covered. This phase closed the four
+Engine gaps that were still open after it: which printed row an award belongs to,
+what an alternative route replaces, whether a printed term count holds, and what a
+crash between a paid paper request and its rows may cost.
+
+### 1. A reply's order no longer decides which criterion is awarded
+
+The pilot repeats codes (`M1 M1 A1`), and a reply names codes, not rows. The
+resolution is now pinned by tests over the real payload
+(`backend/tests/unit/test_criterion_identity.py`):
+
+- every permutation of a full `M1 M1 A1` award credits the same rows and yields
+  the same findings, and the six orderings of Q18 are one award;
+- a bare repeated code credits the printed order (the earlier row), which is the
+  only convention that cannot invent an award;
+- `M1FT` is the explicit identity: it is pinned to the dependent row wherever it
+  appears in the list, and awarded alone it is still `UNMET_DEPENDENCY`;
+- a missing component is never invented, a duplicated component cannot earn a
+  mark point twice (`EXCESS_CRITERION_AWARD`), an unknown code is
+  `UNKNOWN_CRITERION`, and a duplicated alternative route cannot earn its marks
+  twice. No response-order dependence remains, so no ordering review signal was
+  added; the convention is documented in the tests that pin it.
+
+### 2. An alternative route replaces specific criteria
+
+`alternatives` in the approved data now carry `replaces`. `scheme_criteria.validate`
+refuses a coded alternative that names no scope, names an undefined code, omits
+its own host, leaves a prerequisite active, is defined twice, carries more marks
+than the rows it replaces, or records an unusable `term_count`. Readiness refuses
+the scheme before any request, so a pilot cannot start on route data the verifier
+cannot interpret.
+
+`scheme_check.alternative_routes` resolves a route to the rows it excludes, and
+`_route_findings` reports `ROUTE_CONFLICT` when an award earns a route and a row
+it replaces. This is what makes the two previously invisible over-awards visible:
+Q34 `M2+M1` and Q36 `B2+A1` both total the question's three marks, so capacity
+alone could not see them. `backend/tests/unit/test_alternative_routes.py` covers
+each valid route, every previously identified over-award combination, both routes
+of one question at once, and the approved data itself. One existing expectation
+was corrected: Q36's `B2` answers with no working, so a `B2` plus an `M1FT` is now
+reported as both `UNMET_DEPENDENCY` and `ROUTE_CONFLICT` — the no-working route
+stands in for the method marks it follows.
+
+`backend/seed/pilot_scheme_v1_criteria.json` holds 8 route entries, 7 of them
+coded; all 7 now record the codes they replace (Q13's is printed prose and carries
+no code). The review file was regenerated with the new semantics.
+
+### 3. Term counts are evaluated, or reported as unknown
+
+`backend/app/correction/term_count.py` reads a recorded threshold
+(`{"expression", "count", "required"}`), parses the student's answer with the
+existing parser, and matches the earned terms against the printed ones. A threshold
+that cannot describe its own expression, an answer written as a product or
+fraction, and any expression the parser cannot read return `UNKNOWN`.
+
+`scheme_check.term_count_findings` turns that into findings: `TERM_COUNT_NOT_MET`
+(definite), `TERM_COUNT_UNVERIFIED` (review), and `ROUTE_THRESHOLD_UNRECORDED` for
+an awarded route with no recorded threshold. Only the two no-working routes have a
+printed term count (Q36 and Q37a, both `3 out of a maximum of 4 terms`); both now
+record the expression and threshold, so no route silently passes. The check is
+wired into `_MarkingRun._persist_mark` beside the existing scheme checks.
+
+### 4. A paid paper is never bought twice
+
+`mark_paper` now commits the complete reply to `provider_responses` in its own
+transaction before anything is parsed or any question row is written. On a later
+execution:
+
+- `_recoverable_paper_reply` reuses an archived reply that still parses to marks
+  for the questions being marked, without a provider request (a resumed or
+  truncated paper included);
+- `_paid_paper_attempt` finds a successful whole-paper call in the usage ledger
+  when no archive is usable and returns `PAID_ATTEMPT_UNRECOVERABLE`, marking the
+  unmarked questions individually instead of re-sending the paper;
+- `ARCHIVE_FAILED` is parked like `PERSIST_FAILED`, but reported honestly: the
+  reply was not kept, so no marks were taken from it.
+
+What this does not claim: the provider offers no idempotency key. A process that
+dies after the provider answered and before the usage row is committed leaves no
+local trace, and that request can be repeated on retry. The archive closes the
+window after the response is recorded; it cannot close the window before. The raw
+reply and every attempt stay in `provider_responses` / `provider_usage`.
+
+### 5. Verification (this phase, disposable PostgreSQL 16)
+
+```
+ruff check app tests                                     All checks passed
+ruff check scripts/import_scheme_criteria.py \
+           scripts/render_scheme_review.py               All checks passed
+pytest tests/unit -q                                     797 passed in 5.07 s
+pytest tests/integration -q                              292 passed, 1 warning
+                                                          in 323.65 s, exit 0
+python scripts/render_scheme_review.py --check           matches the payload
+```
+
+Migrations did not change this phase, so the fresh-database chain was not re-run;
+`alembic heads` remains `0031_scheme_criteria_rules_hash`.
+
+Two integration fixtures were corrected rather than the rule relaxed: their
+canned replies put a whole leaf's marks on a single `A1` component, which is the
+contradiction `EXCESS_CRITERION_AWARD` exists to catch. The replies now name the
+printed codes, and the repeated whole-paper run asserts that the archived reply is
+reused (`paper_requests == 1`) instead of a second paid request.
+
+No provider request was made, no live database was migrated, no parked job was
+requeued, no historical result was modified, and no AMI or frontend file was
+touched.
+
+## Phase 8 — independent verification: identity, term counts, routes, recovery
+
+No redesign. The resolver, evaluator, route enforcement and recovery boundaries
+were re-read and re-tested; one real defect was found and fixed.
+
+### The defect: deterministic attribution was reported as decided attribution
+
+`_awarded_criteria` matches an award of a repeated code to the rows of that code in
+printed order. That is deterministic, but five pilot questions (Q6, Q11, Q13, Q28,
+Q37b) print **two independent mark points under one code**. A reply that awards
+that code once does not say which point it earned, and the engine was crediting the
+first row with no signal at all.
+
+`scheme_check._identity_findings` now reports `AMBIGUOUS_CRITERION_CODE`
+(`POSSIBLE_MISMATCH`) in exactly that case, naming the code, the number of printed
+points and the marks awarded, and telling the reviewer the award was read against
+the printed order and must be attributed.
+
+It does **not** fire where the resolution is genuinely determinate:
+
+- a follow-through chain (the eleven questions whose second `M1` depends on the
+  first) — the dependent point cannot be earned without the earlier one, so one
+  award of that code can only be the earlier point;
+- a full award of both points (two components, or one component carrying both
+  marks);
+- a decorated code (`M1FT`), which is an explicit identity judged by the
+  dependency check.
+
+A probe over the whole pilot confirms the finding appears for exactly the five
+independent pairs and nowhere else, for a single award or a full one.
+
+### Verified without change
+
+- **Term counts.** `_written_terms` refuses products of sums and unreadable
+  expressions (`UNKNOWN`) and matches terms by mathematical equality with
+  consumption, so a repeated term cannot stand in for another. New tests pin the
+  cases that distinguish structure from textual fragments: an unrelated extra term
+  leaves a met threshold met, extra *like* terms collect and break the matches,
+  wrong coefficients and powers do not match, and ordering or grouping brackets
+  change nothing. Q34's printed threshold counts four uncollected terms
+  (`12x^3 - 30x^2 - 30x^2 + 75x`), which SymPy collects to three; recording that
+  spec is refused, so Q34 stays `ROUTE_THRESHOLD_UNRECORDED` rather than getting a
+  threshold that does not describe it. Q18, Q23 and Q26 remain in review: their
+  eight-term specifications are not transcribed.
+- **Routes at runtime.** A new integration test adds a documented two-mark route
+  (`M3`, replacing `M1` and `M2`) to the stored criteria, recomputes the approval
+  digest, and marks a reply that awards `M3` and a `M1` it replaces: the row keeps
+  its three marks, is `REVIEW_REQUIRED`, and carries `ROUTE_CONFLICT`. Enforcement
+  is in the marking path, not only in the importer.
+- **Recovery.** Archive-then-rows transaction order, the archive re-use path, the
+  `PAID_ATTEMPT_UNRECOVERABLE` guard, `ARCHIVE_FAILED` parking, duplicate-object
+  first-wins parsing and the no-duplicate partial-paper fallback are unchanged and
+  remain covered by the Phase 7 tests.
+
+### Verification (disposable PostgreSQL 16)
+
+```
+ruff check app tests                                      All checks passed
+pytest tests/unit -q                                      824 passed in 7.92 s
+pytest tests/integration -q                               293 passed, 1 warning
+                                                           in 315.26 s, exit 0
+python scripts/render_scheme_review.py --check            matches the payload
+```
+
+No migration was applied, no live database was written, no provider call was made,
+no job was requeued, the pilot scheme was not re-approved, and nothing was
+committed or pushed.
+
+## Phase 9 — scheme answer source and lost superscripts
+
+Baseline `7dcdf92` on `main`, working tree already dirty with the parallel/whole-paper
+integration work; nothing was reset, stashed, overwritten or committed. Migrations at
+`0036_verification_completeness (head)`. AMI untouched. No production row was written
+and no provider request was made.
+
+During the session HEAD advanced to `65a5abf` ("feat(web): add the paged correction
+preview and verification records"), committed at 21:08 local by an external Codebuff
+process. This work did not create that commit and did not modify or revert it; its own
+changes remain uncommitted on top of it.
+
+### 1. Baseline measured, not assumed
+
+```
+ruff check app tests                                  All checks passed
+pytest tests/unit -q                                  1116 passed in 12.19 s
+pytest tests/integration -q                           343 passed, 1 warning in 520.66 s
+  (disposable PostgreSQL 17.6 on 127.0.0.1:55433, migrated from an empty database)
+frontend tsc --noEmit                                 exit 0
+frontend vite build                                    exit 0
+frontend playwright verification-ui                   12 passed
+```
+
+The integration suite refuses to run without `AETRIX_TEST_DATABASE_URL`; that guard is
+correct and was not bypassed.
+
+### 2. The defect: the scheme's own answer field was never read
+
+`scheme_check.scheme_expected_expression` built its candidate answer from each
+criterion's `description` and `award_conditions` only. `marking_criteria.expected_answer`
+— the field that exists to state the answer — was ignored. A criterion whose
+description is prose ("a correct expansion", "Depends on the first M1") therefore
+produced no comparable answer, and the mathematical check reported `SKIPPED` on a
+question the scheme clearly answers: no `SCHEME_ANSWER_DIFFERENT` and no
+`SCHEME_ANSWER_WITHHELD` could ever fire there.
+
+The same transcription that fills `expected_answer` flattens superscripts: the pilot
+stores `24x3 - 28x2 - 12x` and `a3b2`. Read literally those are 24 times a symbol called
+`x3`, so a correct `24x^3 - 28x^2 - 12x` is judged **different** from the scheme.
+
+Measured directly against the pilot bundle: the flattened forms occur only in
+`expected_answer`; every `description` that states an answer already uses `^`. That is
+why the defect was **latent** on this paper — the description happened to carry the
+answer — and why the repair changes no verdict on it. The repair is a guard for the
+schemes where it is not latent.
+
+### 3. The repair
+
+- `verification.restore_printed_superscripts` reads `12x3` as `12x^3`.
+- `verification.equivalent_to_scheme` runs the strict comparison first and keeps its
+  verdict; a second reading of the **scheme side** may prove equivalence, never create a
+  difference. `None` still means "cannot decide".
+- `scheme_check.scheme_expected_expression` now reads `expected_answer`, and groups
+  candidates by one canonical key (`restore_printed_superscripts` + whitespace + case)
+  so the same answer written with a caret and with a flattened digit is **one**
+  candidate rather than a false ambiguity that switches the check off.
+- `check_answer_against_scheme` and `answer_is_printed_form` compare through
+  `equivalent_to_scheme`.
+
+A different sign, coefficient or power is still `DIFFERENT`: the restored reading does
+not swallow real differences.
+
+### 4. Regression coverage
+
+`backend/tests/unit/test_scheme_superscripts.py` — 15 tests: the artefact itself,
+the four pilot answers with flattened superscripts, reordering, three genuine
+differences (sign, coefficient, power), the `cao` printed-form interaction, a withheld
+accuracy mark for an equivalent answer now producing `SCHEME_ANSWER_WITHHELD`,
+`expected_answer` read when the description is prose, two notations of one answer not
+treated as ambiguous, and two genuinely different answers still producing `SKIPPED`.
+
+Effect on the one available paper, measured offline over the 38 comparable leaves:
+scheme answers comparable 38/38 before and after; 0 verdict changes. Stated because it
+is the honest result, not a shortcoming to hide.
+
+### 5. Verification after the repair
+
+```
+ruff check app tests                                  All checks passed
+pytest tests/unit -q                                  1131 passed in 12.69 s
+pytest tests/integration/test_correction_pipeline.py
+         test_aetrix_pipeline.py test_parallel_marking.py
+         test_whole_paper_marking.py test_provider_calls.py
+                                                      103 passed, 1 warning, 123.55 s, exit 0
+frontend tsc --noEmit                                 exit 0
+frontend vite build                                   exit 0
+frontend playwright verification-ui                   12 passed in 20.7 s
+```
+
+The full integration suite (343 passed, 520.66 s, exit 0) was measured on the
+unmodified baseline. After the edits only the five suites that exercise
+`scheme_check` and the marking pipeline were re-run; the remaining integration files
+do not import the changed modules. That is the smallest set that covers the change,
+and it is stated rather than implying a second full run.
+
+### 6. Real-paper comparison, and why it is not the controlled experiment
+
+`experiment/real_paper_comparison/compare_modes.py` freezes the stored `WHOLE_PAPER` job
+(read-only `SELECT`) and compares it with the archived parallel run against the
+stored candidate reference. Results, confounds and per-question root causes are in
+`experiment/real_paper_comparison/REPORT.md`. Headline: 24/38 and 26/38 item-exact,
+76/80 and 77/80 marks, 1 request / 16.2k input tokens against 39 requests / 132.1k.
+
+It is **not** Experiment A: the arms used different model pools, different builds and
+different implementations. A controlled comparison on the current build needs a live
+run, which needs either a production write or credential extraction. Neither was done.
+
+### 7. Remaining, and what it costs
+
+| Issue | Status |
+| --- | --- |
+| No teacher-certified reference | blocker: external material |
+| Controlled WHOLE_PAPER vs PARALLEL run on HEAD | not performed: needs an approved live run |
+| Evidence authenticity is only checked when transcription is enabled and the question is selected | open design gap; the stored 37(b) full-marks award on a blank answer is the live example |
+| Development database schema predates `prompt_version`, `verification_status` on `correction_jobs` and `criterion_results.marks` | historical rows only; no migration was applied here |

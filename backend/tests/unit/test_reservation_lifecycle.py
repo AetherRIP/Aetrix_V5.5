@@ -130,6 +130,19 @@ class _CountingReservations:
     def unconfirmed_count_project(self, project_id, since, *, model=None) -> int:
         return 1
 
+    def active_cooldowns_for(self, project_ids, now):
+        # No project is cooling down in this fixture; the estimator reads the
+        # whole set at once so one missing method fails every estimate.
+        return {}
+
+    def project_window_counts(
+        self, project_ids, *, minute_since, day_since, now, model=None
+    ) -> dict[str, dict[str, int]]:
+        return {
+            project_id: {"minute": 2, "day": 2, "unconfirmed": 1}
+            for project_id in project_ids
+        }
+
     def project_cooldown(self, project_id):
         return None
 
@@ -143,6 +156,18 @@ class _CountingUsage:
 
     def window_stats(self, since, *, project_id, model) -> dict:
         return {"input_tokens": 0, "output_tokens": 0, "failures": 0}
+
+    def project_pool_usage(
+        self, project_ids, *, model, minute_since, day_since
+    ) -> dict[str, dict[str, int]]:
+        return {
+            project_id: {
+                "validations_minute": 0,
+                "validations_day": 0,
+                "tokens_minute": 0,
+            }
+            for project_id in project_ids
+        }
 
 
 @pytest.fixture()
@@ -358,5 +383,5 @@ def test_the_revision_chain_has_exactly_one_head() -> None:
         for parent in (down if isinstance(down, list) else [down])
         if parent
     }
-    assert known - parents == {"0038_reservation_unconfirmed"}
+    assert known - parents == {"0046_platform_settings"}
     assert parents <= known, "a down_revision names a revision that does not exist"

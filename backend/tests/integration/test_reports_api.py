@@ -80,9 +80,11 @@ def test_the_report_is_a_pdf_for_the_owning_workspace(
 
     text = _text(response)
     assert "STUDENT CORRECTION REPORT" in text
-    assert "student-1" in text
+    # ``_text`` upper-cases the extracted page text, so every literal is compared
+    # in that form; the reference is still the stored one, not a rewritten value.
+    assert "STUDENT-1" in text
     assert "FIXTURE ASSIGNMENT" in text
-    assert str(job.id)[:8] in text
+    assert str(job.id)[:8].upper() in text
     assert "5 / 10" in text
     assert "Q1A" in text and "Q1B" in text
     # Unapproved, so the document says so rather than presenting a final result.

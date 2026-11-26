@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from app.core.config import get_settings
+from app.core.config import ModelQuota, get_settings
 from app.core.errors import AppError
 from app.db.models import PromptVersion, ProviderCredential, ProviderUsage
 from app.prompts.registry import PromptRegistry
@@ -48,14 +48,23 @@ def test_usage_records_tokens_cost_and_prompt_version(
 
 
 def test_quota_reservation_blocks_a_second_call(identity, provider_credential, db_session) -> None:
+    model = get_settings().provider.model_primary
     settings = single_model_chains(
         get_settings().model_copy(
             update={
-                # ``model_limits`` is pinned empty so the global policy this
-                # test sets is the one in force; a per-model snapshot entry
-                # would otherwise be the authoritative limit.
+                # Aetrix will not spend a request against a model with no stated
+                # daily allowance, so this test states one.  The minute limit of
+                # one is the subject: the first call consumes it and the second
+                # is refused before a request is sent.
                 "quota": get_settings().quota.model_copy(
-                    update={"requests_per_minute": 1, "model_limits": {}}
+                    update={
+                        "requests_per_minute": 1,
+                        "model_limits": {
+                            model: ModelQuota(
+                                requests_per_minute=1, requests_per_day=100
+                            )
+                        },
+                    }
                 )
             }
         )

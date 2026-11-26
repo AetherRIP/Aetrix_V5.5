@@ -23,7 +23,7 @@ import { workspaceAllocations, type WorkspaceAllocation } from '../lib/api/alloc
 import { useEngineSession } from '../lib/api/session'
 import { useResource } from '../lib/api/useResource'
 import type {
-  AuditEvent,
+  AuditEventPage,
   Dashboard as DashboardData,
   Gradebook,
   InboxItem,
@@ -523,10 +523,15 @@ function Dashboard() {
       ? (signal) => workspaceAllocations(workspace, { token: session.token, signal })
       : null,
   )
-  const [auditState, reloadAudit] = useResource<AuditEvent[]>(
+  const [auditState, reloadAudit] = useResource<AuditEventPage>(
     `audit:${workspace ?? 'none'}`,
     workspace
-      ? (signal) => workspaceService.audit(workspace, { token: session.token, signal })
+      ? (signal) =>
+          workspaceService.audit(
+            workspace,
+            { limit: 8 },
+            { token: session.token, signal },
+          )
       : null,
   )
 
@@ -536,7 +541,7 @@ function Dashboard() {
   const inbox = inboxState.state === 'ok' ? inboxState.data : []
   const classes = classesState.state === 'ok' ? classesState.data : []
   const allocations = allocationsState.state === 'ok' ? allocationsState.data : []
-  const audit = auditState.state === 'ok' ? auditState.data : []
+  const audit = auditState.state === 'ok' ? auditState.data.items : []
 
   const refresh = () => {
     reloadDashboard()

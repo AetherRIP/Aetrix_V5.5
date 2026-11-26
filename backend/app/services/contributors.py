@@ -12,11 +12,12 @@ module owns the three things that makes safe:
 * **Statistics** — usage is attributed in the ledger, so contribution totals do
   not depend on the key still existing.
 
-Quota is deliberately *not* modelled here.  ``app.services.quota`` counts per
-Google Cloud project; contributors and projects are many-to-many, so any
-per-contributor counter would reintroduce the "one key equals one pool" defect
-this fleet exists to avoid.  ``capacity`` therefore reports per-project
-allowances and sums them across projects — never across keys.
+Quota is deliberately *not* modelled here.  ``app.services.quota`` owns the
+accounting: one Aetrix pool per credential, plus a Google project-identity label
+that may be shared by several keys.  ``capacity`` therefore reports each pool's
+own Aetrix budget and its Google quota status separately; a per-contributor
+counter would still be the wrong unit, and summed pool budgets are never
+presented as Google capacity.
 """
 
 from __future__ import annotations
@@ -342,11 +343,14 @@ def _is_eligible(credential: ProviderCredential) -> bool:
 
 
 def capacity(session: Session, settings: Settings) -> dict[str, Any]:
-    """Available allowance across eligible projects, per model.
+    """Every eligible credential pool, with its own Aetrix budget.
 
-    Only projects that still have an eligible key contribute.  Keys are counted
-    for attribution, never for capacity: two keys in one project report the same
-    remaining allowance, because that is what Google enforces.
+    Each key is reported as one pool: its reservations, its configured budget and
+    its quarantine.  That is Aetrix accounting, not Google capacity.  Google may
+    meter several of these keys under one project, so the per-pool figures are
+    labelled as Aetrix budgets and the model total carries how many pools have a
+    KNOWN Google status versus an UNKNOWN one.  A summed pool budget is never
+    described as an independent Google allowance.
     """
 
     credentials = CredentialRepository(session).all_credentials()
@@ -354,7 +358,7 @@ def capacity(session: Session, settings: Settings) -> dict[str, Any]:
     estimator = QuotaEstimator(session, settings)
     now = utcnow()
 
-    eligible: dict[str, list[ProviderCredential]] = {}
+    eligible: list[ProviderCredential] = []
     for credential in credentials:
         if not _is_eligible(credential):
             continue
@@ -362,40 +366,53 @@ def capacity(session: Session, settings: Settings) -> dict[str, Any]:
             owner = contributors.get(credential.contributor_id)
             if owner is None or owner.status != "ACTIVE":
                 continue
-        eligible.setdefault(credential.project_id, []).append(credential)
+        eligible.append(credential)
 
     models: list[dict[str, Any]] = []
     for model in _fleet_models(settings):
-        rows: list[dict[str, Any]] = []
+        pools: list[dict[str, Any]] = []
         minute_total: int | None = None
         day_total: int | None = None
-        known = 0
+        measured = 0
         unknown = 0
+        quota_known = 0
+        quota_unknown = 0
         confirmed = True
-        for project_id, keys in sorted(eligible.items()):
-            estimate = estimator.estimate(project_id=project_id, model=model, now=now)
-            owners = {
-                key.contributor_id for key in keys if key.contributor_id is not None
-            }
-            rows.append(
+        quarantined = 0
+        for credential in sorted(eligible, key=lambda row: row.pool_id):
+            estimate = estimator.pool_estimate(credential, model, now=now)
+            pools.append(
                 {
-                    "project_id": project_id,
-                    "contributors": len(owners),
-                    "keys": len(keys),
-                    "requests_per_minute_remaining": estimate.requests_per_minute.remaining,
+                    "pool_id": credential.pool_id,
+                    "credential_id": credential.id,
+                    "project_id": credential.project_id,
+                    "contributor_id": credential.contributor_id,
+                    "quarantined": estimate.quarantined,
+                    "google_quota_status": estimate.google_quota_status,
+                    "requests_per_minute_remaining": (
+                        estimate.requests_per_minute.remaining
+                    ),
                     "requests_per_day_remaining": estimate.requests_per_day.remaining,
                     "confidence": estimate.confidence,
-                    "cooldown_until": estimate.cooldown_until,
+                    "cooldown_until": estimate.quarantine_until,
                 }
             )
+            if estimate.quarantined:
+                quarantined += 1
+            if estimate.google_quota_status == "UNKNOWN":
+                quota_unknown += 1
+            else:
+                quota_known += 1
             for window in (estimate.requests_per_minute, estimate.requests_per_day):
                 if window.remaining is None:
                     continue
-                known += 1
+                measured += 1
                 if window.confidence != "CONFIRMED":
                     confirmed = False
             if estimate.requests_per_minute.remaining is not None:
-                minute_total = (minute_total or 0) + estimate.requests_per_minute.remaining
+                minute_total = (
+                    minute_total or 0
+                ) + estimate.requests_per_minute.remaining
             else:
                 unknown += 1
             if estimate.requests_per_day.remaining is not None:
@@ -405,16 +422,21 @@ def capacity(session: Session, settings: Settings) -> dict[str, Any]:
         models.append(
             {
                 "model": model,
-                "projects": rows,
+                "pools": pools,
                 "totals": {
-                    "projects": len(rows),
-                    "requests_per_minute_remaining": minute_total,
-                    "requests_per_day_remaining": day_total,
-                    "windows_measured": known,
+                    "pools": len(pools),
+                    "pools_quarantined": quarantined,
+                    # Named as Aetrix budgets on purpose: these are sums of
+                    # configured pool limits, not Google allowances.
+                    "aetrix_requests_per_minute_remaining": minute_total,
+                    "aetrix_requests_per_day_remaining": day_total,
+                    "google_quota_known": quota_known,
+                    "google_quota_unknown": quota_unknown,
+                    "windows_measured": measured,
                     "windows_unknown": unknown,
                     "confidence": (
                         "UNKNOWN"
-                        if known == 0
+                        if measured == 0
                         else "CONFIRMED"
                         if confirmed
                         else "ESTIMATED"
@@ -426,9 +448,10 @@ def capacity(session: Session, settings: Settings) -> dict[str, Any]:
     return {
         "models": models,
         "note": (
-            "Quota is counted per Google Cloud project. Keys are never added up "
-            "as capacity, so two contributors sharing a project still share its "
-            "allowance."
+            "One Aetrix pool per credential. Each pool has its own budget, "
+            "quarantine and failure count, but a pool is not a Google Cloud "
+            "project: Google may meter several keys under one project, so these "
+            "budgets are never added up as Google capacity."
         ),
     }
 

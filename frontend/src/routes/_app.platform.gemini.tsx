@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { StatePanel, StatusChip } from '../components/app/StatePanel'
 import { Panel } from '../components/app/PageBlocks'
@@ -17,6 +26,7 @@ import {
   listModelInventory,
   listModels,
   overview as fetchOverview,
+  projects as fetchProjects,
   removeKey,
   selectModel,
   setKeyEnabled,
@@ -39,6 +49,9 @@ import {
   type GoogleQuotaProject,
   type GoogleQuotaReport,
   type GoogleQuotaValue,
+  type GoogleProjectHealth,
+  type GoogleMonitor,
+  type GoogleQuotaAlert,
   type ImportRow,
   type InventoryAvailability,
   type InventoryCategory,
@@ -46,8 +59,13 @@ import {
   type InventoryModel,
   type InventoryWorkload,
   type KeyPage,
+  type MarkingPolicy,
   type ModelCatalogue,
   type ModelInventory,
+  type ModelRegistryReport,
+  type ModelSchedulerReport,
+  type RegisteredModel,
+  type SchedulerCandidate,
   type ProjectRow,
   type ProjectVerification,
   type QuotaWindow,
@@ -139,6 +157,12 @@ const HEALTH_TONE: Record<string, 'ok' | 'attention' | 'neutral'> = {
   UNKNOWN: 'attention',
   INVALID: 'neutral',
   DISABLED: 'neutral',
+}
+
+const QUOTA_TONE: Record<string, 'ok' | 'attention' | 'neutral'> = {
+  KNOWN: 'ok',
+  EXHAUSTED: 'attention',
+  UNKNOWN: 'neutral',
 }
 
 const VERIFICATION_TONE: Record<string, 'ok' | 'attention' | 'neutral'> = {
@@ -235,6 +259,19 @@ function PlatformGemini() {
     token ? (options) => fetchOverview(options) : null,
     { token },
   )
+  // Three independent reads: the fleet counts, the project labels behind them
+  // and the alert count. None waits for another, so a slow Google-project read
+  // cannot hold the registered-key totals off the screen.
+  const [projects, reloadProjects] = useResource<ProjectRow[]>(
+    `projects:${token ?? 'anonymous'}`,
+    token ? (options) => fetchProjects(options) : null,
+    { token },
+  )
+  const [alerts, reloadAlerts] = useResource<FleetAlert[]>(
+    `alerts:${token ?? 'anonymous'}`,
+    token ? (options) => fetchAlerts(options) : null,
+    { token },
+  )
 
   return (
     <div className="app-stack">
@@ -246,12 +283,27 @@ function PlatformGemini() {
           </span>
         </div>
         <p className="panel-copy">
-          Keys are grouped by Google Cloud project because Gemini&rsquo;s free tier is metered
-          per project, per model: adding a key to a project adds no capacity. Remaining
-          allowance is estimated from Aetrix&rsquo;s own ledger and labelled{' '}
-          <code>CONFIRMED</code>, <code>ESTIMATED</code> or <code>UNKNOWN</code> — never
-          presented as a figure Google reported.
+          Each key is its own Aetrix pool, with its own budget, reservations, quarantine and
+          failure count. A pool is not a Google Cloud project: Google meters per project and may
+          put several keys in one, so pool budgets are labelled{' '}
+          <code>CONFIRMED</code>, <code>ESTIMATED</code> or <code>UNKNOWN</code> and are never
+          added up as Google capacity. Google&rsquo;s own allowance is reported separately as{' '}
+          <code>KNOWN</code>, <code>EXHAUSTED</code> or <code>UNKNOWN</code>.
         </p>
+        {overview.state === 'ok' ? (
+          <div className="gem-head__facts">
+            <StatusChip tone={OPERATIONAL_TONE[overview.data.operational_status ?? 'NOT_TESTED'] ?? 'neutral'}>
+              fleet {operationalLabel(overview.data.operational_status)}
+            </StatusChip>
+            <span>{count(overview.data.keys_total)} registered keys</span>
+            <span>{count(overview.data.credential_pools ?? overview.data.keys_total)} individual pools</span>
+            <span>{count(overview.data.declared_projects ?? overview.data.projects)} Google projects</span>
+            <span>last observation {stamp(overview.data.observed_at)}</span>
+            <button type="button" className="btn btn--outline btn--small" onClick={reloadOverview}>
+              Refresh
+            </button>
+          </div>
+        ) : null}
         <div className="app-tabs gem-tabs" role="tablist" aria-label="Gemini management sections">
           {TABS.map((label) => (
             <button
@@ -283,10 +335,24 @@ function PlatformGemini() {
         className="gem-panel"
       >
         {tab === 'Overview' ? (
-          <OverviewTab state={overview} onRefresh={reloadOverview} />
+          <OverviewTab
+            state={overview}
+            projects={projects}
+            alerts={alerts}
+            onRefresh={() => {
+              reloadOverview()
+              reloadProjects()
+              reloadAlerts()
+            }}
+            token={token}
+          />
         ) : null}
         {tab === 'API keys' ? (
-          <KeysTab token={token} projects={overview.state === 'ok' ? overview.data.projects_detail : []} notify={setNotice} />
+          <KeysTab
+            token={token}
+            projects={projects.state === 'ok' ? projects.data : []}
+            notify={setNotice}
+          />
         ) : null}
         {tab === 'Models' ? <ModelsTab token={token} notify={setNotice} /> : null}
         {tab === 'Model catalogue' ? (
@@ -296,13 +362,13 @@ function PlatformGemini() {
           <ContributorsTab token={token} notify={setNotice} />
         ) : null}
         {tab === 'Projects' ? (
-          <ProjectsTab state={overview} onRefresh={reloadOverview} />
+          <ProjectsTab projects={projects} onRefresh={reloadProjects} token={token} />
         ) : null}
         {tab === 'Google quota' ? (
           <GoogleQuotaTab token={token} notify={setNotice} />
         ) : null}
         {tab === 'Usage' ? <UsageTab token={token} /> : null}
-        {tab === 'Alerts' ? <AlertsTab token={token} /> : null}
+        {tab === 'Alerts' ? <AlertsTab state={alerts} reload={reloadAlerts} /> : null}
       </div>
     </div>
   )
@@ -327,7 +393,7 @@ function LoadFailure({ state, capability }: { state: Loaded<unknown>; capability
   )
 }
 
-function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+function Stat({ label, value, note }: { label: string; value: ReactNode; note?: string }) {
   return (
     <div className="gem-stat">
       <span className="gem-stat__label">{label}</span>
@@ -337,8 +403,9 @@ function Stat({ label, value, note }: { label: string; value: string; note?: str
   )
 }
 
-function capacityNote(data: FleetOverview): string {
-  const pools = data.projects_detail.flatMap((project) =>
+function capacityNote(projects: ProjectRow[] | null): string {
+  if (projects === null) return 'project budgets have not loaded yet'
+  const pools = projects.flatMap((project) =>
     project.estimates.map((estimate) => ({
       project: project.project_id,
       model: estimate.model,
@@ -356,10 +423,371 @@ function capacityNote(data: FleetOverview): string {
         `${pool.project} / ${pool.model}: ${count(pool.window.remaining ?? 0)} left today`,
     )
     .join('; ')
-  return `${detail} (${confirmed ? 'configured limit' : 'estimated limit'}, counted from Aetrix generation reservations plus recorded validation probes; per project-model, not additive)`
+  return `${detail} (${confirmed ? 'configured limit' : 'estimated limit'}, counted from Aetrix generation reservations plus recorded validation probes; per credential pool, not additive and not a Google-reported figure)`
 }
 
-function OverviewTab({ state, onRefresh }: { state: Loaded<FleetOverview>; onRefresh: () => void }) {
+/**
+ * The four-model architecture is two groups, never one interchangeable list:
+ * three primary correction models (any one of them can mark a paper, and a paper
+ * is still marked by exactly one) and the independent verification model, which
+ * checks evidence and reads pages blind. The checker is not a marking fallback.
+ */
+function ModelGroup({
+  kicker,
+  title,
+  description,
+  children,
+  note,
+}: {
+  kicker: string
+  title: string
+  description: string
+  children: ReactNode
+  note?: string | null
+}) {
+  return (
+    <section className="gem-group" aria-label={title}>
+      <div className="gem-group__head">
+        <span className="gem-group__kicker mono">{kicker}</span>
+        <h3 className="gem-group__title">{title}</h3>
+        <p className="gem-group__copy">{description}</p>
+      </div>
+      <div className="gem-group__body">{children}</div>
+      {note ? <p className="gem-footnote">{note}</p> : null}
+    </section>
+  )
+}
+
+function RegistryModelCard({
+  model,
+  candidate,
+  policyDisabled,
+}: {
+  model: RegisteredModel
+  candidate: SchedulerCandidate | undefined
+  policyDisabled: boolean
+}) {
+  const isPrimary = model.role === 'primary'
+  const enabled = !policyDisabled
+  const eligible = candidate ? candidate.eligible : isPrimary ? model.stability === 'stable' && model.pdf_input && model.image_input && model.structured_outputs : null
+  return (
+    <article className="gem-model-card" data-group={isPrimary ? 'primary' : 'checker'}>
+      <header className="gem-model-card__head">
+        <span className="gem-model-card__index mono">{isPrimary ? `P${model.priority}` : 'CHECK'}</span>
+        <div>
+          <h4 className="gem-model-card__name">{model.display_name}</h4>
+          <span className="gem-model-card__id mono">{model.model_id}</span>
+        </div>
+      </header>
+      <dl className="gem-model-card__facts">
+        <div>
+          <dt>Availability</dt>
+          <dd>
+            {candidate
+              ? candidate.healthy_credentials > 0
+                ? `${count(candidate.healthy_credentials)} registered credential(s)`
+                : 'no healthy credential'
+              : 'not reported by this engine'}
+          </dd>
+        </div>
+        <div>
+          <dt>Operational health</dt>
+          <dd>{candidate ? candidate.reason : 'no scheduler reading'}</dd>
+        </div>
+        <div>
+          <dt>Credential access</dt>
+          <dd>
+            {candidate ? `${count(candidate.healthy_credentials)} pool(s) can serve it` : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt>Usage</dt>
+          <dd>
+            {candidate ? `${count(candidate.requests_today)} request(s) today` : '—'}
+            {candidate?.in_flight ? ` · ${count(candidate.in_flight)} in flight` : ''}
+          </dd>
+        </div>
+        <div>
+          <dt>Quota constraint</dt>
+          <dd>
+            {candidate
+              ? candidate.daily_budget === null
+                ? 'no declared daily budget'
+                : `${count(candidate.remaining_budget ?? 0)} of ${count(candidate.daily_budget)} left`
+              : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt>Enabled</dt>
+          <dd>{enabled ? 'yes' : 'no — excluded by the marking policy'}</dd>
+        </div>
+        <div>
+          <dt>{isPrimary ? 'Eligible for primary correction' : 'Independent checking only'}</dt>
+          <dd>
+            {isPrimary
+              ? eligible === null
+                ? 'not reported'
+                : eligible
+                  ? 'yes'
+                  : 'no'
+              : 'yes — never a marking fallback'}
+          </dd>
+        </div>
+        <div>
+          <dt>Lifecycle</dt>
+          <dd>
+            {model.stability}
+            {model.retirement_date ? ` · retires ${model.retirement_date}` : ''}
+          </dd>
+        </div>
+      </dl>
+    </article>
+  )
+}
+
+function SelectionModelCard({
+  modelId,
+  displayName,
+  candidate,
+  role,
+  disabled,
+  source,
+  index,
+}: {
+  modelId: string
+  displayName?: string | null
+  candidate?: SchedulerCandidate
+  role: 'primary' | 'review'
+  disabled: boolean
+  source?: string
+  index?: number
+}) {
+  return (
+    <article className="gem-model-card" data-group={role === 'primary' ? 'primary' : 'checker'}>
+      <header className="gem-model-card__head">
+        <span className="gem-model-card__index mono">
+          {role === 'primary' ? `P${index ?? 1}` : 'CHECK'}
+        </span>
+        <div>
+          <h4 className="gem-model-card__name">{displayName || modelId}</h4>
+          <span className="gem-model-card__id mono">
+            {modelId} · {role === 'primary' ? 'marks a paper' : 'independent evidence check and blind reading'}
+          </span>
+        </div>
+      </header>
+      <dl className="gem-model-card__facts">
+        <div>
+          <dt>Selected by</dt>
+          <dd>{source === 'database' ? 'saved selection' : 'environment fallback'}</dd>
+        </div>
+        <div>
+          <dt>Availability</dt>
+          <dd>
+            {candidate
+              ? `${count(candidate.healthy_credentials)} registered credential(s)`
+              : 'listed by the model catalogue'}
+          </dd>
+        </div>
+        <div>
+          <dt>Operational health</dt>
+          <dd>{candidate ? candidate.reason : 'no scheduler reading in this engine build'}</dd>
+        </div>
+        <div>
+          <dt>Usage</dt>
+          <dd>{candidate ? `${count(candidate.requests_today)} request(s) today` : '—'}</dd>
+        </div>
+        <div>
+          <dt>Quota constraint</dt>
+          <dd>
+            {candidate && candidate.daily_budget !== null
+              ? `${count(candidate.remaining_budget ?? 0)} of ${count(candidate.daily_budget)} left`
+              : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt>Enabled</dt>
+          <dd>
+            {role === 'review'
+              ? 'yes — selected for verification'
+              : disabled
+                ? 'no — excluded by the marking policy'
+                : 'yes'}
+          </dd>
+        </div>
+        <div>
+          <dt>{role === 'primary' ? 'Eligible for primary correction' : 'Marking role'}</dt>
+          <dd>
+            {role === 'primary'
+              ? disabled
+                ? 'no'
+                : 'yes'
+              : 'never marks — checking only'}
+          </dd>
+        </div>
+      </dl>
+    </article>
+  )
+}
+
+function ModelArchitecture({
+  registry,
+  scheduler,
+  policy,
+  selections,
+  sources,
+  models,
+}: {
+  registry?: ModelRegistryReport
+  scheduler?: ModelSchedulerReport
+  policy?: MarkingPolicy | null
+  selections?: Partial<Record<SelectionRole, string>> | null
+  sources?: Partial<Record<SelectionRole, string>> | null
+  models?: CatalogueModel[]
+}) {
+  const disabled = new Set(policy?.disabled_models ?? [])
+  const candidateFor = (modelId: string) =>
+    scheduler?.candidates.find((candidate) => candidate.model_id === modelId)
+  const displayName = (modelId: string) =>
+    models?.find((model) => model.id === modelId)?.display_name ?? null
+
+  const registryPrimary = registry?.primary_models.filter((model) => model.role === 'primary') ?? []
+  const registryCheckers = registry?.checker_models ?? []
+
+  // Without the registry the engine still publishes its permitted primary chain;
+  // the saved selection is added so the marking model is never hidden.
+  const selectionPrimary = Array.from(
+    new Set(
+      registry
+        ? []
+        : [...(policy?.primary_chain ?? []), ...(selections?.primary ? [selections.primary] : [])],
+    ),
+  )
+  const selectionChecker = registry
+    ? []
+    : selections?.review
+      ? [selections.review]
+      : []
+
+  return (
+    <div className="gem-arch">
+      <ModelGroup
+        kicker="GROUP 1"
+        title="Primary correction models"
+        description="The models eligible to correct a paper. All of them live in the same group; a paper is still marked by exactly one of them, and no second entry is tried as a fallback."
+        note={
+          registry
+            ? `${count(registryPrimary.length)} primary model(s) registered · verified on ${registry.verified_on}`
+            : policy
+              ? `The deployed engine publishes ${count(policy.primary_chain.length)} primary model(s) in its marking chain.`
+              : null
+        }
+      >
+        {registryPrimary.length > 0
+          ? registryPrimary.map((model) => (
+              <RegistryModelCard
+                key={model.model_id}
+                model={model}
+                candidate={candidateFor(model.model_id)}
+                policyDisabled={disabled.has(model.model_id)}
+              />
+            ))
+          : selectionPrimary.map((modelId, position) => (
+              <SelectionModelCard
+                key={modelId}
+                modelId={modelId}
+                displayName={displayName(modelId)}
+                index={position + 1}
+                role="primary"
+                disabled={disabled.has(modelId)}
+                candidate={candidateFor(modelId)}
+                source={sources?.primary}
+              />
+            ))}
+        {registryPrimary.length === 0 && selectionPrimary.length === 0 ? (
+          <p className="panel-copy">The engine did not report a primary correction model.</p>
+        ) : null}
+      </ModelGroup>
+
+      <ModelGroup
+        kicker="GROUP 2"
+        title="Independent verification model"
+        description="Used for independent checking, not as another primary correction option. It inspects criteria and evidence and reads pages blind; a disagreement is recorded for review and never replaces an award."
+        note="The checker is deliberately a different model from the marking model, and it has no marking-model fallback."
+      >
+        {registryCheckers.length > 0
+          ? registryCheckers.map((model) => (
+              <RegistryModelCard
+                key={model.model_id}
+                model={model}
+                candidate={candidateFor(model.model_id)}
+                policyDisabled={disabled.has(model.model_id)}
+              />
+            ))
+          : selectionChecker.map((modelId) => (
+              <SelectionModelCard
+                key={modelId}
+                modelId={modelId}
+                displayName={displayName(modelId)}
+                role="review"
+                disabled={disabled.has(modelId)}
+                candidate={candidateFor(modelId)}
+                source={sources?.review}
+              />
+            ))}
+        {registryCheckers.length === 0 && selectionChecker.length === 0 ? (
+          <p className="panel-copy">The engine did not report an independent verification model.</p>
+        ) : null}
+      </ModelGroup>
+    </div>
+  )
+}
+
+function ActiveAlertCount({ state }: { state: Loaded<FleetAlert[]> }) {
+  if (state.state !== 'ok') return <>{loadNote(state)}</>
+  return <>{count(state.data.length)}</>
+}
+
+function OverviewTab({
+  state,
+  projects,
+  alerts,
+  onRefresh,
+  token,
+}: {
+  state: Loaded<FleetOverview>
+  projects: Loaded<ProjectRow[]>
+  alerts: Loaded<FleetAlert[]>
+  onRefresh: () => void
+  token: string | null
+}) {
+  // The overview only carries the model registry in builds that publish it. The
+  // catalogue always carries the role selections, so it is the fallback that
+  // keeps both model groups populated instead of empty — asked for only when the
+  // registry is missing, because it reads the provider's model list and the
+  // fleet overview must not depend on an external read to render.
+  const [catalogue] = useResource<ModelCatalogue>(
+    `overview-models:${token ?? 'anonymous'}`,
+    token && state.state === 'ok' && !state.data.model_registry
+      ? (options) => listModels(false, options)
+      : null,
+    { token },
+  )
+  const catalogueData = catalogue.state === 'ok' ? catalogue.data : null
+
+  if (state.state === 'loading') {
+    return (
+      <Panel title="Fleet at a glance" note="reading the fleet counts">
+        <div className="gem-kpi" aria-busy="true" aria-label="Loading fleet counts">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div className="gem-stat" key={index}>
+              <span className="skeleton" style={{ width: '12ch' }} />
+              <span className="skeleton" style={{ width: '6ch', height: '1.6em' }} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+    )
+  }
   if (state.state !== 'ok') {
     return (
       <Panel title="Overview" note={loadNote(state)}>
@@ -372,6 +800,56 @@ function OverviewTab({ state, onRefresh }: { state: Loaded<FleetOverview>; onRef
 
   return (
     <div className="app-stack">
+      <Panel title="Fleet at a glance" note="one Aetrix pool per API key; Google quota is per project">
+        <div className="gem-kpi">
+          <Stat label="Registered API keys" value={count(data.keys_total)} note="each one is its own pool" />
+          <Stat
+            label="Healthy pools"
+            value={count(data.pools_available ?? data.routable_keys ?? 0)}
+            note={`of ${count(data.credential_pools ?? data.keys_total)} individual pools`}
+          />
+          <Stat label="Quarantined pools" value={count(data.pools_quarantined ?? 0)} note="a 429 or 401 pauses one key" />
+          <Stat
+            label="Failed pools"
+            value={count(health.INVALID ?? 0)}
+            note={`${count(data.failures_today)} failed call(s) today`}
+          />
+          <Stat
+            label="Primary correction models"
+            value={
+              data.model_registry
+                ? count(data.model_registry.primary_models.filter((model) => model.role === 'primary').length)
+                : catalogueData
+                  ? count(
+                      new Set([
+                        ...(catalogueData.marking_policy?.primary_chain ?? []),
+                        ...(catalogueData.selections?.primary ? [catalogueData.selections.primary] : []),
+                      ]).size,
+                    )
+                  : '—'
+            }
+            note="eligible to mark; one marks a paper"
+          />
+          <Stat
+            label="Verification models"
+            value={
+              data.model_registry
+                ? count(data.model_registry.checker_models.length)
+                : catalogueData
+                  ? count(catalogueData.selections?.review ? 1 : 0)
+                  : '—'
+            }
+            note="independent checking, never a marking fallback"
+          />
+          <Stat
+            label="Google Cloud projects"
+            value={count(data.declared_projects ?? data.projects)}
+            note={`${count(data.verified_projects ?? 0)} verified by Google`}
+          />
+          <Stat label="Active alerts" value={<ActiveAlertCount state={alerts} />} note="critical, warning and informational" />
+        </div>
+      </Panel>
+
       <Panel title="Fleet state" note={`day started ${stamp(data.day_started_at)}`}>
         <div className="gem-stats">
           <Stat label="Registered keys" value={count(data.keys_total)} note={`${count(data.declared_projects ?? data.projects)} declared project pool${data.projects === 1 ? '' : 's'}`} />
@@ -399,6 +877,16 @@ function OverviewTab({ state, onRefresh }: { state: Loaded<FleetOverview>; onRef
           <Stat label="Last provider success" value={stamp(data.last_success_at)} note="recorded in the ledger" />
           <Stat label="Last failure" value={stamp(data.last_failure_at)} note={data.last_failure_category ?? 'no failure recorded'} />
           <Stat
+            label="Pools available"
+            value={count(data.pools_available ?? data.routable_keys ?? 0)}
+            note={`${count(data.credential_pools ?? 0)} credential pools · ${count(data.pools_quarantined ?? 0)} quarantined`}
+          />
+          <Stat
+            label="Google quota unknown"
+            value={count(data.identity_unverified_keys ?? 0)}
+            note="no Google Cloud project established · pools may share one project"
+          />
+          <Stat
             label="Verified projects"
             value={count(data.verified_projects ?? 0)}
             note={
@@ -411,26 +899,86 @@ function OverviewTab({ state, onRefresh }: { state: Loaded<FleetOverview>; onRef
         {data.last_failure_message ? (
           <p className="panel-copy">Last failure: {data.last_failure_message}</p>
         ) : null}
+        <Panel
+          title="Model architecture"
+          note={
+                          data.model_registry
+                ? `${count(data.model_registry.primary_models.filter((model) => model.role === 'primary').length)} primary · ${count(data.model_registry.checker_models.length)} independent · verified ${data.model_registry.verified_on}`
+                : catalogueData
+                  ? 'from the engine\u2019s marking policy and role selections'
+                  : 'model roles not readable from this build'
+          }
+        >
+          <ModelArchitecture
+            registry={data.model_registry}
+            scheduler={data.model_scheduler}
+            policy={catalogueData?.marking_policy ?? null}
+            selections={catalogueData?.selections ?? null}
+            sources={catalogueData?.selection_sources ?? null}
+            models={catalogueData?.models ?? []}
+          />
+          {data.model_registry ? null : (
+            <p className="gem-footnote">
+              The deployed engine does not report the model registry here, so the groups cannot be filled
+              from this response. The Models tab lists the models the engine publishes with their roles.
+            </p>
+          )}
+          {data.model_scheduler ? (
+            <p className="gem-footnote">Scheduler: {data.model_scheduler.reason}</p>
+          ) : null}
+          <p className="gem-footnote">
+            {data.model_note ?? ''} Google records free-tier content as used to improve its products for every
+            model above, so an identifiable student script must not be sent to the free tier.
+          </p>
+        </Panel>
         <p className="gem-footnote">
-          Estimated available capacity: {capacityNote(data)}. These are Aetrix policy limits and
-          Aetrix-recorded usage, not Google-reported quota.{' '}
+          Estimated available capacity:{' '}
+          {capacityNote(projects.state === 'ok' ? projects.data : null)}. These are Aetrix
+          credential-pool limits
+          and Aetrix-recorded usage, not Google-reported quota. Each key is its own pool, but a pool is
+          not a Google Cloud project: Google may meter several keys under one project, so pool budgets
+          are never added up as Google capacity.{' '}
           {data.project_verification === 'GOOGLE_CLOUD'
             ? 'Project identities were checked with Google Resource Manager; Google-reported limits and usage are on the Google quota tab.'
-            : 'Project IDs are operator-declared and no Google verification has succeeded; keys sharing a declared ID are counted as one pool, which may understate capacity if the declaration is wrong.'}
+            : 'No Google verification has succeeded, so Google-level capacity is UNKNOWN. Declare a project under API keys to state it.'}
         </p>
+        {data.pinned_credential_id ? (
+          <p className="panel-copy">
+            Every call is pinned to credential <span className="mono">{data.pinned_credential_id}</span>. No
+            other key is substituted.
+          </p>
+        ) : null}
         <button type="button" className="btn btn--outline gem-refresh" onClick={onRefresh}>
           Refresh
         </button>
       </Panel>
 
-      <Panel title="Projects" note={`${count(data.projects)} declared pooled allowance${data.projects === 1 ? '' : 's'}`}>
-        {data.projects_detail.length === 0 ? (
+      <Panel
+        title="Project labels"
+        note={
+          projects.state === 'ok'
+            ? `${count(data.projects)} declared label${data.projects === 1 ? '' : 's'} · ${count(data.credential_pools ?? 0)} credential pools · read ${stamp(projects.data.flatMap((project) => project.estimates)[0]?.observed_at)}`
+            : `${count(data.projects)} declared label${data.projects === 1 ? '' : 's'} · ${count(data.credential_pools ?? 0)} credential pools · ${loadNote(projects)}`
+        }
+      >
+        {projects.state === 'loading' ? (
+          <ul className="gem-projects" aria-busy="true" aria-label="Loading project health">
+            {[0, 1].map((row) => (
+              <li key={row} className="gem-projects__row">
+                <span className="skeleton" style={{ width: '22ch' }} />
+                <span className="skeleton" style={{ width: '34ch' }} />
+              </li>
+            ))}
+          </ul>
+        ) : projects.state !== 'ok' ? (
+          <LoadFailure state={projects} capability="GET /api/v1/admin/providers/projects" />
+        ) : projects.data.length === 0 ? (
           <p className="panel-copy">
             No key is registered yet. Add one under API keys and name its Google Cloud project —
             a key with no project cannot be counted against a real allowance.
           </p>
         ) : (
-          <ProjectSummaries projects={data.projects_detail} />
+          <ProjectSummaries projects={projects.data} />
         )}
       </Panel>
     </div>
@@ -456,9 +1004,9 @@ function ProjectSummaries({ projects }: { projects: ProjectRow[] }) {
               {operationalLabel(project.operational_status)}
             </StatusChip>
             {project.cooldown_until && new Date(project.cooldown_until) > new Date() ? (
-              <StatusChip tone="attention">Paused until {stamp(project.cooldown_until)}</StatusChip>
+              <StatusChip tone="attention">Legacy project pause until {stamp(project.cooldown_until)}</StatusChip>
             ) : worst ? (
-              <StatusChip tone="attention">Quota exhausted ({worst.model})</StatusChip>
+              <StatusChip tone="attention">Aetrix label budget spent ({worst.model})</StatusChip>
             ) : null}
           </li>
         )
@@ -495,23 +1043,45 @@ function QuotaMeter({ label, window }: { label: string; window: QuotaWindow }) {
   )
 }
 
-function ProjectsTab({ state, onRefresh }: { state: Loaded<FleetOverview>; onRefresh: () => void }) {
-  if (state.state !== 'ok') {
+function ProjectsTab({
+  projects,
+  onRefresh,
+  token,
+}: {
+  projects: Loaded<ProjectRow[]>
+  onRefresh: () => void
+  token: string | null
+}) {
+  const [keys] = useResource<KeyPage>(
+    `project-pools:${token ?? 'anonymous'}`,
+    token ? (options) => listKeys({ limit: 200 }, options) : null,
+    { token },
+  )
+  const poolsByProject = new Map<string, FleetKey[]>()
+  if (keys.state === 'ok') {
+    for (const key of keys.data.items) {
+      const list = poolsByProject.get(key.project_id) ?? []
+      list.push(key)
+      poolsByProject.set(key.project_id, list)
+    }
+  }
+
+  if (projects.state !== 'ok') {
     return (
-      <Panel title="Projects" note={loadNote(state)}>
-        <LoadFailure state={state} capability="GET /api/v1/admin/providers/overview" />
+      <Panel title="Projects" note={loadNote(projects)}>
+        <LoadFailure state={projects} capability="GET /api/v1/admin/providers/projects" />
       </Panel>
     )
   }
-  const projects = state.data.projects_detail
+  const rows = projects.data
   return (
     <div className="app-stack">
-      {projects.length === 0 ? (
+      {rows.length === 0 ? (
         <Panel title="Projects" note="None registered">
           <p className="panel-copy">No Google Cloud project has a key registered yet.</p>
         </Panel>
       ) : null}
-      {projects.map((project, index) => (
+      {rows.map((project, index) => (
         <Panel
           key={project.project_id}
           title={project.project_id}
@@ -536,12 +1106,45 @@ function ProjectsTab({ state, onRefresh }: { state: Loaded<FleetOverview>; onRef
           </div>
           <p className="gem-footnote">
             {project.verification === 'VERIFIED'
-              ? 'Google Resource Manager confirmed this project identity. Keys are still grouped by the operator-declared id, and a 429 pauses the declared pool.'
-              : `Project identity is ${verificationLabel(project.verification)}. Keys here are counted as one allowance because an operator declared the grouping; if that is wrong, capacity is understated. A 429 pauses this declared pool.`}
+              ? 'Google Resource Manager confirmed this project identity.'
+              : `Project identity is ${verificationLabel(project.verification)}, so this group's Google-level capacity is UNKNOWN.`}{' '}
+            Each key here is its own Aetrix pool with its own budget, quarantine and failure count;
+            Google may meter all of them under one project, so these numbers are never summed as
+            Google capacity. A 429 quarantines only the key that received it.
             {project.cooldown_until && new Date(project.cooldown_until) > new Date()
-              ? ` Paused until ${stamp(project.cooldown_until)} after a quota rejection.`
+              ? ` A historical project-wide pause is recorded until ${stamp(project.cooldown_until)}.`
               : ''}
           </p>
+          <div className="gem-project-pools">
+            <h4 className="gem-project-pools__title">
+              Individual Aetrix pools under this project label
+            </h4>
+            {keys.state !== 'ok' ? (
+              <p className="gem-key__fp">Reading the pools for this project…</p>
+            ) : (poolsByProject.get(project.project_id) ?? []).length === 0 ? (
+              <p className="gem-key__fp">No key is registered under this label.</p>
+            ) : (
+              <ul className="gem-project-pools__list">
+                {(poolsByProject.get(project.project_id) ?? []).map((pool) => (
+                  <li key={pool.id} className="gem-project-pools__row">
+                    <span className="mono">{pool.key_fingerprint}</span>
+                    <span className="gem-key__fp">{pool.pool_id ?? pool.id}</span>
+                    <StatusChip tone={HEALTH_TONE[pool.health] ?? 'neutral'}>{pool.health}</StatusChip>
+                    <span className="gem-key__cooldown">
+                      {pool.remaining_today === null || pool.remaining_today === undefined
+                        ? 'budget unknown'
+                        : `${count(pool.remaining_today)} left today`}
+                      {pool.quarantined ? ' · quarantined' : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="gem-key__fp">
+              These pools have separate Aetrix budgets and quarantine state. Google meters them under
+              this one project, so their budgets are never added up as Google quota.
+            </p>
+          </div>
           {project.estimates.map((estimate) => (
             <section key={estimate.model} className="gem-model" aria-label={`${project.project_id} ${estimate.model}`}>
               <div className="gem-model__head">
@@ -659,6 +1262,122 @@ function QuotaTable({ quotas }: { quotas: GoogleQuotaValue[] }) {
   )
 }
 
+const PROJECT_HEALTH_TONE: Record<string, 'ok' | 'attention' | 'neutral'> = {
+  HEALTHY: 'ok',
+  UNKNOWN: 'neutral',
+}
+
+const ALERT_TONE: Record<string, 'ok' | 'attention' | 'neutral'> = {
+  critical: 'attention',
+  warning: 'attention',
+  info: 'ok',
+}
+
+function ProjectHealthSummary({ health }: { health: GoogleProjectHealth }) {
+  const counts = health.signals.counts
+  return (
+    <div className="gem-project-health">
+      <div className="gem-credential">
+        <StatusChip tone={PROJECT_HEALTH_TONE[health.state] ?? 'attention'}>
+          Project health: {health.state.replaceAll('_', ' ').toLowerCase()}
+        </StatusChip>
+        <StatusChip tone={health.state_confidence === 'CONFIRMED' ? 'ok' : 'neutral'}>
+          {health.state_confidence}
+        </StatusChip>
+        <StatusChip tone={health.quota_status === 'KNOWN' ? 'ok' : 'attention'}>
+          Quota: {health.quota_status.toLowerCase()}
+        </StatusChip>
+        <StatusChip tone={health.quota_confidence === 'CONFIRMED' ? 'ok' : 'neutral'}>
+          {health.quota_confidence}
+        </StatusChip>
+        {health.sample_stale ? <StatusChip tone="attention">Sample stale</StatusChip> : null}
+        {health.recovered ? <StatusChip tone="ok">Recovered</StatusChip> : null}
+      </div>
+      <p className="gem-footnote">{health.reason}</p>
+      <p className="gem-footnote">
+        <strong>Project quota status: {health.quota_status}.</strong> {health.quota_reason}
+      </p>
+      <p className="gem-footnote">
+        Last sample {stamp(health.last_sample_at)}
+        {health.last_status ? ` · ${health.last_status}` : ''}
+        {health.last_error_code ? ` · ${health.last_error_code}` : ''}. Aetrix traffic (24h):{' '}
+        {count(counts.requests ?? 0)} request(s), {count(counts.failures ?? 0)} failure(s),{' '}
+        {count(counts.rate_limited ?? 0)} throttled, {count(counts.authentication ?? 0)} auth,
+        {' '}{count(counts.permission ?? 0)} permission,{' '}
+        {count(counts.provider_server ?? 0)} provider 5xx.
+        {health.signals.average_latency_ms === null
+          ? ''
+          : ` Mean provider latency ${count(health.signals.average_latency_ms)} ms.`}
+        {' '}These are Aetrix observations, not Google quota figures.
+      </p>
+      {health.signals.models.length === 0 ? null : (
+        <ul className="gem-model__notes">
+          {health.signals.models.map((model) => (
+            <li key={model.model}>
+              <span className="mono">{model.model}</span>: {model.state.toLowerCase()} ·{' '}
+              {count(model.successes)} success / {count(model.failures)} failure
+              {model.last_http_status ? ` · last HTTP ${model.last_http_status}` : ''}
+              {' · '}last success {stamp(model.last_success_at)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function MonitoringPanel({
+  monitor,
+  alerts,
+}: {
+  monitor: GoogleMonitor
+  alerts: GoogleQuotaAlert[]
+}) {
+  return (
+    <Panel title="Project monitoring" note={monitor.state}>
+      <div className="gem-credential">
+        <StatusChip tone={monitor.state === 'OK' ? 'ok' : 'attention'}>
+          {monitor.state === 'OK' ? 'Monitoring running' : `Monitoring ${monitor.state.toLowerCase()}`}
+        </StatusChip>
+        <span>Last cycle {stamp(monitor.last_cycle_at)}</span>
+        <span className="mono">every {Math.round(monitor.interval_seconds / 60)} min</span>
+        {monitor.age_seconds === null ? null : (
+          <span>{count(monitor.age_seconds)}s ago</span>
+        )}
+      </div>
+      <p className="panel-copy">{monitor.detail}</p>
+      {monitor.state !== 'OK' ? (
+        <p className="gem-footnote">
+          A stored project sample is not shown as current while the monitor is stale. No health
+          figure in this section is a Google statement of remaining quota.
+        </p>
+      ) : null}
+      <h4 className="gem-project-pools__title">Active alerts</h4>
+      {alerts.length === 0 ? (
+        <p className="panel-copy">No project or monitoring incident is active from the stored samples.</p>
+      ) : (
+        <ul className="gem-model__notes">
+          {alerts.map((alert) => (
+            <li key={alert.id}>
+              <StatusChip tone={ALERT_TONE[alert.severity] ?? 'neutral'}>
+                {alert.severity}
+              </StatusChip>{' '}
+              <strong>{alert.title}</strong>
+              {alert.project_id ? ` · ${alert.project_id}` : ''} — {alert.detail}{' '}
+              <span className="gem-footnote">since {stamp(alert.since)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="gem-footnote">
+        Incidents are derived from the latest stored sample and matched by a stable id, so a
+        continuing incident is not repeated. A recovery appears only for the sample that
+        succeeded after a failed one.
+      </p>
+    </Panel>
+  )
+}
+
 function GoogleQuotaProjectPanel({
   project,
   index,
@@ -689,6 +1408,7 @@ function GoogleQuotaProjectPanel({
           {count(project.usage_observed)} of {count(project.quota_count)} values have Google usage
         </span>
       </div>
+      <ProjectHealthSummary health={project.health} />
       {project.last_error_message ? (
         <p className="panel-copy">
           {project.last_error_code ? `${project.last_error_code}: ` : ''}
@@ -779,6 +1499,16 @@ function GoogleQuotaTab({
         </p>
         <div className="gem-stats">
           <Stat
+            label="Healthy projects"
+            value={count(fleet.healthy_projects)}
+            note={`${count(fleet.degraded_projects)} degraded · ${count(fleet.unknown_projects)} unknown`}
+          />
+          <Stat
+            label="Quota warnings"
+            value={count(fleet.quota_warnings)}
+            note="throttling or confirmed exhaustion"
+          />
+          <Stat
             label="Projects verified"
             value={`${count(fleet.verified_projects)} / ${count(fleet.declared_projects)}`}
             note="confirmed by Resource Manager"
@@ -837,6 +1567,8 @@ function GoogleQuotaTab({
           {syncing ? 'Reading Google Cloud…' : 'Sync now'}
         </button>
       </Panel>
+
+      <MonitoringPanel monitor={data.monitor} alerts={data.alerts} />
 
       <Panel title="Required APIs" note="read-only permissions">
         <ul className="gem-projects">
@@ -922,6 +1654,8 @@ function KeysTab({
   const [search, setSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState('')
   const [healthFilter, setHealthFilter] = useState('')
+  const [stateFilter, setStateFilter] = useState<PoolStateFilter>('all')
+  const [modelFilter, setModelFilter] = useState('')
   const [adding, setAdding] = useState(false)
   const [validation, setValidation] = useState<Validation | null>(null)
   const [validatingId, setValidatingId] = useState<string | null>(null)
@@ -935,7 +1669,15 @@ function KeysTab({
     queryKey,
     token
       ? (options) =>
-          listKeys({ q: search || undefined, projectId: projectFilter || undefined, health: healthFilter || undefined }, options)
+          listKeys(
+            {
+              q: search || undefined,
+              projectId: projectFilter || undefined,
+              health: healthFilter || undefined,
+              limit: 200,
+            },
+            options,
+          )
       : null,
     { token },
   )
@@ -952,6 +1694,17 @@ function KeysTab({
     },
     [notify, reloadKeys],
   )
+
+  // Discovery varies per credential, so the model filter is built from the pools
+  // actually loaded rather than from a hard-coded catalogue list.
+  const modelOptions = useMemo(() => {
+    if (keys.state !== 'ok') return [] as string[]
+    const seen = new Set<string>()
+    for (const key of keys.data.items) {
+      for (const model of key.model_access ?? []) seen.add(model)
+    }
+    return Array.from(seen).sort()
+  }, [keys])
 
   // Validation reports what the probe actually did, so it renders a result card
   // instead of collapsing to "succeeded" / "failed".
@@ -1011,12 +1764,37 @@ function KeysTab({
               </select>
             </label>
             <label className="gem-field">
-              <span>Health</span>
+              <span>Credential health</span>
               <select value={healthFilter} onChange={(event) => setHealthFilter(event.target.value)}>
                 <option value="">Any health</option>
                 {['HEALTHY', 'UNKNOWN', 'INVALID', 'DISABLED'].map((value) => (
                   <option key={value} value={value}>
                     {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="gem-field">
+              <span>Pool state</span>
+              <select
+                value={stateFilter}
+                onChange={(event) => setStateFilter(event.target.value as PoolStateFilter)}
+              >
+                <option value="all">Any state</option>
+                <option value="healthy">Healthy</option>
+                <option value="degraded">Degraded</option>
+                <option value="quarantined">Quarantined</option>
+                <option value="failed">Failed requests</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label className="gem-field">
+              <span>Model availability</span>
+              <select value={modelFilter} onChange={(event) => setModelFilter(event.target.value)}>
+                <option value="">Any model</option>
+                {modelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
                   </option>
                 ))}
               </select>
@@ -1042,8 +1820,9 @@ function KeysTab({
         ) : null}
 
         {keys.state === 'ok' ? (
-          <KeyTable
-            keys={keys.data.items}
+          <PoolGrid
+            keys={visibleKeys(keys.data.items, stateFilter, modelFilter)}
+            total={keys.data.total}
             token={token}
             act={act}
             onValidate={validate}
@@ -1122,129 +1901,265 @@ const VALIDATION_CATEGORY: Record<Validation['category'], string> = {
   internal: 'Internal Aetrix failure',
 }
 
-function KeyTable({
+type PoolStateFilter = 'all' | 'healthy' | 'degraded' | 'quarantined' | 'failed' | 'disabled'
+
+/**
+ * A pool is one credential. The filters narrow the loaded page client-side
+ * because "degraded", "quarantined" and "failed" are not credential health
+ * values the engine accepts as a query: health is the last authentication
+ * verdict, while these states come from quarantine and failure counters.
+ */
+function visibleKeys(keys: FleetKey[], state: PoolStateFilter, model: string): FleetKey[] {
+  return keys.filter((key) => {
+    if (model && !(key.model_access ?? []).includes(model)) return false
+    switch (state) {
+      case 'healthy':
+        return key.health === 'HEALTHY' && !key.quarantined && key.enabled !== false
+      case 'degraded':
+        return (
+          key.health === 'HEALTHY' &&
+          (key.operational_status === 'DEGRADED' ||
+            key.operational_status === 'RATE_LIMITED' ||
+            key.cooldown_until !== null)
+        )
+      case 'quarantined':
+        return key.quarantined === true
+      case 'failed':
+        return (key.consecutive_failures ?? 0) > 0 || key.health === 'INVALID'
+      case 'disabled':
+        return key.enabled === false || key.health === 'DISABLED'
+      default:
+        return true
+    }
+  })
+}
+
+function PoolGrid({
   keys,
+  total,
   token,
   act,
   onValidate,
   validatingId,
 }: {
   keys: FleetKey[]
+  total: number
   token: string | null
   act: (label: string, run: () => Promise<ApiResult<unknown>>) => Promise<void>
   onValidate: (key: FleetKey) => void
   validatingId: string | null
 }) {
   if (keys.length === 0) {
-    return <p className="panel-copy">No key matches this filter.</p>
+    return <p className="panel-copy">No individual pool matches these filters.</p>
   }
   return (
-    <div className="table-scroll">
-      <table className="data-table gem-table">
-        <caption className="visually-hidden">Registered Gemini credentials</caption>
-        <thead>
-          <tr>
-            <th scope="col">Key</th>
-            <th scope="col">Project</th>
-            <th scope="col">Tier</th>
-            <th scope="col">Health</th>
-            <th scope="col">Operational</th>
-            <th scope="col">Requests</th>
-            <th scope="col">Tokens in / out</th>
-            <th scope="col">Last success</th>
-            <th scope="col">Last failure</th>
-            <th scope="col">
-              <span className="visually-hidden">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {keys.map((key) => (
-            <tr key={key.id}>
-              <td>
-                <span className="gem-key__label">{key.account_label}</span>
-                <span className="gem-key__fp mono">{key.key_fingerprint}</span>
-              </td>
-              <td className="mono">{key.project_id}</td>
-              <td>{key.tier === 'UNKNOWN' ? 'Unverified' : key.tier}</td>
-              <td>
-                <StatusChip tone={HEALTH_TONE[key.health] ?? 'neutral'}>{key.health}</StatusChip>
-                <span className="gem-key__cooldown">validity, not last call</span>
-                {key.cooldown_until ? <span className="gem-key__cooldown">cooldown until {stamp(key.cooldown_until)}</span> : null}
-              </td>
-              <td>
-                <StatusChip tone={OPERATIONAL_TONE[key.operational_status ?? 'NOT_TESTED'] ?? 'neutral'}>
-                  {operationalLabel(key.operational_status)}
-                </StatusChip>
-                {key.last_failure_category ? (
-                  <span className="gem-key__cooldown">last failure: {key.last_failure_category}</span>
-                ) : null}
-              </td>
-              <td className="mono">{count(key.requests)}</td>
-              <td className="mono">
-                {count(key.input_tokens)} / {count(key.output_tokens)}
-              </td>
-              <td>{stamp(key.last_success_at)}</td>
-              <td>
-                {key.last_failure_at ? (
-                  <>
-                    {stamp(key.last_failure_at)}
-                    {key.last_failure_status ? (
-                      <span className="gem-key__status mono">HTTP {key.last_failure_status}</span>
-                    ) : null}
-                    {key.last_failure_provider_code ? (
-                      <span className="gem-key__status mono"> {key.last_failure_provider_code}</span>
-                    ) : null}
-                    {key.last_failure_message ? (
-                      <span className="gem-key__status"> {key.last_failure_message}</span>
-                    ) : null}
-                  </>
-                ) : (
-                  '—'
-                )}
-              </td>
-              <td>
-                <div className="gem-actions">
-                  <button
-                    type="button"
-                    className="btn btn--outline btn--small"
-                    disabled={!token || validatingId === key.id}
-                    onClick={() => onValidate(key)}
-                  >
-                    {validatingId === key.id ? 'Validating…' : 'Validate'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--outline btn--small"
-                    disabled={!token}
-                    onClick={() =>
-                      void act(key.health === 'DISABLED' ? 'Enable' : 'Disable', () =>
-                        setKeyEnabled(key.id, key.health === 'DISABLED', { token }),
-                      )
-                    }
-                  >
-                    {key.health === 'DISABLED' ? 'Enable' : 'Disable'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--outline btn--small"
-                    disabled={!token}
-                    onClick={() => {
-                      if (!window.confirm(`Remove ${key.account_label}? Its usage rows are kept.`)) return
-                      void act('Removal', () => removeKey(key.id, { token }))
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <p className="gem-footnote gem-pools__count">
+        Showing {count(keys.length)} of {count(total)} individual Aetrix pools. Each tile is one API
+        key; no tile is a Google Cloud project.
+      </p>
+      <ul className="gem-pools">
+        {keys.map((key) => (
+          <PoolCard
+            key={key.id}
+            pool={key}
+            token={token}
+            act={act}
+            onValidate={onValidate}
+            validatingId={validatingId}
+          />
+        ))}
+      </ul>
+    </>
   )
 }
+
+function PoolCard({
+  pool,
+  token,
+  act,
+  onValidate,
+  validatingId,
+}: {
+  pool: FleetKey
+  token: string | null
+  act: (label: string, run: () => Promise<ApiResult<unknown>>) => Promise<void>
+  onValidate: (key: FleetKey) => void
+  validatingId: string | null
+}) {
+  const enabled = pool.enabled !== false && pool.health !== 'DISABLED'
+  const budget =
+    pool.remaining_today === null || pool.remaining_today === undefined
+      ? 'unknown'
+      : `${count(pool.remaining_today)} left`
+  const successRate =
+    pool.requests > 0 ? Math.max(0, Math.round(((pool.requests - pool.failures) / pool.requests) * 100)) : null
+
+  return (
+    <li className="gem-pool" data-state={enabled ? (pool.quarantined ? 'quarantined' : 'enabled') : 'disabled'}>
+      <div className="gem-pool__head">
+        <div className="gem-pool__id">
+          <span className="gem-pool__label">{pool.account_label}</span>
+          <span className="gem-pool__fp mono" title="Key fingerprint — never the secret">
+            {pool.key_fingerprint}
+          </span>
+        </div>
+        <div className="gem-pool__chips">
+          <StatusChip tone={HEALTH_TONE[pool.health] ?? 'neutral'}>{pool.health}</StatusChip>
+          <StatusChip tone={OPERATIONAL_TONE[pool.operational_status ?? 'NOT_TESTED'] ?? 'neutral'}>
+            {operationalLabel(pool.operational_status)}
+          </StatusChip>
+          {pool.quarantined ? <StatusChip tone="attention">QUARANTINED</StatusChip> : null}
+          <StatusChip tone={enabled ? 'ok' : 'neutral'}>{enabled ? 'ENABLED' : 'DISABLED'}</StatusChip>
+        </div>
+      </div>
+
+      <dl className="gem-pool__meta">
+        <div>
+          <dt>Aetrix pool</dt>
+          <dd className="mono">{pool.pool_id ?? pool.id}</dd>
+        </div>
+        <div>
+          <dt>Google project label</dt>
+          <dd className="mono">{pool.project_id}</dd>
+        </div>
+        <div>
+          <dt>Budget left today</dt>
+          <dd>{budget}</dd>
+        </div>
+        <div>
+          <dt>Requests</dt>
+          <dd className="mono">{count(pool.requests)}</dd>
+        </div>
+        <div>
+          <dt>Failures</dt>
+          <dd className="mono">
+            {count(pool.failures)}
+            {successRate === null ? '' : ` · ${successRate}% ok`}
+          </dd>
+        </div>
+        <div>
+          <dt>Models discovered</dt>
+          <dd className="mono">{(pool.model_access ?? []).length}</dd>
+        </div>
+      </dl>
+
+      <details className="gem-pool__more">
+        <summary>Pool detail</summary>
+        <dl className="gem-pool__meta gem-pool__meta--wide">
+          <div>
+            <dt>Reservations today</dt>
+            <dd>
+              {count(pool.reservations_today ?? 0)} · {count(pool.reservations_minute ?? 0)} this minute
+            </dd>
+          </div>
+          <div>
+            <dt>Validation probes today</dt>
+            <dd>{count(pool.validations_today ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>Consecutive failures</dt>
+            <dd>{count(pool.consecutive_failures ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>Quota failures</dt>
+            <dd>{count(pool.quota_failures)}</dd>
+          </div>
+          <div>
+            <dt>Tokens in / out</dt>
+            <dd className="mono">
+              {count(pool.input_tokens)} / {count(pool.output_tokens)}
+            </dd>
+          </div>
+          <div>
+            <dt>Last success</dt>
+            <dd>{stamp(pool.last_success_at)}</dd>
+          </div>
+          <div>
+            <dt>Last failure</dt>
+            <dd>{stamp(pool.last_failure_at)}</dd>
+          </div>
+          <div>
+            <dt>Last validated</dt>
+            <dd>{stamp(pool.last_validated_at)}</dd>
+          </div>
+          <div>
+            <dt>Google quota</dt>
+            <dd>
+              <StatusChip tone={QUOTA_TONE[pool.google_quota_status ?? 'UNKNOWN'] ?? 'neutral'}>
+                {pool.google_quota_status ?? 'UNKNOWN'}
+              </StatusChip>
+              <span className="gem-key__fp">{pool.project_verification ?? 'PROJECT_IDENTITY_UNVERIFIED'}</span>
+            </dd>
+          </div>
+          <div className="gem-pool__span">
+            <dt>Models this credential has listed</dt>
+            <dd className="gem-pool__models">
+              {(pool.model_access ?? []).length === 0 ? (
+                <span className="gem-key__fp">No discovery has run with this key.</span>
+              ) : (
+                pool.model_access.map((model) => (
+                  <code key={model} className="gem-chip">
+                    {model}
+                  </code>
+                ))
+              )}
+            </dd>
+          </div>
+          {pool.quarantined ? (
+            <div className="gem-pool__span">
+              <dt>Quarantine</dt>
+              <dd>
+                {pool.quarantine_kind ?? 'QUOTA'} until {stamp(pool.quarantine_until)}
+                {pool.quarantine_reason ? ` — ${pool.quarantine_reason}` : ''}
+              </dd>
+            </div>
+          ) : null}
+          {pool.last_error ? (
+            <div className="gem-pool__span">
+              <dt>Last error</dt>
+              <dd className="gem-pool__error">{pool.last_error}</dd>
+            </div>
+          ) : null}
+        </dl>
+        <div className="gem-actions gem-pool__actions">
+          <button
+            type="button"
+            className="btn btn--outline btn--small"
+            disabled={!token || validatingId === pool.id}
+            onClick={() => onValidate(pool)}
+          >
+            {validatingId === pool.id ? 'Validating…' : 'Validate'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--outline btn--small"
+            disabled={!token}
+            onClick={() =>
+              void act(pool.health === 'DISABLED' ? 'Enable' : 'Disable', () =>
+                setKeyEnabled(pool.id, pool.health === 'DISABLED', { token }),
+              )
+            }
+          >
+            {pool.health === 'DISABLED' ? 'Enable' : 'Disable'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--outline btn--small"
+            disabled={!token}
+            onClick={() => {
+              if (!window.confirm(`Remove ${pool.account_label}? Its usage rows are kept.`)) return
+              void act('Removal', () => removeKey(pool.id, { token }))
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      </details>
+    </li>
+  )
+}
+
 
 function AddKeys({
   token,
@@ -1633,13 +2548,13 @@ const SEVERITY_TONE: Record<FleetAlert['severity'], 'ok' | 'attention' | 'neutra
   info: 'ok',
 }
 
-function AlertsTab({ token }: { token: string | null }) {
-  const [state, reload] = useResource<FleetAlert[]>(
-    `alerts:${token ?? 'anonymous'}`,
-    token ? (options) => fetchAlerts(options) : null,
-    { token },
-  )
-
+function AlertsTab({
+  state,
+  reload,
+}: {
+  state: Loaded<FleetAlert[]>
+  reload: () => void
+}) {
   return (
     <div className="app-stack">
       <Panel
@@ -1693,8 +2608,8 @@ const MODEL_STATUS_TONE: Record<string, 'ok' | 'attention' | 'neutral'> = {
 
 const ROLE_LABEL: Record<SelectionRole, string> = {
   primary: 'Primary correction',
-  review: 'Secondary review',
-  lightweight: 'Lightweight extraction',
+  review: 'Independent verification',
+  lightweight: 'Blind transcription reader',
 }
 
 function modelPrice(model: CatalogueModel): string {
@@ -1786,6 +2701,20 @@ function ModelsTab({
 
   return (
     <div className="app-stack">
+      <Panel title="Model architecture" note="three primary models, one independent checker">
+        <ModelArchitecture
+          policy={policy}
+          selections={catalogue.selections}
+          sources={catalogue.selection_sources}
+          models={catalogue.models}
+        />
+        <p className="gem-footnote">
+          The primary group is where a paper is marked. The independent verification model checks
+          evidence and reads pages blind; it is not offered as another marking model and has no
+          marking-model fallback.
+        </p>
+      </Panel>
+
       <Panel
         title="Correction model roles"
         note="a saved selection overrides AETRIX_PROVIDER__MODEL_*"
@@ -2527,10 +3456,10 @@ function ContributorsTab({
         </button>
       </Panel>
 
-      <Panel title="Capacity across independent projects" note="One allowance per project, per model">
+      <Panel title="Credential pools" note="One Aetrix budget per credential · not Google capacity">
         {data.capacity.models.length === 0 ? (
           <p className="panel-copy">
-            No contributed key is eligible, so there is no independent project capacity to count.
+            No contributed key is eligible, so there is no credential pool to report.
           </p>
         ) : (
           data.capacity.models.map((model) => <CapacityCard key={model.model} model={model} />)
@@ -2631,6 +3560,7 @@ function ContributorsTab({
                       <td>
                         <span className="gem-key__label">{key.account_label}</span>
                         <span className="gem-key__fp mono">{key.key_fingerprint}</span>
+                        <span className="gem-key__fp mono">{key.pool_id ?? key.id}</span>
                       </td>
                       <td>{key.contributor_name ?? '—'}</td>
                       <td className="mono">{key.project_id}</td>
@@ -2677,7 +3607,7 @@ function CapacityCard({ model }: { model: CapacityModel }) {
       ? ` · ${count(totals.windows_unknown)} window${totals.windows_unknown === 1 ? '' : 's'} with no known limit`
       : ''
   return (
-    <section className="gem-model" aria-label={`Capacity for ${model.model}`}>
+    <section className="gem-model" aria-label={`Pools for ${model.model}`}>
       <div className="gem-model__head">
         <h3 className="gem-model__name mono">{model.model}</h3>
         <StatusChip tone={totals.confidence === 'CONFIRMED' ? 'ok' : 'attention'}>
@@ -2685,22 +3615,25 @@ function CapacityCard({ model }: { model: CapacityModel }) {
         </StatusChip>
       </div>
       <p className="gem-model__reset">
-        {count(totals.requests_per_minute_remaining)} requests/min and{' '}
-        {count(totals.requests_per_day_remaining)} requests/day remaining across{' '}
-        {count(totals.projects)} independent project{totals.projects === 1 ? '' : 's'}
+        Aetrix pool budgets total {count(totals.aetrix_requests_per_minute_remaining)}{' '}
+        requests/min and {count(totals.aetrix_requests_per_day_remaining)} requests/day across{' '}
+        {count(totals.pools)} credential pool{totals.pools === 1 ? '' : 's'} ·{' '}
+        {count(totals.pools_quarantined)} quarantined · Google quota known for{' '}
+        {count(totals.google_quota_known)}, unknown for {count(totals.google_quota_unknown)}
         {unknown}
       </p>
       <ul className="gem-projects">
-        {model.projects.map((project) => (
-          <li key={project.project_id} className="gem-projects__row">
-            <span className="gem-projects__id mono">{project.project_id}</span>
+        {model.pools.map((pool) => (
+          <li key={pool.pool_id} className="gem-projects__row">
+            <span className="gem-projects__id mono">{pool.pool_id}</span>
             <span className="gem-projects__keys">
-              {count(project.contributors)} contributor{project.contributors === 1 ? '' : 's'} ·{' '}
-              {count(project.keys)} key{project.keys === 1 ? '' : 's'} ·{' '}
-              {count(project.requests_per_day_remaining)} requests left today
+              {pool.project_id} ·{' '}
+              {count(pool.requests_per_day_remaining)} Aetrix requests left today ·{' '}
+              Google {pool.google_quota_status}
+              {pool.quarantined ? ` · quarantined until ${stamp(pool.cooldown_until)}` : ''}
             </span>
-            <StatusChip tone={project.confidence === 'CONFIRMED' ? 'ok' : 'attention'}>
-              {CONFIDENCE_LABEL[project.confidence]}
+            <StatusChip tone={pool.confidence === 'CONFIRMED' ? 'ok' : 'attention'}>
+              {CONFIDENCE_LABEL[pool.confidence]}
             </StatusChip>
           </li>
         ))}

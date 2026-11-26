@@ -2,8 +2,9 @@
 
 The unit suite proves the routing *decision*.  This suite proves that the
 production service — real credential rows, real reservations, the real
-append-only usage ledger — actually acts on it.  A quota ceiling is a property
-of the Google Cloud project, so the assertions are about projects, not keys.
+append-only usage ledger — actually acts on it.  Budgets and quarantine are
+properties of a credential pool, while a 429 is answered by advancing the model
+chain, never by leasing a sibling key that may share the same Google project.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from sqlalchemy import select
 
 MODEL_A = "gemini-3.6-flash"
 MODEL_B = "gemini-2.5-flash"
+#: The verified blind-transcription checker.
+TRANSCRIPTION_CHECKER = "gemini-3.1-flash-lite"
 
 
 class _Registry:
@@ -76,7 +79,10 @@ def _credential(
 ) -> ProviderCredential:
     box = SecretBox(get_settings().security.encryption_key.get_secret_value())
     key = f"key-{uuid.uuid4()}"
+    identifier = uuid.uuid4()
     row = ProviderCredential(
+        id=identifier,
+        pool_id=f"gemini-key-{identifier}",
         tenant_id=identity.tenant_a.id,
         project_id=project_id,
         account_label=f"label-{uuid.uuid4().hex[:8]}",
@@ -107,7 +113,9 @@ def _settings(*, max_attempts: int = 2, chain: list[str] | None = None):
             "model_chains": {
                 "primary": [ModelChainEntry(model=model) for model in models],
                 "review": [ModelChainEntry(model="gemini-3.1-pro-preview")],
-                "lightweight": [ModelChainEntry(model=MODEL_A)],
+                # The blind transcription is performed by the transcription
+                # checker; a marking model is only reserved for that role.
+                "lightweight": [ModelChainEntry(model=TRANSCRIPTION_CHECKER)],
             },
             "max_attempts": max_attempts,
             "retry_backoff_seconds": 0.0,
@@ -126,16 +134,18 @@ def _rows(db_session) -> list[ProviderUsage]:
     )
 
 
-def test_a_429_skips_sibling_keys_and_uses_a_different_project(db_session, identity):
-    """Two keys in the failed project must not be tried before the independent one.
+def test_a_429_is_not_answered_by_leasing_a_sibling_key(db_session, identity):
+    """A quota refusal quarantines the pool that saw it and stops there.
 
-    The first row's project is the one that saw the 429; the second request has
-    to leave it.  A pool that rotated by key would spend the second attempt on
-    the sibling key and the ledger would show ``project-one`` twice.
+    There are three spare keys, including one that names another project.  None
+    is leased: Aetrix cannot establish that a spare key has a Google allowance
+    of its own, so spending it would be quota evasion rather than recovery.
     """
 
     now = utcnow()
-    _credential(db_session, identity, "project-one", [MODEL_A, MODEL_B], last_success_at=now)
+    first = _credential(
+        db_session, identity, "project-one", [MODEL_A, MODEL_B], last_success_at=now
+    )
     _credential(
         db_session,
         identity,
@@ -145,23 +155,35 @@ def test_a_429_skips_sibling_keys_and_uses_a_different_project(db_session, ident
     )
     _credential(db_session, identity, "project-two", [MODEL_A, MODEL_B])
 
-    provider = _Provider({MODEL_A: [ProviderQuotaError("quota", status_code=429), "{}"]})
-    service = _service(db_session, provider, _settings())
+    provider = _Provider({MODEL_A: [ProviderQuotaError("quota", status_code=429)]})
+    service = _service(db_session, provider, _settings(chain=[MODEL_A]))
 
-    result = service.call(
-        tenant_id=identity.tenant_a.id, purpose="marking", prompt_id="aetrix_v5_5_marking"
-    )
+    with pytest.raises(AppError):
+        service.call(
+            tenant_id=identity.tenant_a.id,
+            purpose="marking",
+            prompt_id="aetrix_v5_5_marking",
+        )
 
     rows = _rows(db_session)
-    assert [row.project_id for row in rows] == ["project-one", "project-two"]
-    assert [row.routing_decision for row in rows] == ["ROTATE_CREDENTIAL", "SUCCESS"]
-    assert [row.model for row in rows] == [MODEL_A, MODEL_A]
-    assert result.response.model == MODEL_A
-    assert len(provider.calls) == 2
+    assert [row.project_id for row in rows] == ["project-one"]
+    assert [row.routing_decision for row in rows] == ["STOP"]
+    assert len(provider.calls) == 1
+    db_session.refresh(first)
+    assert first.cooldown_kind == "QUOTA"
+    assert first.last_quota_exhausted_at is not None
+    assert first.cooldown_until is not None
 
 
-def test_same_project_keys_do_not_create_quota_capacity(db_session, identity):
-    """No independent project: the chain advances instead of retrying the pool."""
+def test_a_429_never_reaches_a_model_that_may_not_mark(db_session, identity):
+    """A chain entry the permission table forbids is not a fallback.
+
+    The configured chain names the review model after the marking model.  Only
+    ``gemini-3.6-flash`` may mark, so the routing boundary filters the chain to
+    one entry: a 429 stops the operation and the review model is never asked to
+    mark a paper.  A genuine second marking model would be a separate allowance;
+    a model that is not permitted to mark is not one at all.
+    """
 
     now = utcnow()
     _credential(db_session, identity, "project-one", [MODEL_A, MODEL_B], last_success_at=now)
@@ -181,30 +203,41 @@ def test_same_project_keys_do_not_create_quota_capacity(db_session, identity):
     )
     service = _service(db_session, provider, _settings())
 
-    result = service.call(
-        tenant_id=identity.tenant_a.id, purpose="marking", prompt_id="aetrix_v5_5_marking"
-    )
+    with pytest.raises(AppError) as error:
+        service.call(
+            tenant_id=identity.tenant_a.id, purpose="marking", prompt_id="aetrix_v5_5_marking"
+        )
 
     rows = _rows(db_session)
-    assert [row.model for row in rows] == [MODEL_A, MODEL_B]
-    assert [row.routing_decision for row in rows] == ["NEXT_MODEL", "SUCCESS"]
-    assert [row.model_chain_position for row in rows] == [0, 1]
-    assert [row.attempt_index for row in rows] == [0, 0]
+    assert [row.model for row in rows] == [MODEL_A]
+    assert [row.routing_decision for row in rows] == ["STOP"]
+    assert [row.model_chain_position for row in rows] == [0]
     assert {row.project_id for row in rows} == {"project-one"}
-    # The sibling key was never leased: one attempt per model, not two.
-    assert len(provider.calls) == 2
-    assert result.response.model == MODEL_B
+    # Neither the unpermitted model nor the sibling key was ever called.
+    assert provider.calls == [MODEL_A]
+    assert error.value.code.value == "PROVIDER_UNAVAILABLE"
 
 
 def test_the_ledger_labels_an_unpriced_model_instead_of_pricing_it_at_zero(
     db_session, identity
 ):
-    _credential(db_session, identity, "project-one", [MODEL_B])
-    provider = _Provider({MODEL_B: ["{}"]})
-    service = _service(db_session, provider, _settings())
+    _credential(db_session, identity, "project-one", [TRANSCRIPTION_CHECKER])
+    provider = _Provider({TRANSCRIPTION_CHECKER: ["{}"]})
+    base = _settings()
+    unpriced = base.model_copy(
+        update={
+            "provider": base.provider.model_copy(update={"model_rates": {}}),
+        }
+    )
+    service = _service(db_session, provider, unpriced)
 
+    # The review model may not mark, so this call states the purpose that
+    # actually routes it: an unpriced model still has to be *permitted* for the
+    # work before its cost can be labelled.
     result = service.call(
-        tenant_id=identity.tenant_a.id, purpose="marking", prompt_id="aetrix_v5_5_marking"
+        tenant_id=identity.tenant_a.id,
+        purpose="transcription",
+        prompt_id="aetrix_v5_5_transcription",
     )
 
     row = db_session.scalars(select(ProviderUsage)).one()
@@ -256,7 +289,7 @@ def test_a_failed_attempt_is_labelled_rather_than_recorded_as_a_free_call(
     assert row.error_category == "provider_server"
 
 
-def test_the_token_allowance_is_enforced_per_project_and_model(db_session, identity):
+def test_the_token_allowance_is_enforced_per_credential_pool(db_session, identity):
     """RPM alone is not the ceiling: one large call can spend the whole TPM."""
 
     from app.core.config import ModelQuota

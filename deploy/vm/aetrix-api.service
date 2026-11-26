@@ -1,0 +1,43 @@
+[Unit]
+Description=Aetrix V5.5 API (FastAPI)
+Documentation=file:///opt/aetrix/current/README.md
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Requires=tailscaled.service
+
+[Service]
+Type=simple
+User=aetrix
+Group=aetrix
+WorkingDirectory=/opt/aetrix/current
+EnvironmentFile=/opt/aetrix/shared/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# app.main:run binds 0.0.0.0; the service binds loopback explicitly instead and
+# only the Tailscale Funnel reaches it. proxy_headers is on so the client
+# address is the real one.
+ExecStart=/opt/aetrix/current/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 \
+    --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+KillSignal=SIGTERM
+StandardOutput=append:/opt/aetrix/shared/logs/api.log
+StandardError=append:/opt/aetrix/shared/logs/api.log
+
+# Hardening: no privilege escalation, read-only OS, writable only where the
+# application needs it (its own shared tree and the release's venv).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/aetrix/shared
+MemoryMax=1536M
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

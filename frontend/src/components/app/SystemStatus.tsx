@@ -97,14 +97,14 @@ function hint(value: SystemStatusState, checkedAt: Date | null): string {
  * It renders the engine's own answer; it never derives a subsystem from another
  * one, and it can show a subset where a page only cares about a few rows.
  */
-const DEPLOYMENT_LABEL: Record<ComponentDeployment, string> = {
+export const DEPLOYMENT_LABEL: Record<ComponentDeployment, string> = {
   deployed: 'Deployed',
   not_deployed: 'Not deployed',
   not_configured: 'Not configured',
   unknown: 'Unknown',
 }
 
-const OPERATIONAL_CHIP: Record<
+export const OPERATIONAL_CHIP: Record<
   ComponentOperational,
   { tone: 'ok' | 'attention' | 'neutral'; text: string }
 > = {
@@ -117,7 +117,7 @@ const OPERATIONAL_CHIP: Record<
   unknown: { tone: 'neutral', text: 'Unknown' },
 }
 
-const READINESS_LABEL: Record<ComponentReadiness, string> = {
+export const READINESS_LABEL: Record<ComponentReadiness, string> = {
   ready: 'Ready',
   not_ready: 'Not ready',
   not_applicable: 'Not applicable',

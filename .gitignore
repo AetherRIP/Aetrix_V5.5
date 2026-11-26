@@ -35,10 +35,20 @@ desktop.ini
 *.tmp
 .tmp/
 
-# Verification artifacts
+# Verification artifacts (screenshots and generated reports are local evidence,
+# not part of the deployed application)
 artifacts/
 test-results/
 playwright-report/
+/preview-shots/
+/playtest-artifacts/
+frontend/*.png
+
+# Local-only trees that are neither deployed nor part of the engine
+/ami/
+/data/
+/experiment/
+backend/RELEASE_METADATA.json
 
 # Python engine and local tooling
 __pycache__/

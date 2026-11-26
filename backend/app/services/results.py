@@ -64,6 +64,7 @@ from ..schemas.results import (
     VerificationRead,
 )
 from ..storage.base import Storage, StorageError
+from .classroom_job_access import require_job_access, require_submission_access
 
 _APPROVERS = frozenset({"OWNER", "ADMIN", "TEACHER", "PLATFORM_OWNER"})
 
@@ -112,10 +113,11 @@ class ResultsService:
         self.audit = AuditService(session)
 
     # -- reads -----------------------------------------------------------
-    def _job(self, tenant_id: uuid.UUID, job_id: uuid.UUID) -> CorrectionJob:
-        job = self.jobs.get(tenant_id, job_id)
+    def _job(self, principal: Principal, job_id: uuid.UUID) -> CorrectionJob:
+        job = self.jobs.get(principal.tenant_id, job_id)
         if job is None:
             raise AppError(ErrorCode.NOT_FOUND, "Correction job not found.")
+        require_job_access(self.session, principal, job)
         return job
 
     def _submission(self, tenant_id: uuid.UUID, submission_id: uuid.UUID) -> Submission:
@@ -181,13 +183,14 @@ class ResultsService:
             )
 
     def job_results(self, principal: Principal, job_id: uuid.UUID) -> JobResultsRead:
-        job = self._job(principal.tenant_id, job_id)
+        job = self._job(principal, job_id)
         return self._build(job)
 
     def submission_results(
         self, principal: Principal, submission_id: uuid.UUID
     ) -> JobResultsRead | None:
         submission = self._submission(principal.tenant_id, submission_id)
+        require_submission_access(self.session, principal, submission)
         job = self.latest_job_for_submission(principal.tenant_id, submission.id)
         if job is None:
             refused = self.newest_refused_job(principal.tenant_id, submission.id)
@@ -309,7 +312,7 @@ class ResultsService:
         result = self.results.get(principal.tenant_id, question_result_id)
         if result is None:
             raise AppError(ErrorCode.NOT_FOUND, "Question result not found.")
-        job = self._job(principal.tenant_id, result.job_id)
+        job = self._job(principal, result.job_id)
         if JobState(job.state) is JobState.CANCELLED:
             raise AppError(ErrorCode.CONFLICT, "A cancelled job's results cannot be changed.")
         self._refuse_refused_run(job)
@@ -425,7 +428,7 @@ class ResultsService:
         """
 
         ensure_reviewer(principal)
-        job = self._job(principal.tenant_id, job_id)
+        job = self._job(principal, job_id)
         if JobState(job.state) is JobState.CANCELLED:
             raise AppError(ErrorCode.CONFLICT, "A cancelled job's results cannot be reviewed.")
         self._refuse_refused_run(job)
@@ -547,7 +550,7 @@ class ResultsService:
         self, principal: Principal, job_id: uuid.UUID, payload: JobApprovalRequest
     ) -> JobResultsRead:
         ensure_approver(principal)
-        job = self._job(principal.tenant_id, job_id)
+        job = self._job(principal, job_id)
         if JobState(job.state) is JobState.CANCELLED:
             raise AppError(ErrorCode.CONFLICT, "A cancelled job cannot be approved.")
         self._refuse_refused_run(job)
@@ -713,6 +716,7 @@ class ResultsService:
     # -- page serving ----------------------------------------------------
     def pages(self, principal: Principal, submission_id: uuid.UUID) -> list[PageRead]:
         submission = self._submission(principal.tenant_id, submission_id)
+        require_submission_access(self.session, principal, submission)
         pages: list[PageRead] = []
         for document in self.documents.list_for_submission(
             principal.tenant_id, submission.id
@@ -737,6 +741,7 @@ class ResultsService:
         storage: Storage,
     ) -> bytes:
         submission = self._submission(principal.tenant_id, submission_id)
+        require_submission_access(self.session, principal, submission)
         for document in self.documents.list_for_submission(
             principal.tenant_id, submission.id
         ):

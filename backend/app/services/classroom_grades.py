@@ -45,7 +45,7 @@ from ..schemas.classroom_integration import (
     PublicationStatusRead,
     ReviewRead,
 )
-from .classroom_access import ensure_reviewer, require_allocation
+from .classroom_access import ensure_grade_approver, require_course_access
 from .classroom_google import (
     ClassroomUpstreamError,
     UpstreamKind,
@@ -196,6 +196,7 @@ class ClassroomGradeService:
 
     def review(self, principal: Principal, link_id: uuid.UUID) -> ReviewRead:
         link = self._link(principal.tenant_id, link_id)
+        require_course_access(self.session, principal, course_id=link.course_id)
         job, total, maximum, uncertain, reason = self._evaluate(
             principal.tenant_id, link
         )
@@ -214,7 +215,7 @@ class ClassroomGradeService:
     def approve(
         self, principal: Principal, link_id: uuid.UUID, payload: ApprovalRequest
     ) -> ReviewRead:
-        ensure_reviewer(principal)
+        ensure_grade_approver(principal)
         link = self.session.scalar(
             select(ClassroomSubmissionLink)
             .where(
@@ -225,6 +226,7 @@ class ClassroomGradeService:
         )
         if link is None:
             raise AppError(ErrorCode.NOT_FOUND, "Submission link not found.")
+        require_course_access(self.session, principal, course_id=link.course_id)
         job, total, maximum, uncertain, reason = self._evaluate(
             principal.tenant_id, link
         )
@@ -293,6 +295,7 @@ class ClassroomGradeService:
         self, principal: Principal, link_id: uuid.UUID
     ) -> PublicationStatusRead:
         link = self._link(principal.tenant_id, link_id)
+        require_course_access(self.session, principal, course_id=link.course_id)
         history = self._history(principal.tenant_id, link.id)
         return PublicationStatusRead(
             submission_link_id=link.id,
@@ -344,7 +347,7 @@ class ClassroomGradeService:
     def publish(
         self, principal: Principal, link_id: uuid.UUID, payload: GradePublishRequest
     ) -> GradePublicationRead:
-        ensure_reviewer(principal)
+        ensure_grade_approver(principal)
         link = self.session.scalar(
             select(ClassroomSubmissionLink)
             .where(
@@ -355,6 +358,7 @@ class ClassroomGradeService:
         )
         if link is None:
             raise AppError(ErrorCode.NOT_FOUND, "Submission link not found.")
+        require_course_access(self.session, principal, course_id=link.course_id)
         coursework = self._coursework(principal.tenant_id, link)
         if coursework.state != "PUBLISHED" or not coursework.coursework_id:
             raise AppError(
@@ -362,9 +366,7 @@ class ClassroomGradeService:
                 "The Classroom coursework must be published before a grade can "
                 "be written to it.",
             )
-        require_allocation(
-            self.session, principal.tenant_id, course_id=coursework.course_id
-        )
+        require_course_access(self.session, principal, course_id=coursework.course_id)
         if link.approved_total is None or link.approved_at is None:
             raise AppError(
                 ErrorCode.CLASSROOM_GRADE_NOT_APPROVED,

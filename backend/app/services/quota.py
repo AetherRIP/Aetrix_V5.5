@@ -1,26 +1,27 @@
-"""Quota estimation for the Gemini fleet.
+"""Quota estimation: one Aetrix pool per credential, Google kept separate.
 
-Gemini's free tier is metered per Google Cloud project, per model.  There is no
+Gemini's free tier is metered per Google Cloud project and model.  There is no
 public endpoint that returns "remaining free-tier quota", so this module never
-claims to know it: it computes consumption from Aetrix's own reservation and
-usage ledgers, compares it with a limit the operator or Google supplied, and
-labels the result with how much is actually known.
+claims to know it.  It computes two different things and refuses to blur them:
 
-Three confidence states, and nothing in between:
+* **Aetrix pool windows** — reservations and validation probes recorded against
+  one credential, compared with the configured limit.  This is the number the
+  lease enforces, and it is per credential because the fleet is administered per
+  credential.
+* **Google quota status** — ``KNOWN`` / ``EXHAUSTED`` / ``UNKNOWN``.  A pool is
+  never evidence of a separate Google project: keys may share one, so per-pool
+  budgets are never summed into a Google-level capacity figure.  When no project
+  is established, Google's allowance is ``UNKNOWN`` and the screen says so.
 
-* ``CONFIRMED``  — the limit came from an authoritative Google surface (a
-  ``source='google'`` entry in configuration).  Also requires Aetrix's own
-  ledger, so "confirmed" always means "confirmed limit, observed usage".
-* ``ESTIMATED``  — a limit is configured as operator policy, or is the platform
-  default.  Useful for scheduling; never presented as Google's number.
-* ``UNKNOWN``    — no limit is known for this dimension.  No percentage is
-  invented to fill the gap.
-
-Counters are read per project: ten keys in one project share one pool.
+Confidence of a configured limit is unchanged: ``CONFIRMED`` only when Google
+supplied it, ``ESTIMATED`` when it is operator policy or the platform default,
+``UNKNOWN`` when no limit is known.  No percentage is invented to fill a gap.
 """
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, Literal
@@ -30,9 +31,24 @@ from sqlalchemy.orm import Session
 
 from ..core.config import ModelQuota, Settings
 from ..core.ids import utcnow
+from ..db.models import (
+    GOOGLE_QUOTA_EXHAUSTED,
+    GOOGLE_QUOTA_KNOWN,
+    GOOGLE_QUOTA_UNKNOWN,
+    PROJECT_IDENTITY_UNVERIFIED,
+    ProviderCredential,
+)
 from ..db.repositories import QuotaReservationRepository, UsageRepository
+from .credential_pools import (
+    POOL_NOTE,
+    google_quota_status,
+    pool_enabled,
+    quarantine_for,
+)
+from .project_identity import identities_for, is_established
 
 Confidence = Literal["CONFIRMED", "ESTIMATED", "UNKNOWN"]
+GoogleQuotaStatus = Literal["KNOWN", "EXHAUSTED", "UNKNOWN"]
 
 
 def quota_timezone(zone: str) -> tuple[ZoneInfo, str]:
@@ -76,7 +92,7 @@ def _confidence(limit: int | None, source: str) -> Confidence:
 
 @dataclass(frozen=True, slots=True)
 class QuotaWindow:
-    """One dimension (RPM, TPM, RPD) of a project's allowance."""
+    """One dimension (RPM, TPM, RPD) of an allowance."""
 
     limit: int | None
     used: int
@@ -105,7 +121,118 @@ class QuotaWindow:
 
 
 @dataclass(frozen=True, slots=True)
+class CredentialPoolEstimate:
+    """The complete recorded state of one ``gemini-key-{id}`` pool.
+
+    Everything here is Aetrix accounting plus the Google status *label*.  No
+    field is a Google-reported remaining count, and ``requests_per_day.remaining``
+    is this pool's configured budget, not a share of the project's allowance.
+    """
+
+    credential_id: Any
+    pool_id: str
+    model: str
+    project_id: str
+    project_identity: str
+    google_quota_status: GoogleQuotaStatus
+    google_quota_note: str
+    requests_per_minute: QuotaWindow
+    tokens_per_minute: QuotaWindow
+    requests_per_day: QuotaWindow
+    reset_at: datetime
+    reset_timezone: str
+    observed_at: datetime
+    quarantined: bool
+    quarantine_until: datetime | None
+    quarantine_kind: str
+    quarantine_reason: str | None
+    last_success_at: datetime | None
+    last_quota_exhausted_at: datetime | None
+    last_quota_reason: str | None
+    consecutive_failures: int
+    model_access: tuple[str, ...]
+    enabled: bool
+    unconfirmed_requests: int
+    #: Reservation rows in each window, separated from validation probes so the
+    #: dashboard can show Aetrix's reservation accounting without folding the
+    #: two into one unexplained number.
+    reservations_minute: int
+    reservations_today: int
+    validations_today: int
+    accounting: str
+    notes: tuple[str, ...]
+
+    @property
+    def confidence(self) -> Confidence:
+        states = {
+            self.requests_per_minute.confidence,
+            self.tokens_per_minute.confidence,
+            self.requests_per_day.confidence,
+        }
+        if states == {"CONFIRMED"}:
+            return "CONFIRMED"
+        if "ESTIMATED" in states or "CONFIRMED" in states:
+            return "ESTIMATED"
+        return "UNKNOWN"
+
+    @property
+    def exhausted(self) -> bool:
+        return any(
+            window.limit is not None and (window.remaining or 0) <= 0
+            for window in (
+                self.requests_per_minute,
+                self.tokens_per_minute,
+                self.requests_per_day,
+            )
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "credential_id": self.credential_id,
+            "confidence": self.confidence,
+            "pool_id": self.pool_id,
+            "model": self.model,
+            "project_id": self.project_id,
+            "project_identity": self.project_identity,
+            "google_quota_status": self.google_quota_status,
+            "google_quota_note": self.google_quota_note,
+            "requests_per_minute": self.requests_per_minute.as_dict(),
+            "tokens_per_minute": self.tokens_per_minute.as_dict(),
+            "requests_per_day": self.requests_per_day.as_dict(),
+            "remaining_today": self.requests_per_day.remaining,
+            "remaining_minute": self.requests_per_minute.remaining,
+            "reset_at": self.reset_at,
+            "reset_timezone": self.reset_timezone,
+            "observed_at": self.observed_at,
+            "exhausted": self.exhausted,
+            "quarantined": self.quarantined,
+            "quarantine_until": self.quarantine_until,
+            "quarantine_kind": self.quarantine_kind,
+            "quarantine_reason": self.quarantine_reason,
+            "last_success_at": self.last_success_at,
+            "last_quota_exhausted_at": self.last_quota_exhausted_at,
+            "last_quota_reason": self.last_quota_reason,
+            "consecutive_failures": self.consecutive_failures,
+            "model_access": list(self.model_access),
+            "enabled": self.enabled,
+            "unconfirmed_requests": self.unconfirmed_requests,
+            "reservations_minute": self.reservations_minute,
+            "reservations_today": self.reservations_today,
+            "validations_today": self.validations_today,
+            "accounting": self.accounting,
+            "notes": list(self.notes),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class QuotaEstimate:
+    """A declared project label's aggregate, for reporting only.
+
+    It sums Aetrix's records for every credential carrying that label.  It is
+    never presented as Google capacity: the label may group keys billing several
+    projects, and it may be a pool name that is not a project at all.
+    """
+
     project_id: str
     model: str
     requests_per_minute: QuotaWindow
@@ -115,14 +242,13 @@ class QuotaEstimate:
     reset_timezone: str
     observed_at: datetime
     cooldown_until: datetime | None
-    #: Request counters come from Aetrix reservations, not from Google.  The
-    #: ledger can report whether the limit is confirmed, but never the remaining
-    #: allowance Google itself would report.
     accounting: str
     notes: tuple[str, ...]
-    #: Requests in the day window whose quota consumption Google never confirmed
-    #: (5xx or transport).  Counted per minute, excluded from the daily total.
     unconfirmed_requests: int = 0
+    #: Whether this id is an established Google Cloud project.  It decides
+    #: whether Google-level capacity can be stated, not whether keys are leased.
+    project_identity: str = "PROJECT_IDENTITY_UNVERIFIED"
+    google_quota_status: GoogleQuotaStatus = GOOGLE_QUOTA_UNKNOWN
 
     @property
     def confidence(self) -> Confidence:
@@ -165,6 +291,8 @@ class QuotaEstimate:
             "accounting": self.accounting,
             "exhausted": self.exhausted,
             "unconfirmed_requests": self.unconfirmed_requests,
+            "project_identity": self.project_identity,
+            "google_quota_status": self.google_quota_status,
             "notes": list(self.notes),
         }
 
@@ -198,57 +326,8 @@ class QuotaEstimator:
             source="operator",
         )
 
-    def estimate(
-        self,
-        *,
-        project_id: str,
-        model: str,
-        now: datetime | None = None,
-    ) -> QuotaEstimate:
-        moment = now or utcnow()
-        limits = self.limits_for(model)
-        zone = self.settings.quota.daily_reset_timezone
-        _, effective_zone = quota_timezone(zone)
-        # Quota is project *and model* scoped.  Reservations are the same rows
-        # the call path enforces, so the estimate cannot disagree with the gate.
-        minute_since = moment - timedelta(minutes=1)
-        day_since = day_start(moment, zone)
-        # The per-minute window counts unconfirmed requests too (so a retry storm
-        # still hits the rate gate); the daily window below does not (an outage
-        # that served no paper must not consume a day).  Each window is counted
-        # once: counting the confirmed total and then adding an inclusive total
-        # would double every consumed reservation.
-        minute_used = self.reservations.count_since_project(
-            project_id,
-            minute_since,
-            moment,
-            model=model,
-            include_unconfirmed=True,
-        ) + self.usage.validation_count(project_id, model, minute_since)
-        day_used = self.reservations.count_since_project(
-            project_id,
-            day_since,
-            moment,
-            model=model,
-        ) + self.usage.validation_count(project_id, model, day_since)
-        tokens = self.usage.window_stats(
-            moment - timedelta(minutes=1), project_id=project_id, model=model
-        )
-        tokens_used = tokens["input_tokens"] + tokens["output_tokens"]
-        unconfirmed = self.reservations.unconfirmed_count_project(
-            project_id, day_since, model=model
-        )
-
-        cooldown = self.reservations.project_cooldown(project_id)
-        active_cooldown = (
-            cooldown.cooldown_until if cooldown and cooldown.cooldown_until > moment else None
-        )
-
-        notes: list[str] = [
-            "Request counts are Aetrix generation reservations plus recorded "
-            "validation probes, not Google-metered usage; Google's console "
-            "remains authoritative.",
-        ]
+    def _window_notes(self, limits: ModelQuota, zone: str) -> list[str]:
+        notes: list[str] = []
         if any(
             _confidence(limit, limits.source) == "ESTIMATED"
             for limit in (
@@ -267,15 +346,308 @@ class QuotaEstimator:
                 "No request allowance is configured for this model, so no "
                 "remaining capacity can be reported and the call gate refuses it."
             )
+        _, effective_zone = quota_timezone(zone)
+        if effective_zone != zone:
+            notes.append(
+                f"The configured quota zone {zone!r} is invalid; UTC midnight is in use."
+            )
+        return notes
+
+    def pool_estimate(
+        self,
+        credential: ProviderCredential,
+        model: str,
+        *,
+        now: datetime | None = None,
+    ) -> CredentialPoolEstimate:
+        """One credential's Aetrix pool, with its Google status label."""
+
+        return self.pool_estimates([credential], model, now=now)[credential.id]
+
+    def pool_estimates(
+        self,
+        credentials: Iterable[ProviderCredential],
+        model: str,
+        *,
+        now: datetime | None = None,
+    ) -> dict[uuid.UUID, CredentialPoolEstimate]:
+        """Many Aetrix pools' windows, read in two statements.
+
+        The windows read the same reservation rows the lease enforces, scoped by
+        ``credential_id``.  The Google status is derived from project evidence
+        and the latest recorded 429 — never from these counters.  Evaluating
+        the counters with FILTER instead of one query per counter is what keeps
+        a fifteen-pool fleet off a ninety-round-trip page.
+        """
+
+        moment = now or utcnow()
+        credentials = list(credentials)
+        if not credentials:
+            return {}
+        limits = self.limits_for(model)
+        zone = self.settings.quota.daily_reset_timezone
+        _, effective_zone = quota_timezone(zone)
+        minute_since = moment - timedelta(minutes=1)
+        day_since = day_start(moment, zone)
+        ids = [credential.id for credential in credentials]
+        reservations = self.reservations.credential_window_counts(
+            ids,
+            minute_since=minute_since,
+            day_since=day_since,
+            now=moment,
+            model=model,
+        )
+        probes = self.usage.credential_pool_usage(
+            ids, model=model, minute_since=minute_since, day_since=day_since
+        )
+        return {
+            credential.id: self._pool_estimate(
+                credential,
+                model,
+                moment,
+                limits=limits,
+                zone=zone,
+                effective_zone=effective_zone,
+                minute_reservations=int(
+                    reservations.get(credential.id, {}).get("minute", 0)
+                ),
+                day_reservations=int(
+                    reservations.get(credential.id, {}).get("day", 0)
+                ),
+                unconfirmed=int(
+                    reservations.get(credential.id, {}).get("unconfirmed", 0)
+                ),
+                validations_minute=int(
+                    probes.get(credential.id, {}).get("validations_minute", 0)
+                ),
+                day_validations=int(
+                    probes.get(credential.id, {}).get("validations_day", 0)
+                ),
+                tokens_used=int(probes.get(credential.id, {}).get("tokens_minute", 0)),
+            )
+            for credential in credentials
+        }
+
+    def _pool_estimate(
+        self,
+        credential: ProviderCredential,
+        model: str,
+        moment: datetime,
+        *,
+        limits: ModelQuota,
+        zone: str,
+        effective_zone: str,
+        minute_reservations: int,
+        day_reservations: int,
+        unconfirmed: int,
+        validations_minute: int,
+        day_validations: int,
+        tokens_used: int,
+    ) -> CredentialPoolEstimate:
+        # The per-minute window counts unconfirmed requests too (so a retry storm
+        # cannot exceed the burst limit while its first attempts are still
+        # unresolved); the daily window reports them separately because they did
+        # not reach the provider and must not consume the day's allowance.
+        minute_used = minute_reservations + validations_minute + unconfirmed
+        day_used = day_reservations + day_validations
+        quarantine = quarantine_for(credential, moment)
+        status, status_note = google_quota_status(
+            credential,
+            now=moment,
+            day_limit_known=limits.requests_per_day is not None,
+        )
+
+        notes: list[str] = [
+            "Counters are Aetrix reservations plus recorded validation probes "
+            "for this credential; they are not Google-metered usage and Google's "
+            "console remains authoritative.",
+            POOL_NOTE,
+            status_note,
+        ]
+        notes.extend(self._window_notes(limits, zone))
         if unconfirmed:
             notes.append(
                 f"{unconfirmed} request(s) today failed without a provider "
                 "confirmation that they were metered; they are counted per "
                 "minute but not against the daily allowance."
             )
-        if effective_zone != zone:
+        if quarantine.active:
             notes.append(
-                f"The configured quota zone {zone!r} is invalid; UTC midnight is in use."
+                f"Quarantined until {quarantine.until.isoformat()} "
+                f"({quarantine.kind})."
+            )
+
+        return CredentialPoolEstimate(
+            credential_id=credential.id,
+            pool_id=credential.pool_id,
+            model=model,
+            project_id=credential.project_id,
+            project_identity=credential.project_identity,
+            google_quota_status=status,
+            google_quota_note=status_note,
+            requests_per_minute=QuotaWindow(
+                limit=limits.requests_per_minute,
+                used=minute_used,
+                confidence=_confidence(limits.requests_per_minute, limits.source),
+            ),
+            tokens_per_minute=QuotaWindow(
+                limit=limits.tokens_per_minute,
+                used=tokens_used,
+                confidence=_confidence(limits.tokens_per_minute, limits.source),
+            ),
+            requests_per_day=QuotaWindow(
+                limit=limits.requests_per_day,
+                used=day_used,
+                confidence=_confidence(limits.requests_per_day, limits.source),
+            ),
+            reset_at=_midnight(moment, zone),
+            reset_timezone=effective_zone,
+            observed_at=moment,
+            quarantined=quarantine.active,
+            quarantine_until=quarantine.until,
+            quarantine_kind=quarantine.kind,
+            quarantine_reason=quarantine.reason,
+            last_success_at=credential.last_success_at,
+            last_quota_exhausted_at=credential.last_quota_exhausted_at,
+            last_quota_reason=credential.last_quota_reason,
+            consecutive_failures=credential.consecutive_failures,
+            model_access=tuple(credential.model_access or ()),
+            enabled=pool_enabled(credential),
+            unconfirmed_requests=unconfirmed,
+            reservations_minute=minute_reservations,
+            reservations_today=day_reservations,
+            validations_today=day_validations,
+            accounting="AETRIX_POOL_RESERVATIONS_PLUS_VALIDATION",
+            notes=tuple(notes),
+        )
+
+    def estimate(
+        self,
+        *,
+        project_id: str,
+        model: str,
+        now: datetime | None = None,
+    ) -> QuotaEstimate:
+        """A declared project label's aggregate, for reporting only."""
+
+        return self.project_estimates_many([project_id], [model], now=now)[project_id][0]
+
+    def project_estimates_many(
+        self,
+        project_ids: Iterable[str],
+        models: Iterable[str],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, list[QuotaEstimate]]:
+        """Every declared label's estimates for ``models``, in a handful of reads.
+
+        Quota is project *and model* scoped in Google's meter; these counters are
+        Aetrix's sum over the label, kept because the label is how the fleet
+        groups keys.  They do not establish Google capacity.  Identity and the
+        legacy project pause are read once for all labels rather than once per
+        label and model.
+        """
+
+        moment = now or utcnow()
+        targets = sorted({str(item) for item in project_ids if item})
+        model_list = [str(item) for item in models if item]
+        result: dict[str, list[QuotaEstimate]] = {target: [] for target in targets}
+        if not targets or not model_list:
+            return result
+        zone = self.settings.quota.daily_reset_timezone
+        _, effective_zone = quota_timezone(zone)
+        minute_since = moment - timedelta(minutes=1)
+        day_since = day_start(moment, zone)
+        identities = identities_for(self.session, targets)
+        cooldowns = self.reservations.active_cooldowns_for(targets, moment)
+        for model in model_list:
+            limits = self.limits_for(model)
+            reservations = self.reservations.project_window_counts(
+                targets,
+                minute_since=minute_since,
+                day_since=day_since,
+                now=moment,
+                model=model,
+            )
+            probes = self.usage.project_pool_usage(
+                targets, model=model, minute_since=minute_since, day_since=day_since
+            )
+            for project_id in targets:
+                reserved = reservations.get(project_id, {})
+                probe = probes.get(project_id, {})
+                result[project_id].append(
+                    self._project_estimate(
+                        project_id=project_id,
+                        model=model,
+                        moment=moment,
+                        limits=limits,
+                        identity=identities.get(
+                            project_id, PROJECT_IDENTITY_UNVERIFIED
+                        ),
+                        minute_reservations=int(reserved.get("minute", 0)),
+                        day_reservations=int(reserved.get("day", 0)),
+                        unconfirmed=int(reserved.get("unconfirmed", 0)),
+                        validations_minute=int(
+                            probe.get("validations_minute", 0)
+                        ),
+                        day_validations=int(probe.get("validations_day", 0)),
+                        tokens_used=int(probe.get("tokens_minute", 0)),
+                        active_cooldown=cooldowns.get(project_id),
+                        zone=zone,
+                        effective_zone=effective_zone,
+                    )
+                )
+        return result
+
+    def _project_estimate(
+        self,
+        *,
+        project_id: str,
+        model: str,
+        moment: datetime,
+        limits: ModelQuota,
+        identity: str,
+        minute_reservations: int,
+        day_reservations: int,
+        unconfirmed: int,
+        validations_minute: int,
+        day_validations: int,
+        tokens_used: int,
+        active_cooldown: datetime | None,
+        zone: str,
+        effective_zone: str,
+    ) -> QuotaEstimate:
+        established = is_established(identity)
+        # Unconfirmed attempts count against the minute window only; the daily
+        # allowance is spent by real requests and is reported alongside them.
+        minute_used = minute_reservations + validations_minute + unconfirmed
+        day_used = day_reservations + day_validations
+        if active_cooldown is not None:
+            google_status: GoogleQuotaStatus = GOOGLE_QUOTA_EXHAUSTED
+        elif established and limits.requests_per_day is not None:
+            google_status = GOOGLE_QUOTA_KNOWN
+        else:
+            google_status = GOOGLE_QUOTA_UNKNOWN
+
+        notes: list[str] = [
+            "Request counts are Aetrix generation reservations plus recorded "
+            "validation probes for this label, not Google-metered usage; Google's "
+            "console remains authoritative.",
+            "Keys may share one Google Cloud project, so this label's total is "
+            "not a count of Google allowances.",
+        ]
+        notes.extend(self._window_notes(limits, zone))
+        if unconfirmed:
+            notes.append(
+                f"{unconfirmed} request(s) today failed without a provider "
+                "confirmation that they were metered; they are counted per "
+                "minute but not against the daily allowance."
+            )
+        if not established:
+            notes.append(
+                f"Project identity is {identity}: Google-level capacity is "
+                "UNKNOWN. Declare each key's Google Cloud project in the fleet "
+                "console to state it."
             )
 
         return QuotaEstimate(
@@ -303,16 +675,20 @@ class QuotaEstimator:
             accounting="AETRIX_RESERVATIONS_PLUS_VALIDATION",
             notes=tuple(notes),
             unconfirmed_requests=unconfirmed,
+            project_identity=identity,
+            google_quota_status=google_status,
         )
 
     def project_estimates(
         self, project_id: str, models: list[str], now: datetime | None = None
     ) -> list[QuotaEstimate]:
-        return [self.estimate(project_id=project_id, model=model, now=now) for model in models]
+        return self.project_estimates_many([project_id], models, now=now)[project_id]
 
 
 __all__ = [
     "Confidence",
+    "CredentialPoolEstimate",
+    "GoogleQuotaStatus",
     "QuotaEstimate",
     "QuotaEstimator",
     "QuotaWindow",

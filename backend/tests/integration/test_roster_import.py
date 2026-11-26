@@ -60,7 +60,7 @@ def test_import_creates_students_and_their_classes(client, identity, auth_header
         params={"action": "student.imported"},
     )
     assert audit.status_code == 200, audit.text
-    assert audit.json()[0]["detail"] == {
+    assert audit.json()["items"][0]["detail"] == {
         "total_rows": 3,
         "created": 3,
         "skipped": 0,

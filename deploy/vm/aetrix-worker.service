@@ -1,0 +1,38 @@
+[Unit]
+Description=Aetrix V5.5 correction worker
+Documentation=file:///opt/aetrix/current/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aetrix
+Group=aetrix
+WorkingDirectory=/opt/aetrix/current
+EnvironmentFile=/opt/aetrix/shared/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/aetrix/current/.venv/bin/aetrix-worker
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+KillSignal=SIGTERM
+StandardOutput=append:/opt/aetrix/shared/logs/worker.log
+StandardError=append:/opt/aetrix/shared/logs/worker.log
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/aetrix/shared
+MemoryMax=3072M
+LimitNOFILE=8192
+
+# Deliberately NOT enabled: the worker processes real student submissions and
+# spends provider quota. Enable only after the checks in
+# docs/production/DEPLOYMENT.md § "Worker activation" pass.
+[Install]
+WantedBy=multi-user.target

@@ -23,6 +23,7 @@ from app.core.security import Principal, SecretBox
 from app.db.models import (
     ClassroomAllocation,
     ClassroomClass,
+    ClassroomClassAssignment,
     ClassroomConnection,
     ClassroomCourseworkLink,
     ClassroomGradePublication,
@@ -33,10 +34,12 @@ from app.db.models import (
     QuestionResult,
     Student,
 )
+from app.schemas.classroom_class_assignments import ClassroomClassAssignmentCreate
 from app.schemas.classroom_integration import (
     ApprovalRequest,
     GradePublishRequest,
 )
+from app.services.classroom_class_assignments import ClassroomClassAssignmentService
 from app.services.classroom_google import (
     REQUIRED_SCOPES,
     ClassroomPerson,
@@ -111,6 +114,10 @@ def classroom_setup(db_session, identity, paper):
         allocated_by_subject="operator",
         allocated_at=utcnow(),
     )
+    # The allocation id is generated on flush, so the class assignment below
+    # can only reference it once the row exists.
+    db_session.add(allocation)
+    db_session.flush()
     connection = ClassroomConnection(
         connection_key=PLATFORM_CONNECTION_KEY,
         tenant_id=None,
@@ -126,13 +133,21 @@ def classroom_setup(db_session, identity, paper):
         connected_account_email="central@example.org",
         connected_account_name="Central Account",
     )
-    db_session.add_all([allocation, connection])
+    assignment = ClassroomClassAssignment(
+        allocation_id=allocation.id,
+        workspace_id=identity.tenant_a.id,
+        user_id=identity.reviewer.id,
+        assigned_by_user_id=identity.user_a.id,
+        assigned_at=utcnow(),
+    )
+    db_session.add_all([connection, assignment])
     db_session.commit()
     return SimpleSetup(
         classroom=classroom,
         allocation=allocation,
         connection=connection,
         assignment=paper.assignment,
+        class_assignment=assignment,
     )
 
 
@@ -250,6 +265,119 @@ def test_only_the_allocated_workspace_sees_the_course(
         ClassroomRosterService(db_session, settings).roster(
             _principal(identity.user_b), COURSE_ID
         )
+    assert caught.value.code is ErrorCode.NOT_FOUND
+
+
+def test_a_reviewer_sees_only_the_course_assigned_to_them(
+    db_session, identity, classroom_setup
+):
+    settings = _settings()
+    reviewer = _principal(identity.reviewer)
+
+    # A synced student makes the roster assertion meaningful; it is reachable
+    # only through the allocation the reviewer's assignment points at.
+    student = Student(
+        tenant_id=identity.tenant_a.id,
+        student_ref="roster-1",
+        display_name="Roster Student",
+    )
+    db_session.add(student)
+    db_session.flush()
+    db_session.add(
+        ClassroomRosterEntry(
+            tenant_id=identity.tenant_a.id,
+            course_id=COURSE_ID,
+            google_user_id="google-roster-1",
+            student_id=student.id,
+            full_name="Roster Student",
+            status="ACTIVE",
+            match_source="CREATED",
+            last_seen_at=utcnow(),
+        )
+    )
+    db_session.commit()
+
+    assert [
+        course.course_id
+        for course in ClassroomRosterService(db_session, settings).courses(reviewer)
+    ] == [COURSE_ID]
+    roster = ClassroomRosterService(db_session, settings).roster(reviewer, COURSE_ID)
+    assert [entry.student_ref for entry in roster] == ["roster-1"]
+
+    db_session.delete(classroom_setup.class_assignment)
+    db_session.commit()
+
+    assert ClassroomRosterService(db_session, settings).courses(reviewer) == []
+    with pytest.raises(AppError) as caught:
+        ClassroomRosterService(db_session, settings).roster(reviewer, COURSE_ID)
+    assert caught.value.code is ErrorCode.NOT_FOUND
+
+
+def test_an_owner_assigns_and_withdraws_a_class_and_duplicates_are_refused(
+    db_session, identity, classroom_setup
+):
+    service = ClassroomClassAssignmentService(db_session)
+    owner = _principal(identity.user_a)
+    reviewer = _principal(identity.reviewer)
+
+    db_session.delete(classroom_setup.class_assignment)
+    db_session.commit()
+    assert ClassroomRosterService(db_session, _settings()).courses(reviewer) == []
+
+    row = service.create(
+        owner,
+        identity.tenant_a.id,
+        COURSE_ID,
+        ClassroomClassAssignmentCreate(user_id=identity.reviewer.id),
+    )
+    assert row.user_id == identity.reviewer.id
+    assert [
+        course.course_id
+        for course in ClassroomRosterService(db_session, _settings()).courses(reviewer)
+    ] == [COURSE_ID]
+
+    with pytest.raises(AppError) as caught:
+        service.create(
+            owner,
+            identity.tenant_a.id,
+            COURSE_ID,
+            ClassroomClassAssignmentCreate(user_id=identity.reviewer.id),
+        )
+    assert caught.value.code is ErrorCode.CONFLICT
+
+    with pytest.raises(AppError) as caught:
+        service.create(
+            owner,
+            identity.tenant_a.id,
+            COURSE_ID,
+            ClassroomClassAssignmentCreate(user_id=identity.user_a.id),
+        )
+    assert caught.value.code is ErrorCode.VALIDATION_ERROR
+
+    with pytest.raises(AppError) as caught:
+        service.create(
+            owner,
+            identity.tenant_a.id,
+            COURSE_ID,
+            ClassroomClassAssignmentCreate(user_id=identity.viewer.id),
+        )
+    assert caught.value.code is ErrorCode.VALIDATION_ERROR
+
+    with pytest.raises(AppError) as caught:
+        service.create(
+            _principal(identity.user_b),
+            identity.tenant_b.id,
+            COURSE_ID,
+            ClassroomClassAssignmentCreate(user_id=identity.reviewer.id),
+        )
+    # A course allocated to another workspace must look nonexistent rather than
+    # reveal that it exists elsewhere (tenant isolation, not a permission hint).
+    assert caught.value.code is ErrorCode.NOT_FOUND
+
+    service.remove(owner, identity.tenant_a.id, COURSE_ID, row.id)
+    assert ClassroomRosterService(db_session, _settings()).courses(reviewer) == []
+    with pytest.raises(AppError) as caught:
+        service.remove(owner, identity.tenant_a.id, COURSE_ID, row.id)
     assert caught.value.code is ErrorCode.NOT_FOUND
 
 
@@ -410,13 +538,28 @@ def test_the_approved_total_is_the_sum_of_decided_questions(
     assert review.total == Decimal("5.00")
     assert review.maximum == Decimal("5.00")
 
+    approver = _principal(identity.user_a)
     approved = service.approve(
-        reviewer, link.id, ApprovalRequest(confirm=True, note="checked")
+        approver, link.id, ApprovalRequest(confirm=True, note="checked")
     )
     assert approved.job_state == "COMPLETED"
     db_session.refresh(link)
     assert link.approved_total == Decimal("5.00")
-    assert link.approved_by_subject == identity.reviewer.subject
+    assert link.approved_by_subject == identity.user_a.subject
+
+    with pytest.raises(AppError) as caught:
+        service.approve(
+            reviewer, link.id, ApprovalRequest(confirm=True, note="self-approval")
+        )
+    assert caught.value.code is ErrorCode.FORBIDDEN
+
+    with pytest.raises(AppError) as caught:
+        service.publish(
+            reviewer,
+            link.id,
+            GradePublishRequest(confirm=True, reason="reviewer publication"),
+        )
+    assert caught.value.code is ErrorCode.FORBIDDEN
 
 
 def test_an_incomplete_run_cannot_be_approved(
@@ -428,7 +571,7 @@ def test_an_incomplete_run_cannot_be_approved(
 
     with pytest.raises(AppError) as caught:
         ClassroomGradeService(db_session, settings).approve(
-            _principal(identity.reviewer),
+            _principal(identity.user_a),
             link.id,
             ApprovalRequest(confirm=True),
         )
@@ -470,7 +613,7 @@ def test_publishing_without_approval_is_refused(
 
     with pytest.raises(AppError) as caught:
         ClassroomGradeService(db_session, settings).publish(
-            _principal(identity.reviewer),
+            _principal(identity.user_a),
             link.id,
             GradePublishRequest(confirm=True, reason="publish now"),
         )
@@ -484,8 +627,8 @@ def test_publishing_writes_the_assigned_grade_and_is_idempotent(
     job = _completed_job(db_session, paper)
     _coursework, link = _submission_link(db_session, classroom_setup, job)
     service = ClassroomGradeService(db_session, settings)
-    reviewer = _principal(identity.reviewer)
-    service.approve(reviewer, link.id, ApprovalRequest(confirm=True))
+    approver = _principal(identity.user_a)
+    service.approve(approver, link.id, ApprovalRequest(confirm=True))
 
     writes: list[dict[str, object]] = []
 
@@ -524,10 +667,10 @@ def test_publishing_writes_the_assigned_grade_and_is_idempotent(
     )
 
     first = service.publish(
-        reviewer, link.id, GradePublishRequest(confirm=True, reason="approved")
+        approver, link.id, GradePublishRequest(confirm=True, reason="approved")
     )
     second = service.publish(
-        reviewer, link.id, GradePublishRequest(confirm=True, reason="approved")
+        approver, link.id, GradePublishRequest(confirm=True, reason="approved")
     )
 
     assert writes == [{"assigned": 5.0, "draft": None}]
@@ -548,8 +691,8 @@ def test_a_foreign_assigned_grade_is_not_overwritten_without_permission(
     job = _completed_job(db_session, paper)
     _coursework, link = _submission_link(db_session, classroom_setup, job)
     service = ClassroomGradeService(db_session, settings)
-    reviewer = _principal(identity.reviewer)
-    service.approve(reviewer, link.id, ApprovalRequest(confirm=True))
+    approver = _principal(identity.user_a)
+    service.approve(approver, link.id, ApprovalRequest(confirm=True))
 
     monkeypatch.setattr(
         "app.services.classroom_grades.get_submission",
@@ -564,7 +707,7 @@ def test_a_foreign_assigned_grade_is_not_overwritten_without_permission(
 
     with pytest.raises(AppError) as caught:
         service.publish(
-            reviewer, link.id, GradePublishRequest(confirm=True, reason="approved")
+            approver, link.id, GradePublishRequest(confirm=True, reason="approved")
         )
     assert caught.value.code is ErrorCode.CLASSROOM_PUBLISH_CONFLICT
 

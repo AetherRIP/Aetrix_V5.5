@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from app.core.config import get_settings
+from app.core.config import ModelQuota, get_settings
 from app.core.errors import AppError
 from app.core.security import SecretBox
 from app.db.models import (
@@ -36,7 +36,7 @@ from app.services.provider_calls import ProviderCallService
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from tests.support import FakeProvider
+from tests.support import FakeProvider, single_model_chains
 
 CONSENT = "2026-11-01"
 
@@ -66,11 +66,30 @@ class KeyAwareProvider:
 
 
 def _settings(*, rpm: int = 100, rpd: int = 5000):
+    """Settings that state an allowance for every model the tests call.
+
+    Aetrix does not spend a request against a model whose daily limit nobody has
+    configured, so the fixture declares one.  Aetrix budgets it per credential
+    pool, never per project label.
+    """
+
     base = get_settings()
     return base.model_copy(
         update={
             "quota": base.quota.model_copy(
-                update={"requests_per_minute": rpm, "requests_per_day": rpd, "model_limits": {}}
+                update={
+                    "requests_per_minute": rpm,
+                    "requests_per_day": rpd,
+                    "model_limits": {
+                        model: ModelQuota(
+                            requests_per_minute=rpm, requests_per_day=rpd
+                        )
+                        for model in (
+                            base.provider.model_primary,
+                            base.provider.model_review,
+                        )
+                    },
+                }
             )
         }
     )
@@ -143,20 +162,35 @@ def test_keys_carry_their_contributor_and_may_span_projects(db_session) -> None:
     ]
 
 
-def test_two_contributors_in_one_project_share_one_quota_pool(db_session, identity) -> None:
-    settings = _settings(rpm=1)
+def test_two_contributors_in_one_project_are_two_aetrix_pools(
+    db_session, identity
+) -> None:
+    """Each lent key is budgeted on its own, whatever project label it carries.
+
+    Two contributors share one project label and each key has a one-request
+    minute budget.  The first call spends the first pool; the second call skips
+    it and is served by the other.  That is Aetrix scheduling across pools, and
+    it is deliberately not a claim that the shared Google project has twice the
+    allowance — no project-wide cooldown is recorded and no summed capacity is
+    asserted.
+    """
+
+    settings = single_model_chains(_settings(rpm=1))
     ada = _contributor(db_session, name="Ada")
     grace = _contributor(db_session, name="Grace")
-    _key(db_session, settings, ada, "shared", 0)
-    _key(db_session, settings, grace, "shared", 1)
+    first = _key(db_session, settings, ada, "shared", 0)
+    second = _key(db_session, settings, grace, "shared", 1)
 
     service = _service(db_session, FakeProvider("{}"), settings)
-    _call(service, identity)
+    one = _call(service, identity)
+    two = _call(service, identity)
 
-    # Two contributors, two keys, one project: the second request has no pool.
-    with pytest.raises(AppError) as error:
-        _call(service, identity)
-    assert error.value.code.value == "PROVIDER_UNAVAILABLE"
+    rows = [
+        db_session.scalar(select(ProviderUsage).where(ProviderUsage.id == result.usage_id))
+        for result in (one, two)
+    ]
+    assert all(row is not None for row in rows)
+    assert {row.credential_id for row in rows if row is not None} == {first.id, second.id}
 
 
 def test_withdrawal_revokes_keys_and_stops_leasing_immediately(db_session, identity) -> None:
@@ -314,7 +348,17 @@ def test_summary_reports_aggregate_and_individual_statistics(db_session, identit
     assert rows["Grace"]["window"]["requests"] == 0
 
 
-def test_capacity_is_counted_per_project_not_per_key(db_session) -> None:
+def test_capacity_is_one_aetrix_pool_per_key_and_never_google_capacity(
+    db_session,
+) -> None:
+    """Pool budgets are Aetrix accounting; Google status stays UNKNOWN.
+
+    Six keys that no administrator has tied to a Google Cloud project are six
+    Aetrix pools with six configured budgets.  The report states those budgets
+    and states, just as plainly, that none of them is an established project
+    allowance: every pool's Google status is UNKNOWN and none is counted as KNOWN.
+    """
+
     settings = _settings(rpm=10, rpd=100)
     ada = _contributor(db_session, name="Ada")
     grace = _contributor(db_session, name="Grace")
@@ -330,11 +374,17 @@ def test_capacity_is_counted_per_project_not_per_key(db_session) -> None:
     one_row = next(row for row in one_key["models"] if row["model"] == model)
     six_row = next(row for row in six_keys["models"] if row["model"] == model)
 
-    assert one_row["totals"]["requests_per_minute_remaining"] == 10
-    assert six_row["totals"]["requests_per_minute_remaining"] == 10
-    assert six_row["projects"][0]["keys"] == 6
-    assert six_row["projects"][0]["contributors"] == 2
-    assert "Keys are never added up" in six_keys["note"]
+    assert one_row["totals"]["pools"] == 1
+    assert one_row["totals"]["aetrix_requests_per_minute_remaining"] == 10
+    assert six_row["totals"]["pools"] == 6
+    # The sum is labelled as Aetrix budget, and it is a sum of six pools.
+    assert six_row["totals"]["aetrix_requests_per_minute_remaining"] == 60
+    # None of them is an established project, so none may be counted as Google
+    # capacity and every pool says so.
+    assert six_row["totals"]["google_quota_known"] == 0
+    assert six_row["totals"]["google_quota_unknown"] == 6
+    assert {pool["google_quota_status"] for pool in six_row["pools"]} == {"UNKNOWN"}
+    assert "never added up as Google capacity" in six_keys["note"]
 
 
 def test_admin_can_manage_contributors_and_never_sees_key_material(

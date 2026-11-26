@@ -32,6 +32,8 @@ from ..db.repositories import (
 )
 from ..schemas.api import AssignmentCreate, ExamCreate, SubmissionCreate
 from ..schemas.blueprint import BlueprintPut, BlueprintStructure
+from .classroom_access import require_course_access
+from .classroom_job_access import require_assignment_access
 from .scheme_criteria import readiness_of_assignment
 
 
@@ -227,8 +229,36 @@ class AssignmentService:
         self.assignments = AssignmentRepository(session)
         self.audit = AuditService(session)
 
-    def create(self, principal: Principal, payload: AssignmentCreate) -> Assignment:
+    def create(
+        self,
+        principal: Principal,
+        payload: AssignmentCreate,
+        *,
+        allow_unassigned: bool = False,
+    ) -> Assignment:
         ensure_exam_manager(principal)
+        # The class is resolved through the allocation the platform gave this
+        # workspace, never from a bare course id.  That single lookup proves the
+        # course belongs to this tenant, is still allocated, and is assigned to
+        # a teacher or reviewer; a manager passes on role alone.
+        allocation = None
+        classroom = None
+        if payload.course_id is None:
+            if not allow_unassigned:
+                raise AppError(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Select the class this assignment belongs to.",
+                )
+        else:
+            allocation, classroom = require_course_access(
+                self.session, principal, course_id=payload.course_id
+            )
+            if classroom.course_state != "ACTIVE":
+                raise AppError(
+                    ErrorCode.VALIDATION_ERROR,
+                    "That Classroom course is not active, so it cannot receive an "
+                    "assignment.",
+                )
         if self.exams.get(principal.tenant_id, payload.exam_id) is None:
             raise AppError(ErrorCode.NOT_FOUND, "Exam not found.")
         blueprint = self.blueprints.get(principal.tenant_id, payload.blueprint_version_id)
@@ -289,6 +319,9 @@ class AssignmentService:
             completion_threshold=payload.completion_threshold,
             review_mode=payload.review_mode,
             created_by=principal.user_id,
+            classroom_allocation_id=allocation.id if allocation is not None else None,
+            course_id=allocation.course_id if allocation is not None else None,
+            class_name=allocation.class_name if allocation is not None else None,
         )
         self.audit.record(
             tenant_id=principal.tenant_id,
@@ -301,6 +334,10 @@ class AssignmentService:
                 "exam_id": str(payload.exam_id),
                 "blueprint_version_id": str(blueprint.id),
                 "scheme_version_id": str(scheme.id),
+                "classroom_allocation_id": (
+                    str(allocation.id) if allocation is not None else None
+                ),
+                "course_id": allocation.course_id if allocation is not None else None,
             },
         )
         self.session.commit()
@@ -317,8 +354,12 @@ class SubmissionService:
     def create(self, principal: Principal, payload: SubmissionCreate) -> Submission:
         # Registering a script is part of manual ingestion, not exam management.
         ensure_uploader(principal)
-        if self.assignments.get(principal.tenant_id, payload.assignment_id) is None:
+        assignment = self.assignments.get(principal.tenant_id, payload.assignment_id)
+        if assignment is None:
             raise AppError(ErrorCode.NOT_FOUND, "Assignment not found.")
+        # Registering a script against another class's assignment would hand the
+        # uploader that class's work through the submission reads.
+        require_assignment_access(self.session, principal, assignment.id)
         submission = self.submissions.create(
             tenant_id=principal.tenant_id,
             assignment_id=payload.assignment_id,

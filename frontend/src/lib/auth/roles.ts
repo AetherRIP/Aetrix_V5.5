@@ -262,6 +262,7 @@ export type AppPath =
   | '/dashboard'
   | '/workspace'
   | '/inbox'
+  | '/messages'
   | '/notifications'
   | '/history'
   | '/queue'
@@ -287,6 +288,7 @@ export type AppPath =
   | '/assistant/work'
   | '/assistant/tasks'
   | '/assistant/progress'
+  | '/manual-correction'
 
 export type NavIcon =
   | 'chart'
@@ -320,6 +322,7 @@ const TEACHER_NAV: RoleNav = {
     { to: '/inbox', label: 'Inbox', icon: 'records' },
     { to: '/students', label: 'Classes & students', icon: 'classroom' },
     { to: '/assignments', label: 'Assignments', icon: 'assignment' },
+    { to: '/manual-correction', label: 'Manual correction', icon: 'pen' },
     { to: '/queue', label: 'Marking queue', icon: 'pulse' },
     { to: '/reports', label: 'Reports', icon: 'blueprint' },
     { to: '/gradebook', label: 'Gradebook', icon: 'checkDouble' },
@@ -329,7 +332,7 @@ const TEACHER_NAV: RoleNav = {
     { to: '/assistants', label: 'Assistants', icon: 'eye' },
     { to: '/analytics', label: 'Analytics', icon: 'chart' },
     { to: '/classroom', label: 'Google Classroom', icon: 'classroom' },
-    { to: '/workspace', label: 'Workspace', icon: 'lock' },
+    { to: '/workspace', label: 'Members & access', icon: 'lock' },
     { to: '/settings', label: 'Settings', icon: 'lock' },
   ],
   tabs: [
@@ -349,6 +352,7 @@ const ASSISTANT_NAV: RoleNav = {
     // lives on the assignment record; without this entry a reviewer had no way
     // to reach it from their own rail.
     { to: '/assignments', label: 'Uploads', icon: 'assignment' },
+    { to: '/manual-correction', label: 'Manual correction', icon: 'pen' },
     { to: '/assistant/work', label: 'Marking workspace', icon: 'pen' },
     { to: '/reports', label: 'Results', icon: 'blueprint' },
     { to: '/assistant/classes', label: 'Assigned classes', icon: 'classroom' },
@@ -373,6 +377,7 @@ const VIEWER_NAV: RoleNav = {
     { to: '/inbox', label: 'Inbox', icon: 'records' },
     { to: '/students', label: 'Classes & students', icon: 'classroom' },
     { to: '/assignments', label: 'Assignments', icon: 'assignment' },
+    { to: '/manual-correction', label: 'Manual correction', icon: 'pen' },
     { to: '/reports', label: 'Reports', icon: 'blueprint' },
     { to: '/gradebook', label: 'Gradebook', icon: 'checkDouble' },
   ],
@@ -380,7 +385,7 @@ const VIEWER_NAV: RoleNav = {
   secondary: [
     { to: '/notifications', label: 'Notifications', icon: 'records' },
     { to: '/history', label: 'Marking history', icon: 'blueprint' },
-    { to: '/workspace', label: 'Workspace', icon: 'lock' },
+    { to: '/workspace', label: 'Members & access', icon: 'lock' },
     { to: '/settings', label: 'Settings', icon: 'lock' },
   ],
   tabs: [
@@ -393,13 +398,14 @@ const VIEWER_NAV: RoleNav = {
 const PLATFORM_NAV: RoleNav = {
   primary: [
     { to: '/platform', label: 'Platform overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
     { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'System health', icon: 'server' },
     { to: '/platform/audit', label: 'Audit log', icon: 'records' },
   ],
   groupLabel: 'Platform',
   secondary: [
+    { to: '/manual-correction', label: 'Manual correction', icon: 'pen' },
     { to: '/platform/classroom', label: 'Google Classroom', icon: 'classroom' },
     { to: '/platform/gemini', label: 'Gemini fleet', icon: 'blueprint' },
     { to: '/platform/integrations', label: 'AI providers', icon: 'blueprint' },
@@ -407,7 +413,7 @@ const PLATFORM_NAV: RoleNav = {
   ],
   tabs: [
     { to: '/platform', label: 'Overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
     { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'Health', icon: 'server' },
   ],
@@ -421,13 +427,14 @@ const PLATFORM_NAV: RoleNav = {
 const OWNER_NAV: RoleNav = {
   primary: [
     { to: '/platform', label: 'Platform overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
     { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'System health', icon: 'server' },
     { to: '/platform/audit', label: 'Audit log', icon: 'records' },
   ],
   groupLabel: 'Every area',
   secondary: [
+    { to: '/manual-correction', label: 'Manual correction', icon: 'pen' },
     { to: '/platform/classroom', label: 'Google Classroom', icon: 'classroom' },
     { to: '/platform/gemini', label: 'Gemini fleet', icon: 'blueprint' },
     { to: '/platform/integrations', label: 'AI providers', icon: 'blueprint' },
@@ -438,7 +445,7 @@ const OWNER_NAV: RoleNav = {
   ],
   tabs: [
     { to: '/platform', label: 'Overview', icon: 'shield' },
-    { to: '/platform/workspaces', label: 'Allocation', icon: 'classroom' },
+    { to: '/platform/workspaces', label: 'Workspaces', icon: 'classroom' },
     { to: '/platform/users', label: 'Account management', icon: 'eye' },
     { to: '/platform/health', label: 'Health', icon: 'server' },
   ],
@@ -460,6 +467,7 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/dashboard',
     '/workspace',
     '/inbox',
+    '/messages',
     '/queue',
     '/assignments',
     '/reports',
@@ -474,12 +482,14 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/history',
     '/submissions',
     '/preview',
+    '/manual-correction',
   ],
-  platform_operator: ['/platform', '/settings'],
+  platform_operator: ['/platform', '/settings', '/manual-correction', '/messages'],
   supervisor: [
     '/dashboard',
     '/workspace',
     '/inbox',
+    '/messages',
     '/notifications',
     '/history',
     '/queue',
@@ -493,23 +503,27 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/classroom',
     '/submissions',
     '/preview',
+    '/manual-correction',
   ],
   assistant: [
     '/assistant',
     '/queue',
     '/history',
     '/notifications',
+    '/messages',
     '/reports',
     '/inbox',
     '/settings',
     '/assignments',
     '/submissions',
     '/preview',
+    '/manual-correction',
   ],
   viewer: [
     '/dashboard',
     '/workspace',
     '/inbox',
+    '/messages',
     '/notifications',
     '/history',
     '/assignments',
@@ -520,6 +534,7 @@ const ROUTES_BY_ROLE: Record<AccountRole, readonly string[]> = {
     '/analytics',
     '/submissions',
     '/preview',
+    '/manual-correction',
   ],
 }
 

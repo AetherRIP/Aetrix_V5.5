@@ -61,7 +61,9 @@ class ComponentHealthRead(BaseModel):
 
 class FeatureStatus(BaseModel):
     name: str
-    state: Literal["available", "not_implemented"]
+    #: ``available`` needs the subsystems the feature actually runs on to be
+    #: observed working.  A feature is never available because its code exists.
+    state: Literal["available", "degraded", "unavailable", "not_implemented"]
     reason: str
 
 

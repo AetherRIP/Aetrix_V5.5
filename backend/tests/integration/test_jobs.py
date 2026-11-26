@@ -283,7 +283,7 @@ def test_detail_returns_submission_document_provider_and_review_context(
         ["Question 1a: the model response was not usable."],
     )
 
-    detail = service(db_session).detail(actor.tenant_id, job.id)
+    detail = service(db_session).detail(actor, job.id)
     assert detail.id == job.id
     assert detail.submission is not None
     assert detail.submission.student_ref == "student-1"
@@ -296,7 +296,7 @@ def test_detail_returns_submission_document_provider_and_review_context(
     assert [event.to_state for event in detail.events][-1] == "REVIEW_REQUIRED"
 
     with pytest.raises(AppError) as error:
-        service(db_session).detail(identity.tenant_b.id, job.id)
+        service(db_session).detail(principal_for(identity.user_b), job.id)
     assert error.value.code is ErrorCode.NOT_FOUND
 
 

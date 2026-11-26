@@ -44,6 +44,58 @@ export type Workspace = {
   is_demo: boolean
 }
 
+export type PlatformTemplateOption = {
+  key: string
+  label: string
+  description: string
+}
+
+export type PlatformAuditAccountType = {
+  key: string
+  label: string
+  description: string
+  platform_role: string
+}
+
+/** One row of `platform_settings`; the engine is the only writer. */
+export type PlatformSettings = {
+  default_workspace_template: string
+  uploaded_script_retention_days: number
+  audit_view_allowed_account_types: string[]
+  version: number
+  created_at: string
+  updated_at: string
+  updated_by_label: string | null
+  updated_by_subject: string | null
+  updated_by_user_id: string | null
+  available_templates: PlatformTemplateOption[]
+  audit_account_types: PlatformAuditAccountType[]
+  retention_min_days: number
+  retention_max_days: number
+}
+
+export type RetentionPreview = {
+  retention_days: number
+  cutoff: string
+  scanned_at: string
+  eligible_documents: number
+  eligible_pages: number
+  eligible_bytes: number
+  already_purged_documents: number
+  protected: { reason: string; documents: number }[]
+}
+
+export type RetentionSweep = {
+  purged_documents: number
+  purged_pages: number
+  purged_bytes: number
+  failed_documents: number
+  skipped_documents: number
+  retention_days: number
+  cutoff: string
+  completed_at: string
+}
+
 export type Member = {
   id: string
   subject: string
@@ -98,6 +150,10 @@ export type Assignment = {
   name: string
   completion_threshold: number
   review_mode: 'ECONOMY' | 'BALANCED' | 'ACCURACY'
+  /** The Classroom class this assignment belongs to; null on legacy rows. */
+  classroom_allocation_id: string | null
+  course_id: string | null
+  class_name: string | null
   created_at: string
 }
 
@@ -738,8 +794,112 @@ export type Gradebook = {
   state: 'OK' | 'INSUFFICIENT_DATA'
 }
 
+export type CohortQuestion = {
+  question_id: string
+  max_marks: number | null
+  max_marks_min: number
+  max_marks_max: number
+  sample_size: number
+  approved_sample: number
+  provisional_sample: number
+  pending_count: number
+  average_marks: number | null
+  average_percent: number | null
+  median_percent: number | null
+  full_marks: number
+  zero_marks: number
+  partial_marks: number
+  struggling_count: number
+  struggling_percent: number | null
+  distribution: { marks: number; count: number }[]
+  state: 'OK' | 'INSUFFICIENT_SAMPLE' | 'NO_RESULTS'
+  attention: boolean
+}
+
+export type CohortStudent = {
+  student_ref: string
+  job_id: string
+  job_state: JobState
+  approved: boolean
+  decided: number
+  awarded: number
+  possible: number
+  percentage: number | null
+  full_marks: number
+  zero_marks: number
+  low_question_ids: string[]
+  support_flagged: boolean
+  evidence: string
+}
+
+export type CohortRead = {
+  assignment: {
+    id: string
+    name: string
+    class_name: string | null
+    course_id: string | null
+    scope: 'CLASS' | 'WORKSPACE'
+  }
+  overview: {
+    eligible_submissions: number
+    included_students: number
+    completed_corrections: number
+    pending_corrections: number
+    approved_jobs: number
+    provisional_jobs: number
+    pending_reviews: number
+    mean_percent: number | null
+    approved_mean_percent: number | null
+    questions_requiring_attention: number
+    topics_requiring_attention: number | null
+    state: 'OK' | 'PROVISIONAL' | 'INSUFFICIENT_DATA'
+  }
+  questions: CohortQuestion[]
+  topics: {
+    state: 'unavailable' | 'available'
+    reason: string | null
+    items: { name: string; sample_size: number; average_percent: number | null }[]
+  }
+  students: CohortStudent[]
+  trends: {
+    state: 'OK' | 'INSUFFICIENT_DATA'
+    reason: string | null
+    points: {
+      assignment_id: string
+      name: string
+      created_at: string
+      mean_percent: number | null
+      included_students: number
+      approved_jobs: number
+      state: string
+    }[]
+    question_changes: {
+      question_id: string
+      max_marks: number
+      previous_assignment_id: string
+      previous_percent: number
+      current_percent: number
+      delta_percent: number
+    }[]
+  }
+  completeness: {
+    submissions_total: number
+    excluded_submissions: number
+    eligible_submissions: number
+    with_marked_job: number
+    pending_corrections: number
+    decided_rows: number
+    pending_rows: number
+    excluded_rows: number
+    approved_jobs: number
+    provisional_jobs: number
+  }
+  rules: Record<string, string>
+}
+
 export type AuditEvent = {
   id: string
+  /** When the engine wrote the event. */
   created_at: string
   action: string
   entity_type: string
@@ -747,7 +907,39 @@ export type AuditEvent = {
   actor_type: string
   actor_id: string | null
   actor_label: string | null
+  request_id: string | null
+  before_hash: string | null
+  after_hash: string | null
+  tenant_id: string | null
+  tenant_name: string | null
   detail: Record<string, unknown>
+}
+
+/** Filters accepted by the audit read endpoints. All are optional. */
+export type AuditQuery = {
+  action?: string
+  entity_type?: string
+  entity_id?: string
+  actor?: string
+  actor_type?: 'USER' | 'SYSTEM' | 'WORKER'
+  /** ISO timestamp, inclusive. */
+  date_from?: string
+  /** ISO timestamp, inclusive. */
+  date_to?: string
+  /** Id of the last event on the previous page. */
+  before?: string | null
+  limit?: number
+  /** Platform reads only: narrow to one workspace. */
+  workspace_id?: string
+}
+
+export type AuditEventPage = {
+  items: AuditEvent[]
+  has_more: boolean
+  next_before: string | null
+  limit: number
+  /** When this page was read; distinct from every event's created_at. */
+  retrieved_at: string
 }
 
 export type Notification = {
@@ -809,4 +1001,155 @@ export type StudentImportResult = {
   classes_created: number
   issues: StudentImportIssue[]
   created_refs: string[]
+}
+
+/* ── Manual correction progress ─────────────────────────────────────────── */
+
+export type ProgressQuestion = {
+  question_id: string
+  max_marks: number
+  status: string
+  processing_state: string | null
+  awarded_marks: number | null
+  confidence: number | null
+  review_required: boolean
+  verification_status: string | null
+  result_id: string | null
+}
+
+export type ProgressStage = {
+  stage: string
+  outcome: string
+  at: string
+  prompt_version: string | null
+  detail: Record<string, unknown>
+}
+
+export type ProgressEvent = {
+  seq: number
+  from_state: string | null
+  state: string
+  detail: Record<string, unknown>
+  actor: string
+  at: string
+}
+
+export type JobProgress = {
+  job_id: string
+  submission_id: string
+  assignment_id: string
+  state: JobState
+  progress: number
+  started_at: string | null
+  finished_at: string | null
+  updated_at: string
+  last_updated_at: string
+  elapsed_seconds: number | null
+  total_questions: number
+  completed_questions: number
+  processing_questions: number
+  review_questions: number
+  failed_questions: number
+  pending_questions: number
+  awarded_marks: number
+  available_marks: number
+  estimated_remaining_seconds: number | null
+  questions: ProgressQuestion[]
+  stages: ProgressStage[]
+  events: ProgressEvent[]
+  documents: {
+    id: string
+    kind: string
+    filename: string
+    status: string
+    pages: number
+    error_code: string | null
+  }[]
+  error_code: string | null
+  error_message: string | null
+  retryable: boolean | null
+  result_source: string | null
+  verification_status: string | null
+}
+
+/* ── Workspace messaging ───────────────────────────────────────────────── */
+
+export type MessagingDirectoryUser = {
+  id: string
+  display_name: string
+  email: string | null
+  role: EngineRole
+}
+
+export type MessagingReply = {
+  id: string
+  sender_name: string
+  body: string
+  deleted: boolean
+}
+
+export type MessagingMessage = {
+  id: string
+  conversation_id: string
+  sender_id: string
+  sender_name: string
+  sender_role: EngineRole
+  body: string
+  created_at: string
+  edited_at: string | null
+  deleted: boolean
+  pinned: boolean
+  can_edit: boolean
+  can_delete: boolean
+  reply_to: MessagingReply | null
+}
+
+export type MessagingConversation = {
+  id: string
+  kind: 'DIRECT' | 'CHANNEL'
+  title: string
+  topic: string | null
+  post_policy: 'EVERYONE' | 'MANAGERS'
+  channel_key: string | null
+  peer: MessagingDirectoryUser | null
+  last_message: string | null
+  last_message_at: string | null
+  unread_count: number
+  member_count: number
+  muted: boolean
+  can_post: boolean
+  can_manage: boolean
+  archived: boolean
+}
+
+export type MessagingMessagePage = {
+  items: MessagingMessage[]
+  has_more: boolean
+  next_before: string | null
+}
+
+export type MessagingSearchHit = {
+  message_id: string
+  conversation_id: string
+  conversation_title: string
+  sender_name: string
+  body: string
+  created_at: string
+}
+
+export type MessagingNotification = {
+  id: string
+  kind: 'DIRECT' | 'MENTION' | 'REPLY' | 'ANNOUNCEMENT'
+  conversation_id: string
+  conversation_title: string
+  message_id: string
+  actor_name: string
+  preview: string
+  created_at: string
+  read_at: string | null
+}
+
+export type MessagingUnreadCount = {
+  unread: number
+  read: number
 }

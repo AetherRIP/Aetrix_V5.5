@@ -1,17 +1,21 @@
 import {
   apiBlob,
+  apiDelete,
   apiGet,
   apiPatch,
   apiPost,
   apiPut,
+  apiRequest,
   apiUpload,
   type ApiResult,
   type RequestOptions,
 } from './api/client'
 import type {
   Assignment,
-  AuditEvent,
+  AuditEventPage,
+  AuditQuery,
   Blueprint,
+  CohortRead,
   DocumentMeta,
   Exam,
   Gradebook,
@@ -19,12 +23,23 @@ import type {
   Invitation,
   Job,
   JobDetail,
+  JobProgress,
   JobResults,
   MarkingHistoryPage,
   Me,
   Member,
+  MessagingConversation,
+  MessagingDirectoryUser,
+  MessagingMessage,
+  MessagingMessagePage,
+  MessagingNotification,
+  MessagingSearchHit,
+  MessagingUnreadCount,
   Notification,
   PageMeta,
+  PlatformSettings,
+  RetentionPreview,
+  RetentionSweep,
   ReportDetail,
   ReportRow,
   SchemeCriteriaExtraction,
@@ -104,8 +119,25 @@ export const workspaceService = {
   gradebook: (workspaceId: string, options?: Opts): Promise<ApiResult<Gradebook>> =>
     apiGet<Gradebook>(`/api/v1/workspaces/${workspaceId}/gradebook`, options),
 
-  audit: (workspaceId: string, options?: Opts): Promise<ApiResult<AuditEvent[]>> =>
-    apiGet<AuditEvent[]>(`/api/v1/workspaces/${workspaceId}/audit`, options),
+  cohort: (
+    workspaceId: string,
+    assignmentId: string,
+    options?: Opts,
+  ): Promise<ApiResult<CohortRead>> =>
+    apiGet<CohortRead>(
+      `/api/v1/workspaces/${workspaceId}/cohort?assignment_id=${encodeURIComponent(assignmentId)}`,
+      options,
+    ),
+
+  audit: (
+    workspaceId: string,
+    query?: AuditQuery,
+    options?: Opts,
+  ): Promise<ApiResult<AuditEventPage>> =>
+    apiGet<AuditEventPage>(
+      `/api/v1/workspaces/${workspaceId}/audit${auditQueryString(query)}`,
+      options,
+    ),
 
   notifications: (workspaceId: string, options?: Opts): Promise<ApiResult<Notification[]>> =>
     apiGet<Notification[]>(`/api/v1/workspaces/${workspaceId}/notifications`, options),
@@ -127,10 +159,58 @@ export const workspaceService = {
   },
 }
 
+function auditQueryString(query?: AuditQuery): string {
+  if (!query) return ''
+  const params = new URLSearchParams()
+  for (const key of [
+    'action',
+    'entity_type',
+    'entity_id',
+    'actor',
+    'actor_type',
+    'date_from',
+    'date_to',
+    'before',
+    'workspace_id',
+  ] as const) {
+    const value = query[key]
+    if (value) params.set(key, value)
+  }
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  const suffix = params.toString()
+  return suffix ? `?${suffix}` : ''
+}
+
 /** Platform-level reads that are not workspace-scoped. */
 export const platformService = {
-  audit: (options?: Opts): Promise<ApiResult<AuditEvent[]>> =>
-    apiGet<AuditEvent[]>('/api/v1/admin/audit', options),
+  audit: (query?: AuditQuery, options?: Opts): Promise<ApiResult<AuditEventPage>> =>
+    apiGet<AuditEventPage>(`/api/v1/admin/audit${auditQueryString(query)}`, options),
+}
+
+/** The single platform configuration row and its retention sweep. */
+export const platformSettingsService = {
+  read: (options?: Opts): Promise<ApiResult<PlatformSettings>> =>
+    apiGet<PlatformSettings>('/api/v1/admin/settings', options),
+
+  update: (
+    body: {
+      default_workspace_template: string
+      uploaded_script_retention_days: number
+      audit_view_allowed_account_types: string[]
+      expected_version: number
+    },
+    options?: Opts,
+  ): Promise<ApiResult<PlatformSettings>> =>
+    apiPut<PlatformSettings>('/api/v1/admin/settings', body, options),
+
+  retentionPreview: (options?: Opts): Promise<ApiResult<RetentionPreview>> =>
+    apiGet<RetentionPreview>('/api/v1/admin/settings/retention/preview', options),
+
+  sweepRetention: (
+    body: { expected_retention_days: number; limit?: number },
+    options?: Opts,
+  ): Promise<ApiResult<RetentionSweep>> =>
+    apiPost<RetentionSweep>('/api/v1/admin/settings/retention/sweep', body, options),
 }
 
 export const rosterService = {
@@ -229,6 +309,51 @@ export const examService = {
       options,
     ),
 
+  createSchemeCriterion: (
+    versionId: string,
+    body: {
+      blueprint_version_id: string
+      question_id: string
+      code: string
+      marks: number
+      ordinal?: number
+      description: string
+      expected_answer?: string | null
+    },
+    options?: Opts,
+  ): Promise<ApiResult<SchemeCriterion>> =>
+    apiPost<SchemeCriterion>(`/api/v1/schemes/${versionId}/criteria`, body, options),
+
+  updateSchemeCriterion: (
+    versionId: string,
+    criterionId: string,
+    body: {
+      blueprint_version_id?: string
+      marks?: number
+      description?: string
+      expected_answer?: string | null
+    },
+    options?: Opts,
+  ): Promise<ApiResult<SchemeCriterion>> =>
+    apiPatch<SchemeCriterion>(
+      `/api/v1/schemes/${versionId}/criteria/${criterionId}`,
+      body,
+      options,
+    ),
+
+  deleteSchemeCriterion: (
+    versionId: string,
+    criterionId: string,
+    options?: Opts,
+  ): Promise<ApiResult<void>> =>
+    apiDelete<void>(`/api/v1/schemes/${versionId}/criteria/${criterionId}`, options),
+
+  reviseSchemeVersion: (
+    versionId: string,
+    options?: Opts,
+  ): Promise<ApiResult<SchemeVersion>> =>
+    apiPost<SchemeVersion>(`/api/v1/schemes/${versionId}/revisions`, undefined, options),
+
   extractSchemeCriteria: (
     versionId: string,
     blueprintVersionId: string,
@@ -265,6 +390,8 @@ export const assignmentService = {
       blueprint_version_id: string
       scheme_version_id: string
       name: string
+      /** The class the assignment belongs to; the engine validates it. */
+      course_id: string
       review_mode?: string
       completion_threshold?: number
     },
@@ -437,7 +564,7 @@ export type SubsystemStatus = {
 
 export type FeatureStatus = {
   name: string
-  state: 'available' | 'not_implemented'
+  state: 'available' | 'degraded' | 'unavailable' | 'not_implemented'
   reason: string
 }
 
@@ -501,4 +628,194 @@ export async function sha256File(file: File): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('')
+}
+
+/**
+ * Manual correction: an ordinary correction job created from uploaded files.
+ *
+ * The intake endpoint runs the same scheme, blueprint and marking services as
+ * the assignment workflow. It returns only after the job is stored, so the page
+ * can begin polling persisted progress immediately.
+ */
+export const manualCorrectionService = {
+  create: (
+    body: {
+      studentFile: File
+      schemeFile: File
+      questionPaper?: File | null
+      studentRef?: string
+      board?: string
+      subject?: string
+      qualification?: string
+      paperCode?: string
+      markingMode?: string
+    },
+    options?: Opts,
+  ): Promise<ApiResult<Job>> => {
+    const form = new FormData()
+    form.set('student_file', body.studentFile)
+    form.set('scheme_file', body.schemeFile)
+    if (body.questionPaper) form.set('question_paper', body.questionPaper)
+    form.set('student_ref', body.studentRef ?? '')
+    form.set('board', body.board ?? '')
+    form.set('subject', body.subject ?? '')
+    form.set('qualification', body.qualification ?? '')
+    form.set('paper_code', body.paperCode ?? '')
+    form.set('marking_mode', body.markingMode ?? '')
+    return apiUpload<Job>('/api/v1/manual-corrections', form, options)
+  },
+
+  list: (options?: Opts): Promise<ApiResult<Job[]>> =>
+    apiGet<Job[]>('/api/v1/manual-corrections', options),
+
+  progress: (jobId: string, options?: Opts): Promise<ApiResult<JobProgress>> =>
+    apiGet<JobProgress>(`/api/v1/corrections/${jobId}/progress`, options),
+}
+
+export const messagingService = {
+  directory: (q: string | undefined, options?: Opts): Promise<ApiResult<MessagingDirectoryUser[]>> => {
+    const suffix = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
+    return apiGet<MessagingDirectoryUser[]>(`/api/v1/messaging/directory${suffix}`, options)
+  },
+
+  conversations: (
+    q: string | undefined,
+    options?: Opts,
+  ): Promise<ApiResult<MessagingConversation[]>> => {
+    const suffix = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
+    return apiGet<MessagingConversation[]>(`/api/v1/messaging/conversations${suffix}`, options)
+  },
+
+  createDirect: (
+    userId: string,
+    options?: Opts,
+  ): Promise<ApiResult<MessagingConversation>> =>
+    apiPost<MessagingConversation>(
+      '/api/v1/messaging/conversations/direct',
+      { user_id: userId },
+      options,
+    ),
+
+  createChannel: (
+    body: { title: string; topic?: string | null; post_policy?: 'EVERYONE' | 'MANAGERS' },
+    options?: Opts,
+  ): Promise<ApiResult<MessagingConversation>> =>
+    apiPost<MessagingConversation>('/api/v1/messaging/channels', body, options),
+
+  updateChannel: (
+    conversationId: string,
+    body: {
+      title?: string
+      topic?: string | null
+      post_policy?: 'EVERYONE' | 'MANAGERS'
+      archived?: boolean
+    },
+    options?: Opts,
+  ): Promise<ApiResult<MessagingConversation>> =>
+    apiPatch<MessagingConversation>(
+      `/api/v1/messaging/channels/${conversationId}`,
+      body,
+      options,
+    ),
+
+  messages: (
+    conversationId: string,
+    query?: { before?: string; limit?: number },
+    options?: Opts,
+  ): Promise<ApiResult<MessagingMessagePage>> => {
+    const params = new URLSearchParams()
+    if (query?.before) params.set('before', query.before)
+    if (query?.limit) params.set('limit', String(query.limit))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return apiGet<MessagingMessagePage>(
+      `/api/v1/messaging/conversations/${conversationId}/messages${suffix}`,
+      options,
+    )
+  },
+
+  send: (
+    conversationId: string,
+    body: {
+      body: string
+      client_id: string
+      reply_to_id?: string | null
+      mentioned_user_ids?: string[]
+    },
+    options?: Opts,
+  ): Promise<ApiResult<MessagingMessage>> =>
+    apiPost<MessagingMessage>(
+      `/api/v1/messaging/conversations/${conversationId}/messages`,
+      body,
+      options,
+    ),
+
+  edit: (messageId: string, body: string, options?: Opts): Promise<ApiResult<MessagingMessage>> =>
+    apiPatch<MessagingMessage>(`/api/v1/messaging/messages/${messageId}`, { body }, options),
+
+  remove: (messageId: string, options?: Opts): Promise<ApiResult<MessagingMessage>> =>
+    apiRequest<MessagingMessage>(
+      `/api/v1/messaging/messages/${messageId}`,
+      { method: 'DELETE' },
+      options,
+    ),
+
+  pin: (
+    messageId: string,
+    pinned: boolean,
+    options?: Opts,
+  ): Promise<ApiResult<MessagingMessage>> =>
+    apiPatch<MessagingMessage>(
+      `/api/v1/messaging/messages/${messageId}/pin`,
+      { pinned },
+      options,
+    ),
+
+  markRead: (conversationId: string, options?: Opts): Promise<ApiResult<unknown>> =>
+    apiPost<unknown>(
+      `/api/v1/messaging/conversations/${conversationId}/read`,
+      {},
+      options,
+    ),
+
+  setMuted: (
+    conversationId: string,
+    muted: boolean,
+    options?: Opts,
+  ): Promise<ApiResult<MessagingConversation>> =>
+    apiPatch<MessagingConversation>(
+      `/api/v1/messaging/conversations/${conversationId}/membership`,
+      { muted },
+      options,
+    ),
+
+  search: (q: string, options?: Opts): Promise<ApiResult<MessagingSearchHit[]>> =>
+    apiGet<MessagingSearchHit[]>(
+      `/api/v1/messaging/search?q=${encodeURIComponent(q)}`,
+      options,
+    ),
+
+  notifications: (
+    unreadOnly: boolean,
+    options?: Opts,
+  ): Promise<ApiResult<MessagingNotification[]>> =>
+    apiGet<MessagingNotification[]>(
+      `/api/v1/messaging/notifications?unread_only=${unreadOnly ? 'true' : 'false'}`,
+      options,
+    ),
+
+  unreadCount: (options?: Opts): Promise<ApiResult<MessagingUnreadCount>> =>
+    apiGet<MessagingUnreadCount>('/api/v1/messaging/notifications/unread-count', options),
+
+  readNotification: (
+    notificationId: string,
+    options?: Opts,
+  ): Promise<ApiResult<MessagingNotification>> =>
+    apiPost<MessagingNotification>(
+      `/api/v1/messaging/notifications/${notificationId}/read`,
+      {},
+      options,
+    ),
+
+  readAllNotifications: (options?: Opts): Promise<ApiResult<MessagingUnreadCount>> =>
+    apiPost<MessagingUnreadCount>('/api/v1/messaging/notifications/read-all', {}, options),
 }

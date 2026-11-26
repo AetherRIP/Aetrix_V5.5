@@ -7,7 +7,14 @@
  * payload — the browser never sees a credential.
  */
 
-import { apiGet, apiPatch, apiPost, type ApiResult, type RequestOptions } from './client'
+import {
+  apiGet,
+  apiPatch,
+  apiPost,
+  apiRequest,
+  type ApiResult,
+  type RequestOptions,
+} from './client'
 
 const ADMIN = '/api/v1/admin/classroom'
 const WORK = '/api/v1/workspaces'
@@ -115,6 +122,20 @@ export type TeacherCourse = {
   course_state: string
   students: number
   coursework: number
+}
+
+export type ClassroomClassAssignment = {
+  id: string
+  allocation_id: string
+  classroom_class_id: string
+  course_id: string
+  class_name: string
+  user_id: string
+  user_label: string | null
+  user_email: string | null
+  user_role: string
+  assigned_by_label: string | null
+  assigned_at: string
 }
 
 export type RosterEntry = {
@@ -310,6 +331,43 @@ export function classroomRoster(
   )
 }
 
+export function classroomClassAssignments(
+  workspaceId: string,
+  courseId: string,
+  options: RequestOptions,
+): Promise<ApiResult<ClassroomClassAssignment[]>> {
+  return apiGet<ClassroomClassAssignment[]>(
+    `${WORK}/${workspaceId}/classroom/courses/${courseId}/assignments`,
+    options,
+  )
+}
+
+export function createClassroomClassAssignment(
+  workspaceId: string,
+  courseId: string,
+  userId: string,
+  options: RequestOptions,
+): Promise<ApiResult<ClassroomClassAssignment>> {
+  return apiPost<ClassroomClassAssignment>(
+    `${WORK}/${workspaceId}/classroom/courses/${courseId}/assignments`,
+    { user_id: userId },
+    options,
+  )
+}
+
+export function removeClassroomClassAssignment(
+  workspaceId: string,
+  courseId: string,
+  assignmentId: string,
+  options: RequestOptions,
+): Promise<ApiResult<null>> {
+  return apiRequest<null>(
+    `${WORK}/${workspaceId}/classroom/courses/${courseId}/assignments/${assignmentId}`,
+    { method: 'DELETE' },
+    options,
+  )
+}
+
 export function syncClassroomRoster(
   workspaceId: string,
   courseId: string,
@@ -483,4 +541,246 @@ export function workspaceAssignments(
   options: RequestOptions,
 ): Promise<ApiResult<WorkspaceAssignment[]>> {
   return apiGet<WorkspaceAssignment[]>(`/api/v1/workspaces/${workspaceId}/assignments`, options)
+}
+
+// -- automatic submission monitoring ---------------------------------------
+
+export type MonitorHealth =
+  | 'DISABLED'
+  | 'PAUSED'
+  | 'HEALTHY'
+  | 'DEGRADED'
+  | 'BLOCKED'
+  | 'UNKNOWN'
+
+export type MonitorPipelineState =
+  | 'DETECTED'
+  | 'DOWNLOADING'
+  | 'INSPECTING'
+  | 'READY'
+  | 'IGNORED'
+  | 'NEEDS_TEACHER'
+  | 'SUPERSEDED'
+  | 'FAILED'
+
+export type MonitorCorrectionState =
+  | 'NOT_QUEUED'
+  | 'QUEUED'
+  | 'PROCESSING'
+  | 'REVIEW_REQUIRED'
+  | 'COMPLETED'
+  | 'FAILED'
+
+export type MonitorRelevance =
+  | 'UNASSESSED'
+  | 'LIKELY_RELEVANT'
+  | 'POSSIBLY_UNRELATED'
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'CANNOT_DETERMINE'
+
+export type MonitorState = {
+  coursework_link_id: string
+  assignment_id: string
+  assignment_name: string
+  course_id: string
+  coursework_id: string | null
+  enabled: boolean
+  paused: boolean
+  auto_queue: boolean
+  relevance_policy: 'STRUCTURAL_ALLOW' | 'TEXT_REQUIRED'
+  interval_seconds: number
+  health: MonitorHealth
+  next_poll_at: string | null
+  last_polled_at: string | null
+  last_poll_status: string | null
+  last_poll_error: string | null
+  last_error_code: string | null
+  consecutive_failures: number
+  last_counts: Record<string, number>
+  monitoring_since: string | null
+  enabled_by_subject: string | null
+  expected_students: number
+  submitted_students: number
+  awaiting_review: number
+  ready_submissions: number
+  queued_corrections: number
+  processing_corrections: number
+  completed_corrections: number
+  failed_corrections: number
+}
+
+export type MonitorOverview = {
+  workspace_id: string
+  monitoring_enabled_on_server: boolean
+  states: MonitorState[]
+  recent_runs: Array<{
+    id: string
+    coursework_link_id: string | null
+    trigger: string
+    status: string
+    counts: Record<string, number>
+    started_at: string
+    finished_at: string | null
+    error_message: string | null
+  }>
+}
+
+export type MonitorAttachment = {
+  position: number
+  kind: string
+  title: string | null
+  declared_mime: string | null
+  detected_mime: string | null
+  size_bytes: number | null
+  status: string
+  page_count: number | null
+  sha256: string | null
+  reason: string | null
+  issues: Array<{ code: string; message: string; severity?: string }>
+}
+
+export type MonitorSubmission = {
+  submission_link_id: string
+  google_submission_id: string
+  google_user_id: string
+  student_id: string
+  student_ref: string
+  student_name: string | null
+  google_state: string | null
+  late: boolean
+  detected_at: string | null
+  last_synced_at: string | null
+  version: number
+  version_count: number
+  state: MonitorPipelineState
+  correction_state: MonitorCorrectionState
+  eligibility: 'PENDING' | 'ELIGIBLE' | 'NEEDS_TEACHER' | 'BLOCKED'
+  relevance: MonitorRelevance
+  decision_reasons: Array<{ code?: string; message?: string; severity?: string }>
+  inspection: Record<string, unknown>
+  attachments: MonitorAttachment[]
+  correction_job_id: string | null
+  document_id: string | null
+  last_error: string | null
+  last_error_code: string | null
+  superseded_at: string | null
+  resolution_note: string | null
+}
+
+export type MonitorSyncResult = {
+  status: 'SUCCEEDED' | 'PARTIAL' | 'FAILED' | 'SKIPPED'
+  coursework_link_id: string
+  counts: Record<string, number>
+  problems: string[]
+  state: MonitorState
+}
+
+export type MonitorRetryResult = {
+  submission_link_id: string
+  state: MonitorPipelineState
+  correction_state: MonitorCorrectionState
+  retried: boolean
+  message: string
+}
+
+export type MonitorUpdate = {
+  enabled?: boolean
+  paused?: boolean
+  auto_queue?: boolean
+  interval_seconds?: number
+  relevance_policy?: 'STRUCTURAL_ALLOW' | 'TEXT_REQUIRED'
+  reason?: string
+}
+
+export function classroomMonitoringOverview(
+  workspaceId: string,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorOverview>> {
+  return apiGet<MonitorOverview>(`${WORK}/${workspaceId}/classroom/monitoring`, options)
+}
+
+export function classroomMonitorState(
+  workspaceId: string,
+  linkId: string,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorState>> {
+  return apiGet<MonitorState>(
+    `${WORK}/${workspaceId}/classroom/coursework/${linkId}/monitoring`,
+    options,
+  )
+}
+
+export function updateClassroomMonitoring(
+  workspaceId: string,
+  linkId: string,
+  payload: MonitorUpdate,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorState>> {
+  return apiPatch<MonitorState>(
+    `${WORK}/${workspaceId}/classroom/coursework/${linkId}/monitoring`,
+    payload,
+    options,
+  )
+}
+
+export function syncClassroomMonitoring(
+  workspaceId: string,
+  linkId: string,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorSyncResult>> {
+  return apiPost<MonitorSyncResult>(
+    `${WORK}/${workspaceId}/classroom/coursework/${linkId}/monitoring/sync`,
+    undefined,
+    options,
+  )
+}
+
+export function monitoredSubmissions(
+  workspaceId: string,
+  linkId: string,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorSubmission[]>> {
+  return apiGet<MonitorSubmission[]>(
+    `${WORK}/${workspaceId}/classroom/coursework/${linkId}/monitoring/submissions`,
+    options,
+  )
+}
+
+export function retryMonitoredSubmission(
+  workspaceId: string,
+  linkId: string,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorRetryResult>> {
+  return apiPost<MonitorRetryResult>(
+    `${WORK}/${workspaceId}/classroom/submissions/${linkId}/monitoring/retry`,
+    undefined,
+    options,
+  )
+}
+
+export function ignoreMonitoredSubmission(
+  workspaceId: string,
+  linkId: string,
+  note: string,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorSubmission>> {
+  return apiPost<MonitorSubmission>(
+    `${WORK}/${workspaceId}/classroom/submissions/${linkId}/monitoring/ignore`,
+    { note },
+    options,
+  )
+}
+
+export function resolveMonitoredSubmission(
+  workspaceId: string,
+  linkId: string,
+  action: 'ACCEPT' | 'IGNORE' | 'REQUEUE',
+  note: string,
+  options: RequestOptions,
+): Promise<ApiResult<MonitorSubmission>> {
+  return apiPost<MonitorSubmission>(
+    `${WORK}/${workspaceId}/classroom/submissions/${linkId}/monitoring/resolve`,
+    { action, note },
+    options,
+  )
 }

@@ -1,4 +1,4 @@
-# Provider fleet: Gemini keys, project quota and selection
+# Provider fleet: Gemini credentials, per-key pools and Google project evidence
 
 This note describes what the repository actually implements for managing many Gemini
 credentials. It is a description of code, not a promise: no engine is deployed, the live
@@ -6,14 +6,25 @@ provider is `UNVERIFIED`, and nothing here has been exercised against Google.
 
 ## The rule that shapes everything
 
-**Quota is a property of a Google Cloud project, not of a key.** Ten keys in one project
-share one free-tier allowance, per model. Counting per credential was the defect this work
-removed: it let rotation multiply a limit that Google does not multiply, so the fleet would
-report capacity it did not have and meet 429s instead.
+Two facts are kept apart, in code and in wording:
 
-Every quota query therefore goes through
-`QuotaReservationRepository.count_since_project(project_id, since, now)`, and
-`CredentialPool._within_quota` receives a `project_id`, never a credential id.
+1. **Aetrix administers one pool per credential**, `gemini-key-{credential_id}`. The pool owns
+   the reservations, the confirmed and unconfirmed usage, the failure counter, the quarantine
+   window, the last success, the last quota exhaustion and the configured model access.
+   Keys are lent by different people and must be observable and enable-able separately.
+2. **Google meters per Cloud project and model, and several keys may share one project.** A
+   pool is not evidence of a separate project allowance. Project identity is therefore a
+   separate, evidence-only field: `VERIFIED` (Resource Manager), `DECLARED` (audited
+   administrator assertion) or `PROJECT_IDENTITY_UNVERIFIED`.
+
+Pool budgets go through `QuotaReservationRepository.count_since_credential(credential_id, …)`
+and `CredentialPool._within_quota` receives a credential id. Project-level aggregates still
+exist for reporting (`count_since_project`) but are labelled Aetrix records for a declared
+label, and their Google quota status is `UNKNOWN` unless the project is established.
+
+A 429 quarantines the credential that received it and is **never** answered by leasing a
+sibling key. Two keys in one pool-shaped fleet may bill one project; no response Aetrix can
+observe establishes otherwise.
 
 ## Contributors (migration `0007_contributors`)
 
@@ -53,10 +64,12 @@ scheduler restart, no cache to expire.
 
 ### Capacity and attribution
 
-`app/services/contributors.py:capacity` groups eligible keys by project, sums remaining
-allowance **per project** (never per key), and reports the windows it could not measure
-separately from the ones it could. The note it returns says so in words, because a number
-that silently multiplied by key count is the failure mode this work exists to avoid.
+`app/services/contributors.py:capacity` reports every eligible credential as its own pool:
+pool id, declared project label, quarantine, Google quota status, and the pool's own
+configured minute/day budget. Model totals are named `aetrix_requests_*_remaining` and carry
+how many pools have a known versus unknown Google status. The note it returns says, in words,
+that these are Aetrix budgets and never Google capacity — summing pools into a capacity
+figure is the failure mode this design exists to avoid.
 
 `contributor_window_stats` aggregates the append-only `provider_usage` ledger by
 `contributor_id`, and every row also carries the credential, project, model and — when the
@@ -94,25 +107,59 @@ crashing a dashboard.
 Google exposes no endpoint for "remaining free-tier quota". Nothing here pretends it does,
 and Cloud Monitoring polling is not implemented — see the gaps below.
 
+## Three states that must not be conflated
+
+An operator reading a refusal needs to know which of these happened, because only one
+of them says anything about Google.
+
+| State | Evidence | What Aetrix does | What it may claim |
+|---|---|---|---|
+| **Aetrix pool budget exhausted** | The pool's own reservation/usage count reached the configured minute or day limit. No provider response is involved. | Skips that pool for this model. Another enabled pool may serve the request (scheduling, recorded against that credential). If the deployment is pinned, the operation stops and names the pin. | Only that this key spent its recorded budget. Nothing about Google. |
+| **Google project quota exhausted** | Google answered HTTP 429 / `RESOURCE_EXHAUSTED`. The exact code and message are stored. | Quarantines that credential (`QUOTA`, `retry-after` or configured cooldown), marks Google status `EXHAUSTED`, and **stops the operation**. No other key is leased — not even one carrying the same project label — and marking has a one-entry model chain, so there is no model fallback. | That Google refused this request. Not that the project is out of quota for the day, and not that a sibling key would work. |
+| **Google project identity unknown** | No Resource Manager verification and no administrator declaration. Every existing row is `PROJECT_IDENTITY_UNVERIFIED`. | Does not block the pool: its Aetrix budget, quarantine and enable switch still apply normally. | Google status `UNKNOWN`, and never a summed fleet capacity figure. |
+
+The first is Aetrix's own accounting. The second is Google's answer. The third is an
+absence of evidence. A 429 is the only one that stops the operation outright, and it
+never triggers credential substitution.
+
+### Pilot policy
+
+The initial pilot is a **single pinned credential**, `gemini-3.6-flash` only:
+`AETRIX_PROVIDER__PINNED_CREDENTIAL_ID` is set to one healthy key and nothing is
+substituted. Enabling more keys is an explicit administrative act for a later phase;
+it must never be used to raise capacity during the pilot, because the pins that keep the
+pilot attributable would then be bypassed. Pooling is not capacity: if the pinned key's
+Google project is shared or exhausted, the pilot stops with a 429 rather than continuing
+on another key.
+
 ## Selection
 
-`CredentialPool.acquire` walks candidates and skips, per project: a project in cooldown, a
-project with no RPM or RPD left, and then leases a key, writing an atomic reservation row
-before the network call and committing so the row lock is released. A second worker sees
-that reservation through `count_since_project`; it does not assume the same capacity.
+`CredentialPool.acquire` walks eligible pools and skips a pool that is quarantined or has no
+RPM/RPD left in its own Aetrix budget, then leases it, writing an atomic reservation row
+before the network call and committing so the row lock is released. A second worker sees that
+reservation through `count_since_credential`; it does not assume the same budget.
+
+An administrator can pin the whole deployment to one credential with
+`AETRIX_PROVIDER__PINNED_CREDENTIAL_ID`. When set, no other key is substituted — not after a
+failure, and never to get around a quota — and the refusal names the setting.
 
 ## Failure handling
 
-| Failure | Credential | Project |
-|---|---|---|
-| 401 / 403 (`ProviderAuthenticationError`) | `INVALID`, no longer leased | untouched |
-| 429 (`ProviderQuotaError`) | `COOLDOWN` until `retry-after` | cooldown row for every key in the project |
-| 5xx / transport (`ProviderTransientError`) | `UNKNOWN`, retried within `max_attempts` | untouched |
-| 400 (`ProviderRequestError`) | failure recorded | untouched, no retry |
+The unit is the credential pool.
 
-A successful call clears the project cooldown, because success is evidence the project works
-again. Every attempt is written to `provider_usage` with `retry_count`, `project_id`,
-`purpose`, HTTP status and error class.
+| Failure | Pool | Google status |
+|---|---|---|
+| 401 / 403 (`ProviderAuthenticationError`) | `health=INVALID`, `cooldown_kind=AUTH`, not leased | unchanged (this is not a quota refusal) |
+| 429 (`ProviderQuotaError`) | `cooldown_kind=QUOTA`, `cooldown_until` from `retry-after`, `last_quota_exhausted_at`, Google's own reason in `last_quota_reason` | `EXHAUSTED` while the window is active |
+| 5xx / transport | one bounded retry on the same model, reservation `UNCONFIRMED` | unchanged |
+| 400 / 404 | failure recorded, no retry, no model substitution for marking | unchanged |
+
+No 429 leases another credential. `routing.decide` returns `STOP` for a quota failure unless
+the chain has a genuinely different model, and production marking has a one-entry chain. A
+successful call clears that pool's cooldown and resets its consecutive-failure count; it says
+nothing about any other key. Every attempt is written to `provider_usage` with `retry_count`,
+`project_id`, `purpose`, HTTP status and error class, and the reservation keeps its own
+`CONSUMED` / `RELEASED` / `UNCONFIRMED` state.
 
 ## Administration API
 
@@ -139,11 +186,13 @@ UPDATE the append-only trigger rejects.
 ## Dashboard
 
 `/platform/gemini` (platform operator) has Overview, API keys, Contributors, Projects, Usage
-and Alerts tabs. Contributors shows status, consent version, eligible/total key counts,
-projects, per-contributor requests, independent-project capacity, registration, suspension,
-reinstatement, withdrawal and per-key revocation. It renders real figures when the engine
-answers and the shared `StatePanel` when it does not; it never substitutes zeros for a missing
-deployment.
+and Alerts tabs. Each key row shows its pool id, enable state, Aetrix budget left today,
+reservation and validation counts, Google quota status (`KNOWN` / `EXHAUSTED` / `UNKNOWN`),
+project identity, quarantine window, consecutive failures and last error. Contributors shows
+status, consent version, eligible/total key counts, per-contributor requests, pool budgets and
+per-key revocation. Every pool field is Aetrix accounting; Google's own numbers are never
+invented. The screen renders real figures when the engine answers and the shared `StatePanel`
+when it does not; it never substitutes zeros for a missing deployment.
 
 ## Gaps
 
@@ -152,9 +201,21 @@ deployment.
 - `tier` is operator-supplied and recorded as `UNKNOWN` unless set; nothing verifies a
   free-tier claim.
 - The background monitoring interval is configured but no scheduler loops it yet.
-- Migrations `0006` and `0007` have not been applied to any database. They render in Alembic
-  offline mode, but the migration and contributor integration tests could not run here: the
-  machine has no PostgreSQL. They are written and collect; they are unexecuted evidence.
+- **Upgrade/downgrade rehearsal has not been run.** This build machine has no PostgreSQL
+  server, no `psql`/`pg_ctl`/`initdb` and no Docker, and the shared Supabase project must not
+  be used for a rehearsal. The migration's DDL, backfill, constraints and inverse drops were
+  inspected against the live `0038` schema and the SQLAlchemy models, but none of it has been
+  executed. A disposable loopback database (`AETRIX_TEST_DATABASE_URL`) is the remaining
+  requirement before applying it.
+- Migration `0039_credential_pools` (per-pool state plus project-identity evidence) has not
+  been applied to the live database. `alembic heads` reports it as the single head, but the
+  chain cannot be rendered in offline mode here: revision `0008` queries `pg_constraint` while
+  building, so `--sql` fails before reaching `0039`. The pool and routing unit suites run; the
+  integration suite cannot, because the machine has no PostgreSQL. The DDL is unexecuted
+  evidence until an operator applies it.
+- No Google Cloud project identity is established for the registered keys, so every pool
+  reports Google quota `UNKNOWN`. The fleet must not present the sum of pool budgets as Google
+  capacity; declaring a real project id per key is what changes that label.
 - Contributor statistics come from Aetrix's own ledger. Nothing reconciles them against
   Google's billing or quota surfaces.
 - The self-service contributor routes exist, but no teacher-facing screen calls them yet;

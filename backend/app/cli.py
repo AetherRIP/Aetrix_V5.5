@@ -12,14 +12,15 @@ import uuid
 
 from .core.config import Environment, get_settings
 from .db.models import Tenant, User
-from .db.repositories import TenantRepository, UserRepository
+from .db.repositories import UserRepository
 from .db.session import session_scope
+from .services.workspace_creation import WorkspaceCreationService
 
 
 def create_tenant(name: str, slug: str) -> None:
     with session_scope() as session:
-        tenant = TenantRepository(session).create(name=name, slug=slug)
-        print(f"tenant {tenant.id} {tenant.slug}")
+        tenant = WorkspaceCreationService(session).create(name=name, slug=slug)
+        print(f"tenant {tenant.id} {tenant.slug} template={tenant.workspace_template}")
 
 
 def create_user(tenant_id: uuid.UUID, subject: str, role: str) -> None:

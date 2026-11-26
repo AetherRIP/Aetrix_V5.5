@@ -187,6 +187,7 @@ def test_an_assignment_is_refused_until_its_criteria_are_approved(
                 scheme_version_id=version.id,
                 name="Never markable",
             ),
+            allow_unassigned=True,
         )
 
     assert raised.value.code is ErrorCode.ASSIGNMENT_NOT_READY
@@ -227,6 +228,7 @@ def test_a_scheme_from_another_paper_cannot_configure_an_assignment(
                 scheme_version_id=other_version.id,
                 name="Mismatched pair",
             ),
+            allow_unassigned=True,
         )
 
     assert raised.value.code is ErrorCode.NOT_FOUND
@@ -325,6 +327,7 @@ def test_approved_criteria_let_the_assignment_and_a_correction_job_exist(
             scheme_version_id=version.id,
             name="Workflow assignment",
         ),
+        allow_unassigned=True,
     )
     submission = Submission(
         tenant_id=identity.tenant_a.id,
@@ -765,6 +768,7 @@ def test_a_criterion_changed_after_approval_blocks_the_assignment(
                 scheme_version_id=version.id,
                 name="Edited criteria",
             ),
+            allow_unassigned=True,
         )
 
     assert raised.value.code is ErrorCode.ASSIGNMENT_NOT_READY
@@ -844,6 +848,7 @@ def test_another_tenant_cannot_build_an_assignment_or_coursework(
                 scheme_version_id=paper.scheme_version.id,
                 name="Foreign assignment",
             ),
+            allow_unassigned=True,
         )
     with pytest.raises(AppError) as coursework_refused:
         ClassroomCourseworkService(db_session, get_settings()).create(

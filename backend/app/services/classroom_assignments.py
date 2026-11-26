@@ -36,7 +36,11 @@ from ..schemas.classroom_integration import (
     CourseworkRead,
     CourseworkUpdate,
 )
-from .classroom_access import ensure_teaching, require_allocation
+from .classroom_access import (
+    allowed_course_ids,
+    ensure_teaching,
+    require_course_access,
+)
 from .classroom_google import (
     ClassroomUpstreamError,
     UpstreamKind,
@@ -127,11 +131,16 @@ class ClassroomCourseworkService:
         )
 
     def list(self, principal: Principal) -> list[CourseworkRead]:
-        rows = self.session.execute(
+        allowed = allowed_course_ids(self.session, principal)
+        statement = (
             select(ClassroomCourseworkLink, Assignment)
             .join(Assignment, ClassroomCourseworkLink.assignment_id == Assignment.id)
             .where(ClassroomCourseworkLink.tenant_id == principal.tenant_id)
-            .order_by(ClassroomCourseworkLink.created_at.desc())
+        )
+        if allowed is not None:
+            statement = statement.where(ClassroomCourseworkLink.course_id.in_(allowed))
+        rows = self.session.execute(
+            statement.order_by(ClassroomCourseworkLink.created_at.desc())
         ).all()
         counts = self._submission_counts(principal.tenant_id)
         return [
@@ -157,6 +166,7 @@ class ClassroomCourseworkService:
 
     def read(self, principal: Principal, link_id: uuid.UUID) -> CourseworkRead:
         link, assignment = self._get(principal.tenant_id, link_id)
+        require_course_access(self.session, principal, course_id=link.course_id)
         counts = self._submission_counts(principal.tenant_id)
         return self._read(link, assignment, counts.get(link.id, 0))
 
@@ -165,9 +175,9 @@ class ClassroomCourseworkService:
         self, principal: Principal, payload: CourseworkCreate
     ) -> CourseworkRead:
         ensure_teaching(principal)
-        _allocation, classroom = require_allocation(
+        _allocation, classroom = require_course_access(
             self.session,
-            principal.tenant_id,
+            principal,
             classroom_class_id=payload.classroom_class_id,
         )
         if classroom.course_state != "ACTIVE":
@@ -396,8 +406,8 @@ class ClassroomCourseworkService:
                 "This assignment is already being published. Wait for the "
                 "current attempt to finish before retrying.",
             )
-        _allocation, classroom = require_allocation(
-            self.session, principal.tenant_id, course_id=link.course_id
+        _allocation, classroom = require_course_access(
+            self.session, principal, course_id=link.course_id
         )
         if classroom.course_state != "ACTIVE":
             raise AppError(
@@ -573,6 +583,7 @@ class ClassroomCourseworkService:
     ) -> CourseworkRead:
         ensure_teaching(principal)
         link, assignment = self._get(principal.tenant_id, link_id)
+        require_course_access(self.session, principal, course_id=link.course_id)
         fields = (
             payload.title,
             payload.description,

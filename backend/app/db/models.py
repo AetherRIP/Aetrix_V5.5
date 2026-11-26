@@ -51,6 +51,56 @@ class Tenant(UUIDPrimaryKey, TimestampMixin, Base):
     #: A demo workspace is a real tenant whose principals are refused every
     #: mutation, so the public demo can never reach production data.
     is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: Which registered creation template produced this workspace (see
+    #: ``app.core.workspace_templates``).  NULL means the workspace predates the
+    #: record; it is never rewritten, so changing the platform default cannot
+    #: retroactively restyle an existing tenant.
+    workspace_template: Mapped[str | None] = mapped_column(String(40))
+
+
+class PlatformSettings(Base):
+    """The single authoritative platform configuration record.
+
+    Exactly one row exists, fixed at ``id = 1`` and enforced by a check
+    constraint: there is no per-workspace copy and no second configuration
+    system.  ``version`` makes a concurrent update visible to the writer instead
+    of silently overwriting it, and the last-change fields record the verified
+    actor rather than a browser-supplied name.
+    """
+
+    __tablename__ = "platform_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="singleton"),
+        CheckConstraint(
+            "uploaded_script_retention_days BETWEEN 1 AND 3650",
+            name="retention_days_range",
+        ),
+        CheckConstraint("version >= 1", name="version_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    default_workspace_template: Mapped[str] = mapped_column(String(40), nullable=False)
+    uploaded_script_retention_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    audit_view_allowed_account_types: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    #: The actor as they were named at the time, so the record survives the
+    #: account being removed.
+    updated_by_label: Mapped[str | None] = mapped_column(String(320))
+    updated_by_subject: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
 
 
 class ServiceHeartbeat(Base):
@@ -243,6 +293,18 @@ class Assignment(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     completion_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.8)
     review_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="BALANCED")
+    #: The Classroom class this assignment belongs to.  The allocation is the
+    #: validated owner of the course, so a class reference cannot cross a
+    #: workspace boundary or survive a released allocation.  NULL marks a
+    #: legacy or manually created assignment: it is never attached to a class
+    #: by a migration, and it stays out of every class-scoped list.
+    classroom_allocation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("classroom_allocations.id", ondelete="SET NULL"), nullable=True
+    )
+    #: Snapshots read by lists and audits without another join.  They are
+    #: written only from the allocation the service validated.
+    course_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    class_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -308,6 +370,10 @@ class Document(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
     )
     error_code: Mapped[str | None] = mapped_column(String(80))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: When the retention sweep removed this document's stored bytes.  The row,
+    #: its hash and its page text stay: the record of what was ingested and what
+    #: was decided remains traceable long after the paper itself is gone.
+    storage_purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DocumentPage(UUIDPrimaryKey, TenantScoped, Base):
@@ -340,6 +406,9 @@ class DocumentPage(UUIDPrimaryKey, TenantScoped, Base):
     text_excerpt: Mapped[str | None] = mapped_column(Text)
     rotation_degrees: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Set when the retention sweep deleted this page's rendered image.  The
+    #: extracted text, quality verdicts and dimensions are kept.
+    storage_purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duplicate_of_page_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("document_pages.id", ondelete="SET NULL"), nullable=True
     )
@@ -812,20 +881,51 @@ class ProviderContributor(UUIDPrimaryKey, TimestampMixin, Base):
     withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
-    """One Gemini API key.
+#: The three states of a credential's Google Cloud project identity.
+#: ``VERIFIED`` comes only from Google Resource Manager, ``DECLARED`` from an
+#: audited administrator assertion, and anything else is unestablished.  This is
+#: *evidence about Google's meter*, not the Aetrix accounting unit: an
+#: unestablished project makes Google-level capacity UNKNOWN, and it never makes
+#: the credential unusable as its own Aetrix pool.
+PROJECT_IDENTITY_VERIFIED = "VERIFIED"
+PROJECT_IDENTITY_DECLARED = "DECLARED"
+PROJECT_IDENTITY_UNVERIFIED = "PROJECT_IDENTITY_UNVERIFIED"
+ESTABLISHED_PROJECT_IDENTITIES = (
+    PROJECT_IDENTITY_VERIFIED,
+    PROJECT_IDENTITY_DECLARED,
+)
 
-    ``project_id`` is the Google Cloud project the key bills against, and it is
-    the unit of quota: keys sharing a project share one rate-limit pool.  It is
-    never derived from the key itself — an operator supplies it, because several
-    keys routinely belong to one project and a rotation must not look like a new
-    pool.
+#: Every credential is its own operational pool.  The prefix is part of the
+#: stored value so a dashboard can tell an Aetrix pool from a Google project.
+POOL_ID_PREFIX = "gemini-key-"
+
+#: What Aetrix can say about the *Google* allowance behind a credential:
+#: ``KNOWN`` (an established project, a configured limit, no active quota
+#: quarantine), ``EXHAUSTED`` (Google returned a quota refusal and the key is
+#: quarantined), ``UNKNOWN`` (no established project, so per-project capacity
+#: cannot be stated at all).
+GOOGLE_QUOTA_KNOWN = "KNOWN"
+GOOGLE_QUOTA_EXHAUSTED = "EXHAUSTED"
+GOOGLE_QUOTA_UNKNOWN = "UNKNOWN"
+
+
+class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
+    """One Gemini API key, and therefore one Aetrix credential pool.
+
+    ``pool_id`` is ``gemini-key-{id}`` and is the unit of *Aetrix* accounting:
+    reservations, budgets, quarantine and failure counters are kept per pool, so
+    fifteen lent keys can each be observed and enabled on their own.
+
+    Aetrix pools are **not** evidence of separate Google Cloud projects.  Google
+    may meter several API keys under one project, so ``project_id`` and
+    ``project_identity`` remain the only statement about Google's own meter, and
+    when the identity is unestablished the Google allowance behind a pool is
+    ``UNKNOWN``.  ``project_id`` is never derived from the key itself.
 
     ``contributor_id`` is null for a key the platform owns itself; a null is an
     explicit "platform-provisioned", never an unattributed contribution.  The
-    ownership chain the fleet is built on is
-    contributor -> credential -> Google Cloud project -> model quota, and one
-    contributor may appear in any number of those chains.
+    ownership chain is contributor -> credential pool -> (possibly shared)
+    Google Cloud project -> model quota.
     """
 
     __tablename__ = "provider_credentials"
@@ -840,9 +940,24 @@ class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
         CheckConstraint("tier IN ('FREE','PAID','UNKNOWN')", name="tier"),
         CheckConstraint("auth_type IN ('api_key','oauth')", name="auth_type"),
         UniqueConstraint("key_fingerprint", name="uq_provider_credential_fingerprint"),
+        UniqueConstraint("pool_id", name="uq_provider_credential_pool_id"),
+        CheckConstraint(
+            "pool_id LIKE 'gemini-key-%'", name="pool_id"
+        ),
+        CheckConstraint(
+            "cooldown_kind IS NULL OR cooldown_kind IN ('QUOTA','AUTH')",
+            name="cooldown_kind",
+        ),
         Index("ix_provider_credential_project", "project_id"),
         Index("ix_provider_credential_project_health", "project_id", "health"),
+        Index("ix_provider_credential_project_identity", "project_identity"),
+        CheckConstraint(
+            "project_identity IN "
+            "('VERIFIED','DECLARED','PROJECT_IDENTITY_UNVERIFIED')",
+            name="project_identity",
+        ),
         Index("ix_provider_credential_contributor", "contributor_id"),
+        Index("ix_provider_credential_cooldown", "cooldown_until"),
     )
 
     contributor_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -856,8 +971,23 @@ class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
     )
-    #: Google Cloud project id (or a synthetic pool id for legacy keys).
+    #: The Aetrix operational pool, ``gemini-key-{id}``.  Never a Google project
+    #: id and never shared between credentials.
+    pool_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Google Cloud project id (or a legacy pooled label for keys with no
+    #: established project).  Shared by keys when Google meters them together.
     project_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    #: Whether that id is established (see ``app.services.project_identity``).
+    #: ``PROJECT_IDENTITY_UNVERIFIED`` means nobody has asserted it: Google-level
+    #: capacity for this key is UNKNOWN.  The key is still a usable Aetrix pool.
+    project_identity: Mapped[str] = mapped_column(
+        String(40), nullable=False, default=PROJECT_IDENTITY_UNVERIFIED
+    )
+    project_identity_reason: Mapped[str | None] = mapped_column(String(300))
+    project_identity_declared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    project_identity_declared_by: Mapped[str | None] = mapped_column(String(200))
     auth_type: Mapped[str] = mapped_column(String(20), nullable=False, default="api_key")
     #: FREE / PAID / UNKNOWN.  UNKNOWN is never upgraded by guessing.
     tier: Mapped[str] = mapped_column(String(20), nullable=False, default="UNKNOWN")
@@ -867,7 +997,23 @@ class ProviderCredential(UUIDPrimaryKey, TimestampMixin, Base):
     model_access: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     budget: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     health: Mapped[str] = mapped_column(String(20), nullable=False, default="UNKNOWN")
+    #: When the pool may be leased again after a quota refusal or a refusal of
+    #: its credential.  Quarantine is per pool, never per Google project.
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Why the cooldown exists.  ``QUOTA`` makes Google quota ``EXHAUSTED``;
+    #: ``AUTH`` accompanies an ``INVALID`` health verdict.
+    cooldown_kind: Mapped[str | None] = mapped_column(String(20))
+    #: Consecutive failed attempts since the last success, reset by one success.
+    #: A count, not a verdict: only a 401 changes ``health``.
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    #: The last time Google said this pool's allowance was exhausted, and the
+    #: reason it gave, preserved verbatim so an operator can act on it.
+    last_quota_exhausted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_quota_reason: Mapped[str | None] = mapped_column(String(300))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_failure_status: Mapped[int | None] = mapped_column(Integer)
@@ -1365,6 +1511,45 @@ class ClassroomAllocation(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class ClassroomClassAssignment(UUIDPrimaryKey, TimestampMixin, Base):
+    """A person explicitly assigned to one allocated Classroom course.
+
+    Workspace membership is not class access.  A TEACHER or REVIEWER sees a
+    course only while an assignment row points at the allocation that is still
+    ACTIVE for their workspace.  OWNER, ADMIN and PLATFORM_OWNER manage the
+    workspace without needing a row, and a VIEWER is not assignable.
+
+    The row is deleted when the assignment is withdrawn; the audit event keeps
+    the history.  A release of the underlying allocation revokes access
+    immediately because every read joins the ACTIVE allocation.
+    """
+
+    __tablename__ = "classroom_class_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "allocation_id", "user_id", name="uq_classroom_assignment_allocation_user"
+        ),
+        Index("ix_classroom_assignment_workspace_user", "workspace_id", "user_id"),
+        Index("ix_classroom_assignment_allocation", "allocation_id"),
+    )
+
+    allocation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_allocations.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    assigned_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class ClassroomConnection(UUIDPrimaryKey, TimestampMixin, Base):
     """The platform's single Google Classroom authorisation.
 
@@ -1855,3 +2040,421 @@ class ClassroomSyncRun(UUIDPrimaryKey, TimestampMixin, Base):
         DateTime(timezone=True), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# -- Classroom submission monitoring --------------------------------------
+#
+# Monitoring is deliberately a separate layer from the manual Classroom sync in
+# ``services.classroom_submissions``: it keeps its own configuration, its own
+# submission-version history and its own inspection results, and it writes the
+# shared ``classroom_submission_links`` row only as a summary so existing
+# review, approval and grade publication keep working unchanged.
+
+
+class ClassroomMonitorConfig(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """Whether one published coursework is polled, and how it is behaving.
+
+    A row exists only for a coursework the platform has published.  Monitoring
+    is off until a teacher enables it, so a deployment never starts spending
+    Google or provider capacity on its own.  ``next_poll_at`` and
+    ``backoff_until`` make the scheduler restart-safe: a worker that dies
+    mid-cycle leaves a due time behind, not a lost submission.
+    """
+
+    __tablename__ = "classroom_monitor_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "coursework_link_id", name="uq_monitor_config_coursework"
+        ),
+        CheckConstraint(
+            "relevance_policy IN ('STRUCTURAL_ALLOW','TEXT_REQUIRED')",
+            name="relevance_policy",
+        ),
+        Index("ix_monitor_config_due", "enabled", "paused", "next_poll_at"),
+        Index("ix_monitor_config_tenant", "tenant_id"),
+    )
+
+    coursework_link_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_coursework_links.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auto_queue: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    #: Whether a readable submission with no extractable text may be marked on
+    #: structural evidence alone (page count, ink coverage) or must wait for a
+    #: teacher.  Handwritten work is normally scanned, so the default allows it
+    #: and records that the text comparison was impossible.
+    relevance_policy: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="STRUCTURAL_ALLOW"
+    )
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_poll_status: Mapped[str | None] = mapped_column(String(20))
+    last_poll_error: Mapped[str | None] = mapped_column(String(500))
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    backoff_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_counts: Mapped[dict[str, int]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    monitoring_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The person whose enabling of monitoring authorises the automatic jobs.
+    #: Every job they cause is audited against this user, and removing the user
+    #: stops automatic queueing rather than acting anonymously.
+    enabled_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    enabled_by_subject: Mapped[str | None] = mapped_column(String(200))
+
+
+class ClassroomSubmissionVersion(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """One immutable version of a student's Classroom work.
+
+    A resubmission is a new row with a new ``version``.  Nothing about an
+    earlier version is rewritten, so the report produced for it keeps pointing
+    at the exact attachment hashes it was marked from.
+
+    The two state machines are separate on purpose: ``state`` describes the
+    submission pipeline (detected, downloaded, inspected, ready...), and
+    ``correction_state`` describes the marking job.  A submission can be
+    ``READY`` with a correction that is ``FAILED``; conflating them would make a
+    provider outage look like unreadable work.
+    """
+
+    __tablename__ = "classroom_submission_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "submission_link_id",
+            "version",
+            name="uq_submission_version_number",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "submission_link_id",
+            "content_hash",
+            name="uq_submission_version_content",
+        ),
+        CheckConstraint(
+            "state IN ('DETECTED','DOWNLOADING','INSPECTING','READY','IGNORED',"
+            "'NEEDS_TEACHER','SUPERSEDED','FAILED')",
+            name="submission_state",
+        ),
+        CheckConstraint(
+            "correction_state IN ('NOT_QUEUED','QUEUED','PROCESSING',"
+            "'REVIEW_REQUIRED','COMPLETED','FAILED')",
+            name="correction_state",
+        ),
+        CheckConstraint(
+            "eligibility IN ('PENDING','ELIGIBLE','NEEDS_TEACHER','BLOCKED')",
+            name="eligibility",
+        ),
+        CheckConstraint(
+            "relevance IN ('UNASSESSED','LIKELY_RELEVANT','POSSIBLY_UNRELATED',"
+            "'INSUFFICIENT_EVIDENCE','CANNOT_DETERMINE')",
+            name="relevance",
+        ),
+        Index("ix_submission_version_link", "submission_link_id", "version"),
+        Index("ix_submission_version_state", "tenant_id", "state"),
+        Index("ix_submission_version_job", "correction_job_id"),
+    )
+
+    submission_link_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_submission_links.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    google_update_time: Mapped[str | None] = mapped_column(String(100))
+    google_state: Mapped[str | None] = mapped_column(String(40))
+    #: A digest of the Google metadata that identifies this version.  Unchanged
+    #: metadata is what prevents a repeated poll from downloading again.
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: A digest of the inspected bytes, in attachment order.  This is the job's
+    #: idempotency basis and the inspection-cache key.
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="DETECTED")
+    correction_state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="NOT_QUEUED"
+    )
+    eligibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PENDING"
+    )
+    relevance: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="UNASSESSED"
+    )
+    decision_reasons: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    inspection_summary: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    aetrix_submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("submissions.id", ondelete="SET NULL")
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    correction_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("correction_jobs.id", ondelete="SET NULL")
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    inspected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_subject: Mapped[str | None] = mapped_column(String(200))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_note: Mapped[str | None] = mapped_column(String(500))
+
+
+class ClassroomSubmissionAttachment(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """One attachment of one submission version, in Google's order.
+
+    External links are recorded and never fetched.  A Drive file is recorded
+    with the digest of what was actually downloaded, so the mark can always be
+    traced to exact bytes.
+    """
+
+    __tablename__ = "classroom_submission_attachments"
+    __table_args__ = (
+        UniqueConstraint("version_id", "position", name="uq_attachment_position"),
+        CheckConstraint(
+            "kind IN ('DRIVE_FILE','LINK','YOUTUBE_VIDEO','FORM','UNKNOWN')",
+            name="attachment_kind",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING','DOWNLOADED','CONVERTED','IGNORED',"
+            "'UNSUPPORTED','FAILED','REJECTED')",
+            name="attachment_status",
+        ),
+        Index("ix_attachment_version", "version_id", "position"),
+    )
+
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_submission_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    google_file_id: Mapped[str | None] = mapped_column(String(300))
+    title: Mapped[str | None] = mapped_column(String(300))
+    declared_mime: Mapped[str | None] = mapped_column(String(200))
+    detected_mime: Mapped[str | None] = mapped_column(String(120))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    storage_key: Mapped[str | None] = mapped_column(String(500))
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    inspection: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class ClassroomInspectionCache(UUIDPrimaryKey, TenantScoped, Base):
+    """Deterministic inspection findings, keyed by the bytes' digest.
+
+    The cache is tenant-scoped so one workspace's content never becomes
+    readable to another.  It stores the same excerpt the page rows already
+    store, never the file itself.
+    """
+
+    __tablename__ = "classroom_inspection_cache"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "content_sha256", name="uq_inspection_sha"),
+    )
+
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    readable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    findings: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ClassroomMonitorRun(UUIDPrimaryKey, TenantScoped, Base):
+    """One polling cycle for one assignment, successful or not.
+
+    Its own table rather than a ``classroom_sync_runs`` row: monitoring and the
+    teacher's manual sync have different triggers, different counts and
+    different retry semantics, and folding them together would make the sync
+    history lie about what ran.
+    """
+
+    __tablename__ = "classroom_monitor_runs"
+    __table_args__ = (
+        CheckConstraint("trigger IN ('SCHEDULE','MANUAL')", name="trigger"),
+        CheckConstraint(
+            "status IN ('RUNNING','SUCCEEDED','PARTIAL','FAILED','SKIPPED')",
+            name="status",
+        ),
+        Index("ix_monitor_run_tenant", "tenant_id", "started_at"),
+        Index("ix_monitor_run_coursework", "coursework_link_id", "started_at"),
+    )
+
+    coursework_link_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("classroom_coursework_links.id", ondelete="CASCADE")
+    )
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="RUNNING")
+    counts: Mapped[dict[str, int]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    actor_subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Conversation(UUIDPrimaryKey, TenantScoped, TimestampMixin, Base):
+    """One direct thread or one workspace channel.
+
+    ``WORKSPACE`` channels are visible to every member of the tenant that owns
+    them. ``DIRECT`` threads are visible only through ``conversation_members``.
+    The two unique keys are partial by construction because PostgreSQL permits
+    repeated NULLs in a unique constraint.
+    """
+
+    __tablename__ = "conversations"
+    __table_args__ = (
+        CheckConstraint("kind IN ('DIRECT','CHANNEL')", name="kind"),
+        CheckConstraint(
+            "(kind = 'DIRECT' AND direct_key IS NOT NULL AND channel_key IS NULL) "
+            "OR (kind = 'CHANNEL' AND channel_key IS NOT NULL AND direct_key IS NULL)",
+            name="identity",
+        ),
+        CheckConstraint(
+            "post_policy IN ('EVERYONE','MANAGERS')", name="post_policy"
+        ),
+        UniqueConstraint("tenant_id", "direct_key", name="uq_conversation_direct"),
+        UniqueConstraint("tenant_id", "channel_key", name="uq_conversation_channel"),
+        Index("ix_conversation_tenant_last", "tenant_id", "last_message_at"),
+        Index("ix_conversation_tenant_archived", "tenant_id", "archived_at"),
+    )
+
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    direct_key: Mapped[str | None] = mapped_column(String(80))
+    channel_key: Mapped[str | None] = mapped_column(String(80))
+    title: Mapped[str | None] = mapped_column(String(120))
+    topic: Mapped[str | None] = mapped_column(String(500))
+    post_policy: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="EVERYONE"
+    )
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: An archived channel keeps its history but is hidden from non-managers
+    #: and rejects new messages until a manager restores it.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ConversationMember(UUIDPrimaryKey, TenantScoped, Base):
+    """Private-thread membership and per-conversation read state.
+
+    Workspace channels are reachable by tenant membership, so a row here is
+    only the reader's watermark in a channel and is created on first read.
+    """
+
+    __tablename__ = "conversation_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "user_id", name="uq_conversation_member"
+        ),
+        Index("ix_conversation_member_user", "tenant_id", "user_id"),
+    )
+
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    muted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class Message(UUIDPrimaryKey, TenantScoped, Base):
+    """A stored message. Deletion is a tombstone, never a silent rewrite."""
+
+    __tablename__ = "messages"
+    __table_args__ = (
+        CheckConstraint("char_length(body) <= 4000", name="body_length"),
+        UniqueConstraint(
+            "sender_id", "client_id", name="uq_message_sender_client"
+        ),
+        Index("ix_message_conversation_time", "conversation_id", "created_at", "id"),
+        Index("ix_message_tenant_time", "tenant_id", "created_at"),
+    )
+
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    sender_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Browser-generated retry key. A repeated send returns the stored row.
+    client_id: Mapped[str | None] = mapped_column(String(64))
+    reply_to_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL")
+    )
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pinned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pinned_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class MessageNotification(UUIDPrimaryKey, TenantScoped, Base):
+    """One addressable message event, created once per recipient."""
+
+    __tablename__ = "message_notifications"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('DIRECT','MENTION','REPLY','ANNOUNCEMENT')", name="kind"
+        ),
+        UniqueConstraint("user_id", "message_id", name="uq_message_notification"),
+        Index("ix_message_notification_user", "tenant_id", "user_id", "read_at"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )

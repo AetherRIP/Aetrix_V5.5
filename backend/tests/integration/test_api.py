@@ -5,7 +5,15 @@ import uuid
 from app.core.config import get_settings
 from app.core.ids import utcnow
 from app.core.security import Principal
-from app.db.models import MarkScheme, MarkSchemeVersion
+from app.correction.scheme_criteria import criteria_rules_hash
+from app.db.models import (
+    Assignment,
+    ClassroomAllocation,
+    ClassroomClass,
+    MarkingCriterion,
+    MarkScheme,
+    MarkSchemeVersion,
+)
 from app.jobs.service import JobService
 from app.schemas.api import CorrectionCreate
 
@@ -123,6 +131,11 @@ def test_correction_api_end_to_end(client, identity, auth_headers, db_session) -
     )
     db_session.add(scheme)
     db_session.flush()
+    # An assignment whose scheme carries no approved criteria cannot be marked,
+    # and the API says so before anything is dispatched.  The fixture therefore
+    # supplies a real, approved criterion set: one mark point carrying all ten
+    # marks of the single-question blueprint, reviewed against that blueprint.
+    structure = _structure()
     scheme_version = MarkSchemeVersion(
         tenant_id=identity.tenant_a.id,
         mark_scheme_id=scheme.id,
@@ -131,8 +144,47 @@ def test_correction_api_end_to_end(client, identity, auth_headers, db_session) -
         source="FIXTURE",
         content_hash="d" * 64,
         approved_at=utcnow(),
+        criteria_blueprint_version_id=uuid.UUID(blueprint["id"]),
+        criteria_approved_at=utcnow(),
+        criteria_approved_by=identity.user_a.id,
+        criteria_approval_reason="fixture review against the approved blueprint",
     )
     db_session.add(scheme_version)
+    db_session.flush()
+    criterion = MarkingCriterion(
+        tenant_id=identity.tenant_a.id,
+        scheme_version_id=scheme_version.id,
+        blueprint_version_id=uuid.UUID(blueprint["id"]),
+        question_id="1",
+        code="A1",
+        ordinal=0,
+        marks=10,
+        description="A1 for the complete correct answer",
+        dependencies=[],
+        alternatives=[],
+        source_ref={},
+    )
+    db_session.add(criterion)
+    db_session.flush()
+    scheme_version.criteria_rules_hash = criteria_rules_hash([criterion], structure)
+    classroom = ClassroomClass(
+        course_id="900988657199",
+        name="Aetrix Testing",
+        verification="VERIFIED",
+        source="test",
+        created_by_subject="test",
+    )
+    db_session.add(classroom)
+    db_session.flush()
+    allocation = ClassroomAllocation(
+        classroom_class_id=classroom.id,
+        workspace_id=identity.tenant_a.id,
+        course_id=classroom.course_id,
+        class_name=classroom.name,
+        workspace_name=identity.tenant_a.name,
+        allocated_by_subject="test",
+    )
+    db_session.add(allocation)
     db_session.commit()
 
     assignment_response = client.post(
@@ -145,6 +197,7 @@ def test_correction_api_end_to_end(client, identity, auth_headers, db_session) -
             "name": "API assignment",
             "completion_threshold": 0.8,
             "review_mode": "BALANCED",
+            "course_id": classroom.course_id,
         },
     )
     assert assignment_response.status_code == 201, assignment_response.text
@@ -305,3 +358,150 @@ def test_tenant_scoped_read_contracts(client, identity, auth_headers, paper) -> 
         ).status_code
         == 404
     )
+
+
+def test_an_assignment_must_name_a_class_of_this_workspace(
+    client, identity, auth_headers, paper, db_session
+) -> None:
+    """The playtest found assignments with no class at all.
+
+    The route now requires one, and the service resolves it through this
+    workspace's active allocation, so a bare or foreign course id is refused.
+    """
+
+    classroom = ClassroomClass(
+        course_id="create-course",
+        name="Creation class",
+        verification="VERIFIED",
+        source="FIXTURE",
+        created_by_subject=identity.user_a.subject,
+    )
+    db_session.add(classroom)
+    db_session.flush()
+    allocation = ClassroomAllocation(
+        classroom_class_id=classroom.id,
+        workspace_id=identity.tenant_a.id,
+        course_id=classroom.course_id,
+        class_name=classroom.name,
+        workspace_name=identity.tenant_a.name,
+        allocated_by_subject=identity.user_a.subject,
+    )
+    db_session.add(allocation)
+    db_session.commit()
+
+    headers = auth_headers(identity.user_a)
+    body = {
+        "exam_id": str(paper.exam.id),
+        "blueprint_version_id": str(paper.blueprint.id),
+        "scheme_version_id": str(paper.scheme_version.id),
+        "name": "Classless assignment",
+    }
+
+    missing = client.post("/api/v1/assignments", headers=headers, json=body)
+    assert missing.status_code == 422, missing.text
+    assert missing.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "Select the class" in missing.json()["error"]["message"]
+
+    foreign = client.post(
+        "/api/v1/assignments",
+        headers=headers,
+        json={**body, "course_id": "not-allocated-here"},
+    )
+    assert foreign.status_code == 404, foreign.text
+
+    accepted = client.post(
+        "/api/v1/assignments",
+        headers=headers,
+        json={**body, "course_id": allocation.course_id},
+    )
+    assert accepted.status_code == 201, accepted.text
+    saved = accepted.json()
+    assert saved["course_id"] == allocation.course_id
+    assert saved["class_name"] == classroom.name
+    assert saved["classroom_allocation_id"] == str(allocation.id)
+
+
+def test_a_reviewer_sees_only_the_assignments_of_their_classes(
+    client, identity, auth_headers, paper, db_session
+) -> None:
+    """The playtest found an assistant reading every workspace correction job.
+
+    A class-scoped assignment the reviewer holds is listed and readable.  A
+    legacy assignment names no class, so nothing proves it belongs to the
+    reviewer: it stays out of their list and its detail is reported missing.
+    """
+
+    from app.db.models import ClassroomAllocation, ClassroomClass, ClassroomClassAssignment
+
+    classroom = ClassroomClass(
+        course_id="reviewer-course",
+        name="Reviewer class",
+        verification="VERIFIED",
+        source="FIXTURE",
+        created_by_subject=identity.user_a.subject,
+    )
+    db_session.add(classroom)
+    db_session.flush()
+    allocation = ClassroomAllocation(
+        classroom_class_id=classroom.id,
+        workspace_id=identity.tenant_a.id,
+        course_id=classroom.course_id,
+        class_name=classroom.name,
+        workspace_name=identity.tenant_a.name,
+        allocated_by_subject=identity.user_a.subject,
+    )
+    db_session.add(allocation)
+    db_session.flush()
+    db_session.add(
+        ClassroomClassAssignment(
+            allocation_id=allocation.id,
+            workspace_id=identity.tenant_a.id,
+            user_id=identity.reviewer.id,
+            assigned_by_user_id=identity.user_a.id,
+        )
+    )
+    scoped = Assignment(
+        tenant_id=identity.tenant_a.id,
+        exam_id=paper.exam.id,
+        blueprint_version_id=paper.blueprint.id,
+        scheme_version_id=paper.scheme_version.id,
+        name="Reviewer class assignment",
+        completion_threshold=0.8,
+        review_mode="BALANCED",
+        created_by=identity.user_a.id,
+        classroom_allocation_id=allocation.id,
+        course_id=allocation.course_id,
+        class_name=allocation.class_name,
+    )
+    legacy = Assignment(
+        tenant_id=identity.tenant_a.id,
+        exam_id=paper.exam.id,
+        blueprint_version_id=paper.blueprint.id,
+        scheme_version_id=paper.scheme_version.id,
+        name="Legacy unassigned",
+        completion_threshold=0.8,
+        review_mode="BALANCED",
+        created_by=identity.user_a.id,
+    )
+    db_session.add_all([scoped, legacy])
+    db_session.commit()
+
+    headers = auth_headers(identity.reviewer)
+    listed = client.get(
+        f"/api/v1/workspaces/{identity.tenant_a.id}/assignments", headers=headers
+    )
+    assert listed.status_code == 200, listed.text
+    ids = {row["id"] for row in listed.json()}
+    assert str(scoped.id) in ids
+    assert str(legacy.id) not in ids
+
+    assert (
+        client.get(f"/api/v1/assignments/{scoped.id}", headers=headers).status_code == 200
+    )
+    hidden = client.get(f"/api/v1/assignments/{legacy.id}", headers=headers)
+    assert hidden.status_code == 404, hidden.text
+
+    owner = client.get(
+        f"/api/v1/assignments/{legacy.id}", headers=auth_headers(identity.user_a)
+    )
+    assert owner.status_code == 200, owner.text

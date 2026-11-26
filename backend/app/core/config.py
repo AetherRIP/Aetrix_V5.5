@@ -26,12 +26,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ..correction.transcription import TRANSCRIPTION_REQUEST_MAX_PAGES
 from .marking_policy import (
-    DISABLED_MARKING_MODELS,
+    PRIMARY_MARKING_MODELS,
     PRODUCTION_MARKING_MODEL,
-    is_disabled_marking_model,
     marking_model_problem,
 )
-from .model_permissions import AICapability, role_configuration_problem
+from .model_permissions import (
+    AICapability,
+    PermissionStatus,
+    permission_for,
+    permission_problem,
+    role_configuration_problem,
+)
 
 DEV_ENCRYPTION_KEY = "dev-only-not-for-production-rotate-me-0000000000="
 
@@ -90,8 +95,14 @@ class DatabaseSettings(BaseModel):
     """PostgreSQL only.  SQLite is not a supported production dialect."""
 
     url: SecretStr
-    pool_size: int = Field(default=5, ge=1, le=50)
-    max_overflow: int = Field(default=10, ge=0, le=100)
+    #: A Supabase *session* pooler allows only 15 clients for the whole project,
+    #: shared by the API, the worker and any migration process.  The old defaults
+    #: (5 + 10 overflow per process) let two services alone reach 30 and produced
+    #: intermittent ``EMAXCONNSESSION`` 500s.  Five connections per process keeps
+    #: two services at 10 with headroom for migrations; raise it deliberately,
+    #: never by reverting to a per-process ceiling above the project's pool size.
+    pool_size: int = Field(default=4, ge=1, le=50)
+    max_overflow: int = Field(default=1, ge=0, le=100)
     pool_pre_ping: bool = True
     pool_recycle_seconds: int = Field(default=1800, ge=60)
     statement_timeout_ms: int = Field(default=15_000, ge=1_000, le=300_000)
@@ -218,6 +229,25 @@ class ClassroomSettings(BaseModel):
     #: verifies that the state belongs to the authenticated workspace account.
     state_ttl_seconds: int = Field(default=600, ge=60, le=1800)
     max_courses: int = Field(default=2000, ge=1, le=10_000)
+    # -- automatic submission monitoring ----------------------------------
+    #: The worker's monitoring thread is off unless a deployment asks for it.
+    #: Even then, no assignment is polled until a teacher enables monitoring on
+    #: that coursework: the two switches are separate on purpose.
+    monitoring_enabled: bool = False
+    monitor_interval_seconds: int = Field(default=300, ge=60, le=86_400)
+    #: Failures back off exponentially from the interval up to this ceiling.
+    monitor_max_backoff_seconds: int = Field(default=3600, ge=60, le=86_400)
+    #: How many due assignments one cycle will poll before waiting for the next.
+    monitor_max_per_cycle: int = Field(default=10, ge=1, le=200)
+    #: How long the worker waits between two monitoring cycles.
+    monitor_tick_seconds: int = Field(default=60, ge=10, le=3600)
+    #: A Google Workspace document larger than this is refused rather than
+    #: exported into memory.
+    monitor_max_pages: int = Field(default=80, ge=1, le=500)
+    #: A file this small cannot be a usable answer script.  Deliberately low:
+    #: a one-page PDF with a few lines of text is legitimately under 2 KB, and
+    #: a page-level check is the real test of usability.
+    monitor_min_bytes: int = Field(default=512, ge=1)
 
     @field_validator("client_id", "client_secret", "redirect_uri", mode="before")
     @classmethod
@@ -299,29 +329,38 @@ def _default_model_chains() -> dict[str, list[ModelChainEntry]]:
     to another marking model, which this build refuses.  When the model cannot
     be used the job is parked with a provider error and no mark is invented.
 
-    ``review`` is the independent second examiner, used only by the optional
+    ``review`` is the independent evidence checker, used only by the optional
     double check and the blind transcription.  It must not be the marking model
-    for a disagreement to mean anything, so it names ``gemini-2.5-flash`` and
-    **no marking-model fallback**: falling back into ``gemini-3.6-flash`` would
-    make the "independent" reading the model that produced the marks, which is
-    the defect the transcription comparison exists to detect.  A role with no
+    for a disagreement to mean anything, so it names ``gemini-3.5-flash-lite``
+    and **no marking-model fallback**: falling back into a primary would make
+    the "independent" reading the model that produced the marks, which is the
+    defect the transcription comparison exists to detect.  A role with no
     permitted model refuses at the routing boundary instead of borrowing the
     marking model.
 
-    ``lightweight`` is extraction/classification work.  It never marks a paper;
-    the two Lite models that earlier experiments used for marking are disabled
-    here and cannot be selected as a fallback.
+    ``lightweight`` is the blind transcription reader: extraction and reading
+    work, performed by ``gemini-3.1-flash-lite``.  It never marks a paper; a
+    Lite model cannot be selected for marking or reached as a marking fallback.
+
+    ``gemini-2.5-flash`` was retired by Google on 2026-10-20 and is no longer
+    named by any default chain.  A deployment that still names it fails at the
+    routing boundary with an actionable refusal rather than silently calling a
+    retired model.
     """
 
     return {
         "primary": [
             ModelChainEntry(model=PRODUCTION_MARKING_MODEL),
         ],
+        # The evidence checker first; the blind reader after it.  A review call
+        # takes the first, a transcription call skips it and takes the second,
+        # because each entry is filtered by the capability of the call.
         "review": [
-            ModelChainEntry(model="gemini-2.5-flash", timeout_seconds=180.0),
+            ModelChainEntry(model="gemini-3.5-flash-lite", timeout_seconds=180.0),
+            ModelChainEntry(model="gemini-3.1-flash-lite", timeout_seconds=180.0),
         ],
         "lightweight": [
-            ModelChainEntry(model="gemini-2.5-flash", timeout_seconds=120.0),
+            ModelChainEntry(model="gemini-3.1-flash-lite", timeout_seconds=120.0),
         ],
     }
 
@@ -331,11 +370,36 @@ class ProviderSettings(BaseModel):
     #: The one production marking model.  Configuration validation refuses any
     #: other value, so this is not a preference an environment can override.
     model_primary: str = PRODUCTION_MARKING_MODEL
+    #: Every model eligible to be assigned a paper, highest priority first.  A
+    #: paper is assigned exactly one of them; see ``app.services.model_scheduler``.
+    primary_marking_models: list[str] = Field(
+        default_factory=lambda: list(PRIMARY_MARKING_MODELS)
+    )
+    #: Whether the scheduler chooses among the eligible primaries.  Off by
+    #: default: the three-model pool is configured and tested, but spreading real
+    #: papers across it is a production activation that waits for the gates --
+    #: verified ids, capability and credential access, declared budgets, privacy
+    #: and a benchmark on reference-marked papers (see ``model_registry`` and the
+    #: mission's activation list).  With it off, ``model_primary`` is used for
+    #: every paper, which is both the previous behaviour and the rollback path.
+    scheduler_enabled: bool = False
+    #: The blind-transcription checker: reads the page without the criteria or
+    #: the primary model's marks.  ``None`` disables that check.
+    transcription_checker_model: str | None = "gemini-3.1-flash-lite"
+    #: The evidence checker: independently inspects criteria and evidence.
+    evidence_checker_model: str | None = "gemini-3.5-flash-lite"
+    #: Fraction of questions that must be verified even when no risk rule fires.
+    verification_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    #: A question whose award exceeds this fraction of its maximum is treated as
+    #: a high-mark risk candidate for verification.
+    verification_high_mark_fraction: float = Field(default=0.8, gt=0.0, le=1.0)
+    #: The most checking requests one paper may spend, across both checkers.
+    verification_request_budget: int = Field(default=12, ge=0, le=200)
     #: The review role is the second examiner and the blind reader.  It is not a
     #: marking model; the double check records disagreement instead of replacing
     #: an award.
-    model_review: str = "gemini-2.5-flash"
-    model_lightweight: str = "gemini-2.5-flash"
+    model_review: str = "gemini-3.5-flash-lite"
+    model_lightweight: str = "gemini-3.1-flash-lite"
     #: The model each specialist role *would* use, and whether that role may run.
     #: Neither role is implemented or active in this build: no code path reads
     #: these values to make a call, so they cannot activate a pipeline.  They
@@ -356,6 +420,13 @@ class ProviderSettings(BaseModel):
     #: How long a project's models.list result is reused before it is fetched
     #: again. Discovery is cached per project and key fingerprint.
     model_catalogue_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    #: Explicit credential selection for this deployment.  When set, every
+    #: provider call is leased from exactly that credential pool, and no other
+    #: key is substituted — not for a failure, and never to get around a quota.
+    #: Set it in ``AETRIX_PROVIDER__PINNED_CREDENTIAL_ID`` to run a pilot on one
+    #: authorised key while the rest of the fleet stays registered.  ``None``
+    #: lets the lease choose among enabled pools, one request at a time.
+    pinned_credential_id: UUID | None = None
     request_timeout_seconds: int = Field(default=300, ge=10, le=900)
     max_attempts: int = Field(default=4, ge=1, le=8)
     thinking_budget: int = Field(default=0, ge=0)
@@ -410,36 +481,63 @@ class ProviderSettings(BaseModel):
 
         primary = self.model_chains.get("primary") or []
         enabled = [entry for entry in primary if entry.enabled]
-        if len(enabled) != 1 or enabled[0].model != PRODUCTION_MARKING_MODEL:
-            names = [entry.model for entry in enabled]
+        if not enabled:
             raise ValueError(
-                "The primary (marking) model chain must contain exactly one "
-                f"enabled entry, {PRODUCTION_MARKING_MODEL!r}, and no fallback. "
-                f"This deployment configures {names!r}. A fallback that changes "
-                "the marking model would make the recorded model a guess; remove "
-                "the extra entries."
+                "The primary (marking) model chain has no enabled entry. Configure "
+                f"at least one of the verified marking models: "
+                f"{', '.join(PRIMARY_MARKING_MODELS)}."
             )
+        # The chain may name every verified primary, because the scheduler picks
+        # one per paper.  It may not name a fourth model, a duplicate, or a model
+        # the registry has not verified -- and a marking request still names one
+        # explicit model, so this list is a pool of eligible models, not a
+        # fallback chain that could swap mid-paper.
+        seen: list[str] = []
+        for entry in enabled:
+            problem = marking_model_problem(entry.model)
+            if problem is not None:
+                raise ValueError(
+                    f"The primary (marking) model chain names {entry.model!r}, "
+                    f"which may not mark a production paper. {problem}"
+                )
+            if entry.model in seen:
+                raise ValueError(
+                    f"The primary (marking) model chain names {entry.model!r} "
+                    "more than once; a paper is marked by one model once."
+                )
+            seen.append(entry.model)
 
+        # A non-marking chain is not judged by the marking rule: the two
+        # independent checkers are Lite models by design, and refusing them here
+        # would make the checker roles unconfigurable.  A chain also mixes
+        # purposes on purpose -- the ``review`` chain holds both the evidence
+        # checker and the blind-transcription reader, because the transcription
+        # prompt is filed under that role.  Each entry is therefore filtered by
+        # the permission for the capability of the *call*, at the routing
+        # boundary, which refuses with an actionable message when nothing in the
+        # chain is permitted.  Enforcing one role's capability on the whole chain
+        # here would make that mix impossible to configure.
         for role, entries in self.model_chains.items():
-            for entry in entries:
-                if is_disabled_marking_model(entry.model):
-                    raise ValueError(
-                        f"Model chain {role!r} names {entry.model!r}, which is a "
-                        "disabled lightweight model. Enabled marking models are "
-                        f"{PRODUCTION_MARKING_MODEL!r}; disabled: "
-                        f"{sorted(DISABLED_MARKING_MODELS)!r}."
-                    )
+            if role == "primary":
+                continue
+            if not any(entry.enabled for entry in entries):
+                raise ValueError(
+                    f"Model chain {role!r} has no enabled entry, so its role could "
+                    "never run. Enable the model the role should use."
+                )
 
         # The per-role environment fallbacks are read when no database selection
-        # exists, so they are policy-checked too.  A Lite value here could
+        # exists, so they are policy-checked too.  A disabled value here could
         # otherwise become the review role's first attempt through the back door.
-        for field_name in ("model_review", "model_lightweight"):
+        for field_name, check in (
+            ("model_review", AICapability.INDEPENDENT_REVIEW),
+            ("model_lightweight", AICapability.TRANSCRIPTION),
+        ):
             value = getattr(self, field_name)
-            if is_disabled_marking_model(value):
+            if permission_for(value, check) is PermissionStatus.DISABLED:
                 raise ValueError(
-                    f"{field_name} is {value!r}, a disabled lightweight model. "
-                    f"Enabled marking models are {PRODUCTION_MARKING_MODEL!r}; "
-                    f"disabled: {sorted(DISABLED_MARKING_MODELS)!r}."
+                    f"{field_name} is {value!r}, which is not permitted for "
+                    f"{check.value}. {permission_problem(value, check)}"
                 )
         return self
 
@@ -549,8 +647,13 @@ def _default_model_limits() -> dict[str, ModelQuota]:
         "gemini-2.5-flash": limit(5, 20),
         "gemini-3-flash-preview": limit(5, 20),
         "gemini-3.6-flash": limit(5, 20),
-        "gemini-3.8-flash": limit(5, 20),
+        # The other two verified primary marking models.  These are Aetrix's own
+        # conservative ceilings, deliberately the same as the model this engine
+        # has actually marked with: they bound spending until an operator
+        # establishes the real project allowance, and they are never presented
+        # as Google capacity.
         "gemini-4-hydrogen": limit(5, 20),
+        "gemini-3.8-flash": limit(5, 20),
     }
 
 

@@ -104,15 +104,11 @@ class FakeCredentialRepository:
 
 
 class FakePool:
-    """Credentials with explicit project identity.
+    """Credentials, each its own Aetrix pool, with a declared project label.
 
-    ``keys`` is a list of (credential_id, project_id).  Two keys in one project
-    are two keys and one quota pool — the distinction the routing has to respect.
-
-    ``verified_projects`` models Google's Resource Manager answer.  ``None`` means
-    "every spare project counts as verified", which keeps the older routing tests
-    about rotation readable; a set means only those ids may be used for a
-    cross-project quota fallback.
+    ``keys`` is a list of (credential_id, project_id).  The project id is only a
+    label here: the routing policy never uses it to decide that a spare key has an
+    allowance of its own.
     """
 
     def __init__(
@@ -120,9 +116,7 @@ class FakePool:
         projects: list[str],
         *,
         keys_per_model: int | None = None,
-        verified_projects: set[str] | None = None,
     ) -> None:
-        self.verified_projects = verified_projects
         self.allowance_checked: list[str] = []
         self.keys = [(uuid.uuid4(), project) for project in projects]
         # ``None`` means a credential can be leased again on a later attempt,
@@ -169,31 +163,14 @@ class FakePool:
             contributor_id=None,
         )
 
-    def alternatives(self, *, tenant_id, model, excluded, projects_tried):
-        available = [item for item in self.keys if item[0] not in excluded]
-        if not available:
-            return False, False
-        return True, any(project not in projects_tried for _, project in available)
+    def another_credential(self, *, tenant_id, model, excluded):
+        return any(item[0] not in excluded for item in self.keys)
 
     def allowance_problem(self, model: str) -> str | None:
         """No allowance policy is configured in these routing tests."""
 
         self.allowance_checked.append(model)
         return None
-
-    def verified_independent_project(
-        self, *, tenant_id, model, excluded, projects_tried
-    ) -> bool:
-        spare = [
-            project
-            for credential_id, project in self.keys
-            if credential_id not in excluded and project not in projects_tried
-        ]
-        if not spare:
-            return False
-        if self.verified_projects is None:
-            return True
-        return any(project in self.verified_projects for project in spare)
 
     def failure(self, lease, **kwargs):
         self.failures.append({"credential_id": lease.credential_id, **kwargs})
@@ -351,78 +328,21 @@ def test_a_repeated_503_is_retried_once_then_stops() -> None:
 # -- 429: quota is a project property ---------------------------------------
 
 
-def test_a_429_rotates_to_an_independent_project_credential() -> None:
-    provider = ScriptedProvider(
-        {MODEL_A: [ProviderQuotaError("quota", status_code=429), "{}"]}
-    )
-    usage = FakeUsage()
-    pool = FakePool(["project-one", "project-two"])
-    service = _service(provider, chain=CHAIN_AB, pool=pool, usage=usage)
+def test_a_429_quarantines_the_key_and_never_tries_a_sibling() -> None:
+    """Fifteen Aetrix pools are still not fifteen Google allowances.
 
-    result = _call(service)
-
-    assert provider.calls == [MODEL_A, MODEL_A]
-    assert result.response.model == MODEL_A
-    assert usage.rows[0]["routing_decision"] == "ROTATE_CREDENTIAL"
-    assert len({credential for _, credential in pool.leases_taken}) == 2
-    # The replacement must bill against a different project: that is the only
-    # thing that can recover a project-wide 429.
-    assert pool.projects_taken == ["project-one", "project-two"]
-
-
-def test_two_keys_in_one_project_are_not_independent_quota_pools() -> None:
-    provider = ScriptedProvider(
-        {MODEL_A: [ProviderQuotaError("quota", status_code=429)]}
-    )
-    usage = FakeUsage()
-    # Two keys, one project: swapping the key cannot recover the project ceiling.
-    pool = FakePool(["project-one", "project-one"])
-    service = _service(provider, chain=CHAIN_AB, pool=pool, usage=usage)
-
-    with pytest.raises(AppError):
-        _call(service)
-
-    assert provider.calls == [MODEL_A]
-    assert usage.rows[0]["routing_decision"] == "STOP"
-    assert usage.rows[0]["error_category"] == "quota"
-    # Nothing was leased from a second key, because a second key is not a second
-    # quota pool.
-    assert len(pool.leases_taken) == 1
-
-
-def test_a_429_does_not_rotate_to_an_unverified_project() -> None:
-    """A cross-project quota fallback needs a project Google has confirmed.
-
-    Without verification a spare key that names another id could be a typo, a
-    duplicate of the exhausted project or a deleted project; spending an attempt
-    on it would be paid for with the same allowance and buy another 429.
+    There is a spare key, and it names a different project label.  Neither fact
+    is evidence of a separate Google allowance, so the 429 stops the operation
+    after one request and quarantines only the key that received it.
     """
 
     provider = ScriptedProvider(
         {MODEL_A: [ProviderQuotaError("quota", status_code=429)]}
     )
     usage = FakeUsage()
-    pool = FakePool(
-        ["project-one", "project-two"], verified_projects=set()
-    )
-    service = _service(provider, chain=[ModelChainEntry(model=MODEL_A)], pool=pool, usage=usage)
-
-    with pytest.raises(AppError):
-        _call(service)
-
-    assert provider.calls == [MODEL_A]
-    assert usage.rows[0]["routing_decision"] == "STOP"
-    assert pool.projects_taken == ["project-one"]
-
-
-def test_a_429_with_no_independent_project_and_no_next_model_parks() -> None:
-    provider = ScriptedProvider(
-        {MODEL_A: [ProviderQuotaError("quota", status_code=429)]}
-    )
+    pool = FakePool(["project-one", "project-two"])
     service = _service(
-        provider,
-        chain=[ModelChainEntry(model=MODEL_A)],
-        pool=FakePool(["project-one", "project-one"]),
+        provider, chain=[ModelChainEntry(model=MODEL_A)], pool=pool, usage=usage
     )
 
     with pytest.raises(AppError) as error:
@@ -430,6 +350,34 @@ def test_a_429_with_no_independent_project_and_no_next_model_parks() -> None:
 
     assert error.value.code.value == "PROVIDER_UNAVAILABLE"
     assert provider.calls == [MODEL_A]
+    assert usage.rows[0]["routing_decision"] == "STOP"
+    assert usage.rows[0]["error_category"] == "quota"
+    assert len(pool.leases_taken) == 1
+    assert pool.projects_taken == ["project-one"]
+    # Quarantine is recorded with the key, not left as a bare failure.
+    assert pool.failures[0]["cooldown_seconds"]
+
+
+def test_a_429_cannot_fall_forward_to_a_disallowed_model() -> None:
+    """The marking chain has no second model, so a quota refusal is terminal."""
+
+    provider = ScriptedProvider(
+        {
+            MODEL_A: [ProviderQuotaError("quota", status_code=429)],
+            MODEL_B: ["{}"],
+        }
+    )
+    usage = FakeUsage()
+    pool = FakePool(["project-one", "project-one"])
+    service = _service(provider, chain=CHAIN_AB, pool=pool, usage=usage)
+
+    with pytest.raises(AppError):
+        _call(service)
+
+    assert provider.calls == [MODEL_A]
+    assert MODEL_B not in provider.calls
+    assert usage.rows[0]["routing_decision"] == "STOP"
+    assert len(pool.leases_taken) == 1
 
 
 # -- 404 / 400: model incompatibility ---------------------------------------
@@ -903,16 +851,27 @@ def test_classification(error, kind) -> None:
     assert classify_failure(error) is kind
 
 
-def test_quota_never_rotates_within_one_project() -> None:
+def test_quota_never_rotates_to_another_key() -> None:
+    """Even with a spare pool and attempts left, a 429 never becomes ROTATE."""
+
     action = decide(
         FailureKind.QUOTA,
         attempt_index=0,
         attempts_allowed=4,
-        next_model_available=True,
+        next_model_available=False,
         other_credential_available=True,
-        independent_credential_available=False,
     )
-    assert action is RoutingAction.NEXT_MODEL
+    assert action is RoutingAction.STOP
+    assert (
+        decide(
+            FailureKind.QUOTA,
+            attempt_index=0,
+            attempts_allowed=4,
+            next_model_available=True,
+            other_credential_available=True,
+        )
+        is RoutingAction.NEXT_MODEL
+    )
 
 
 def test_auth_never_advances_to_another_model_while_a_key_remains() -> None:
@@ -922,7 +881,6 @@ def test_auth_never_advances_to_another_model_while_a_key_remains() -> None:
         attempts_allowed=4,
         next_model_available=True,
         other_credential_available=True,
-        independent_credential_available=False,
     )
     assert action is RoutingAction.ROTATE_CREDENTIAL
 
@@ -934,7 +892,6 @@ def test_the_attempt_budget_is_bounded() -> None:
         attempts_allowed=3,
         next_model_available=False,
         other_credential_available=True,
-        independent_credential_available=True,
     )
     assert action is RoutingAction.STOP
 
@@ -948,7 +905,6 @@ def test_safety_refusal_is_always_a_stop() -> None:
                 attempts_allowed=4,
                 next_model_available=next_model,
                 other_credential_available=True,
-                independent_credential_available=True,
             )
             is RoutingAction.STOP
         )

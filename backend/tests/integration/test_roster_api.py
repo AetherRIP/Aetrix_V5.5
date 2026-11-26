@@ -241,12 +241,12 @@ def test_roster_changes_are_audited(client, identity, auth_headers) -> None:
         params={"entity_type": "class"},
     )
     assert audit.status_code == 200, audit.text
-    assert [row["action"] for row in audit.json()] == ["class.created"]
+    assert [row["action"] for row in audit.json()["items"]] == ["class.created"]
 
     students = client.get(
         f"/api/v1/workspaces/{workspace}/audit",
         headers=headers,
         params={"entity_type": "student"},
     )
-    assert [row["action"] for row in students.json()] == ["student.added"]
-    assert students.json()[0]["detail"]["student_ref"] == "S-001"
+    assert [row["action"] for row in students.json()["items"]] == ["student.added"]
+    assert students.json()["items"][0]["detail"]["student_ref"] == "S-001"

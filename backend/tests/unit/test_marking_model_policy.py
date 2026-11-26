@@ -70,6 +70,14 @@ def test_configuration_refuses_a_lite_marking_chain() -> None:
 
 
 def test_configuration_refuses_a_marking_fallback() -> None:
+    """A second entry may only be another verified primary, never a substitute.
+
+    The primary chain is now a *pool* of the three verified primaries that the
+    scheduler assigns across papers.  What it may never contain is a model that
+    is not allowed to mark -- that would be a fallback to a model the marking
+    policy refuses.
+    """
+
     with pytest.raises(ValidationError) as error:
         ProviderSettings(
             model_chains={
@@ -77,13 +85,46 @@ def test_configuration_refuses_a_marking_fallback() -> None:
                     ModelChainEntry(model=PRODUCTION_MARKING_MODEL),
                     ModelChainEntry(model="gemini-2.5-flash"),
                 ],
-                "review": [ModelChainEntry(model="gemini-2.5-flash")],
-                "lightweight": [ModelChainEntry(model="gemini-2.5-flash")],
+                "review": [ModelChainEntry(model="gemini-3.5-flash-lite")],
+                "lightweight": [ModelChainEntry(model="gemini-3.1-flash-lite")],
             }
         )
 
-    assert "exactly one enabled entry" in str(error.value)
-    assert "no fallback" in str(error.value)
+    assert "gemini-2.5-flash" in str(error.value)
+    assert "may not mark" in str(error.value)
+
+
+def test_configuration_accepts_the_three_verified_primaries_as_a_pool() -> None:
+    settings = ProviderSettings(
+        model_chains={
+            "primary": [
+                ModelChainEntry(model="gemini-4-hydrogen"),
+                ModelChainEntry(model="gemini-3.8-flash"),
+                ModelChainEntry(model=PRODUCTION_MARKING_MODEL),
+            ],
+            "review": [ModelChainEntry(model="gemini-3.5-flash-lite")],
+            "lightweight": [ModelChainEntry(model="gemini-3.1-flash-lite")],
+        }
+    )
+
+    enabled = [entry.model for entry in settings.model_chains["primary"] if entry.enabled]
+    assert enabled == ["gemini-4-hydrogen", "gemini-3.8-flash", PRODUCTION_MARKING_MODEL]
+
+
+def test_configuration_refuses_the_same_primary_twice() -> None:
+    with pytest.raises(ValidationError) as error:
+        ProviderSettings(
+            model_chains={
+                "primary": [
+                    ModelChainEntry(model=PRODUCTION_MARKING_MODEL),
+                    ModelChainEntry(model=PRODUCTION_MARKING_MODEL),
+                ],
+                "review": [ModelChainEntry(model="gemini-3.5-flash-lite")],
+                "lightweight": [ModelChainEntry(model="gemini-3.1-flash-lite")],
+            }
+        )
+
+    assert "repeats a model" in str(error.value)
 
 
 def test_configuration_refuses_a_lite_environment_model() -> None:

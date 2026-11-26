@@ -18,7 +18,13 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from app.core.config import MarkingSettings, StorageSettings, get_settings
+from app.core.config import (
+    MarkingSettings,
+    ModelQuota,
+    QuotaSettings,
+    StorageSettings,
+    get_settings,
+)
 from app.core.errors import AppError
 from app.core.ids import content_hash
 from app.correction.aetrix.pipeline import _MarkingRun
@@ -144,6 +150,37 @@ def _settings(tmp_path, *, transcription: bool = False, gate: bool = False, **ov
 
     settings = get_settings().model_copy(
         update={"storage": StorageSettings(root=tmp_path / "documents")}
+    )
+    # The production default allows five marking requests a minute for a free-tier
+    # key.  A suite that runs several jobs in one test would exhaust that budget
+    # and then fail on the budget instead of on the behaviour it is about, so the
+    # fixture states its own allowance.  The budget rules themselves are proven in
+    # ``tests/unit/test_credential_pools.py``; nothing here asserts about them.
+    # Every model this deployment can actually call needs a declared allowance:
+    # the engine refuses to spend against an unknown one, and the checkers are
+    # now reached by these tests too.  The set comes from the configured limits,
+    # so adding a model cannot silently leave it unspendable.
+    declared = set(settings.quota.model_limits) | {
+        "gemini-3.6-flash",
+        "gemini-3.8-flash",
+        "gemini-4-hydrogen",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+    }
+    settings = settings.model_copy(
+        update={
+            "quota": QuotaSettings(
+                model_limits={
+                    model: ModelQuota(
+                        requests_per_minute=60,
+                        tokens_per_minute=2_000_000,
+                        requests_per_day=1000,
+                        source="operator",
+                    )
+                    for model in declared
+                }
+            )
+        }
     )
     if overrides:
         settings = settings.model_copy(update=overrides)

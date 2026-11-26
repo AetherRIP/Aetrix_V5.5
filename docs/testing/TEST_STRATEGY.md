@@ -70,6 +70,23 @@ Coverage is a floor, not a target: the isolation and reconciliation suites are j
 `typecheck → lint → L1 → L5 → L2 → L3 → build → L4 (+L6, L7 on PR) → deploy dev → smoke`.
 Release adds L8, L9; L10 is manual with a checklist. Any failure blocks; there is no "merge and fix".
 
+### Migration gate
+
+Every push also runs `python scripts/check_migrations.py` against a disposable PostgreSQL, followed by
+`pytest tests/integration` on the database it leaves behind. The script empties `public`, then walks
+`alembic upgrade head → alembic downgrade base → alembic upgrade head` and fails unless each step lands on
+the revision it claims. Pytest alone only upgrades — and usually on a database that has been migrated
+before — so it cannot catch a revision whose `downgrade()` no longer reverses or one that only applies on
+top of an existing schema.
+
+The same gate runs locally against any loopback PostgreSQL (the script refuses a non-loopback host, because
+it drops the schema):
+
+```bash
+export AETRIX_TEST_DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:5432/aetrix_test
+cd backend && python scripts/check_migrations.py && python -m pytest tests/integration -q
+```
+
 ## 8. Manual testing that cannot be automated (yet)
 
 - Real Classroom OAuth with a real Google account (staging only).

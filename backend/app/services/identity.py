@@ -42,6 +42,7 @@ from ..db.models import Invitation, User
 from ..db.repositories import InvitationRepository, TenantRepository, UserRepository
 from ..schemas.identity import InvitationCreate, MemberRoleUpdate, MeRead
 from .platform_accounts import PlatformAdminClient, account_role
+from .workspace_creation import WorkspaceCreationService
 
 WORKSPACE_ROLES: tuple[str, ...] = ("OWNER", "ADMIN", "TEACHER", "REVIEWER", "VIEWER")
 
@@ -80,14 +81,29 @@ _CAPABILITIES: dict[str, tuple[str, ...]] = {
     "VIEWER": ("read",),
     "REVIEWER": ("read", "review"),
     "TEACHER": ("read", "manage_exams", "review", "approve"),
-    "ADMIN": ("read", "manage_exams", "review", "approve", "manage_members"),
-    "OWNER": ("read", "manage_exams", "review", "approve", "manage_members"),
+    "ADMIN": (
+        "read",
+        "manage_exams",
+        "review",
+        "approve",
+        "manage_members",
+        "manage_class_assignments",
+    ),
+    "OWNER": (
+        "read",
+        "manage_exams",
+        "review",
+        "approve",
+        "manage_members",
+        "manage_class_assignments",
+    ),
     "PLATFORM_OWNER": (
         "read",
         "manage_exams",
         "review",
         "approve",
         "manage_members",
+        "manage_class_assignments",
         "platform_admin",
     ),
 }
@@ -309,7 +325,7 @@ class IdentityService:
         tenant = self.tenants.get_by_slug(policy.tenant_slug)
         if tenant is None:
             try:
-                tenant = self.tenants.create(
+                tenant = WorkspaceCreationService(self.session).create(
                     name=policy.tenant_name, slug=policy.tenant_slug
                 )
                 self.session.commit()

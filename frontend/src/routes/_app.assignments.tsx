@@ -6,6 +6,7 @@ import { StatePanel } from '../components/app/StatePanel'
 import { useEngineSession } from '../lib/api/session'
 import { useResource } from '../lib/api/useResource'
 import type { Assignment, Blueprint, Exam, SchemeVersion } from '../lib/api/types'
+import { workspaceCourses, type TeacherCourse } from '../lib/api/classroom'
 import { assignmentService, examService } from '../lib/services'
 
 export const Route = createFileRoute('/_app/assignments')({
@@ -25,7 +26,17 @@ function Assignments() {
     session.token ? (signal) => examService.list({ token: session.token, signal }) : null,
   )
 
+  // A class is chosen before anything else: an assignment belongs to one
+  // Classroom course, and the engine refuses one that names no class.
+  const [courses] = useResource<TeacherCourse[]>(
+    `assignment-classes:${session.tenantId ?? 'none'}:${session.token ?? 'anonymous'}`,
+    session.token && session.tenantId
+      ? (signal) => workspaceCourses(session.tenantId!, { token: session.token, signal })
+      : null,
+  )
+
   const [examTitle, setExamTitle] = useState('')
+  const [courseId, setCourseId] = useState('')
   const [examId, setExamId] = useState('')
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -70,7 +81,7 @@ function Assignments() {
 
   async function createAssignment(event: React.FormEvent) {
     event.preventDefault()
-    if (!session.token || !examId || !name.trim()) return
+    if (!session.token || !courseId || !examId || !name.trim()) return
     if (blueprint.state !== 'ok' || !approvedBlueprint || !approvedScheme) {
       setMessage('An approved blueprint and an approved mark scheme are both required.')
       return
@@ -83,6 +94,7 @@ function Assignments() {
         blueprint_version_id: blueprint.data.id,
         scheme_version_id: approvedScheme.id,
         name: name.trim(),
+        course_id: courseId,
       },
       { token: session.token },
     )
@@ -127,6 +139,38 @@ function Assignments() {
       ) : canManageExams ? (
       <Panel title="New assignment" note="Needs an approved blueprint and scheme">
         <form className="app-form" onSubmit={createAssignment}>
+          <div className="app-form__row">
+            <label className="app-form__label" htmlFor="assignment-class">
+              Class
+            </label>
+            <select
+              id="assignment-class"
+              className="app-input"
+              value={courseId}
+              onChange={(event) => setCourseId(event.target.value)}
+              required
+            >
+              <option value="">Select a class…</option>
+              {courses.state === 'ok'
+                ? courses.data.map((course) => (
+                    <option key={course.allocation_id} value={course.course_id}>
+                      {course.name}
+                      {course.section ? ` · ${course.section}` : ''}
+                    </option>
+                  ))
+                : null}
+            </select>
+            {courses.state === 'ok' && courses.data.length === 0 ? (
+              <p className="app-hint">
+                No class is allocated to this workspace. Only a platform administrator can
+                allocate a Classroom course; an assignment cannot be created without one.
+              </p>
+            ) : null}
+            {courses.state === 'error' || courses.state === 'unavailable' ? (
+              <p className="app-hint">{courses.reason}</p>
+            ) : null}
+          </div>
+
           <div className="app-form__row">
             <label className="app-form__label" htmlFor="assignment-exam">
               Exam
@@ -190,7 +234,9 @@ function Assignments() {
             <button
               type="submit"
               className="btn btn--small btn--primary"
-              disabled={busy || !approvedBlueprint || !approvedScheme || !name.trim()}
+              disabled={
+                busy || !courseId || !approvedBlueprint || !approvedScheme || !name.trim()
+              }
             >
               {busy ? 'Creating…' : 'Create assignment'}
             </button>
@@ -251,6 +297,7 @@ function Assignments() {
               <thead>
                 <tr>
                   <th scope="col">Assignment</th>
+                  <th scope="col">Class</th>
                   <th scope="col">Review mode</th>
                   <th scope="col">Threshold</th>
                   <th scope="col">Created</th>
@@ -262,6 +309,11 @@ function Assignments() {
                   list.data.map((assignment) => (
                     <tr key={assignment.id}>
                       <td>{assignment.name}</td>
+                      <td>
+                        {assignment.class_name ?? (
+                          <span className="app-hint">Unassigned (legacy)</span>
+                        )}
+                      </td>
                       <td className="mono">{assignment.review_mode}</td>
                       <td className="mono">{Math.round(assignment.completion_threshold * 100)}%</td>
                       <td className="mono">{new Date(assignment.created_at).toLocaleDateString()}</td>
@@ -278,7 +330,7 @@ function Assignments() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={5} className="data-table__empty">
+                    <td colSpan={6} className="data-table__empty">
                       No assignments yet. Create an exam, upload and approve its scheme, extract a
                       blueprint, then create the assignment above.
                     </td>

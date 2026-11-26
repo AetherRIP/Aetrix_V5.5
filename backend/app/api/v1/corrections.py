@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from ...core.config import Settings, get_settings
-from ...core.security import Principal
+from ...core.security import Principal, ensure_exam_manager
 from ...db.session import get_db_session
 from ...jobs.service import JobService
 from ...schemas.api import (
@@ -17,6 +17,8 @@ from ...schemas.api import (
     JobRead,
     RecoveryRequest,
 )
+from ...schemas.progress import JobProgressRead
+from ...services.progress import ProgressService
 from ..deps import get_principal
 
 router = APIRouter(prefix="/corrections", tags=["corrections"])
@@ -34,6 +36,7 @@ def create_correction(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> JobRead:
+    ensure_exam_manager(principal)
     creation = _service(session, settings).create(principal, payload)
     if not creation.created:
         response.status_code = status.HTTP_200_OK
@@ -48,7 +51,7 @@ def list_corrections(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> list[JobRead]:
-    jobs = _service(session, settings).list(principal.tenant_id, state=state, limit=limit)
+    jobs = _service(session, settings).list(principal, state=state, limit=limit)
     return [JobRead.model_validate(job) for job in jobs]
 
 
@@ -59,7 +62,16 @@ def get_correction(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> JobDetailRead:
-    return _service(session, settings).detail(principal.tenant_id, job_id)
+    return _service(session, settings).detail(principal, job_id)
+
+
+@router.get("/{job_id}/progress", response_model=JobProgressRead)
+def get_correction_progress(
+    job_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+) -> JobProgressRead:
+    return ProgressService(session).job_progress(principal, job_id)
 
 
 @router.post("/{job_id}/cancel", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
@@ -80,6 +92,7 @@ def retry_correction(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> JobRead:
+    ensure_exam_manager(principal)
     job = _service(session, settings).retry(principal, job_id)
     return JobRead.model_validate(job)
 

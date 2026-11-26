@@ -8,6 +8,7 @@ of what the query "probably" does.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.db.models import (
@@ -143,13 +144,20 @@ def _audit(
     at: datetime,
     entity_id: str = "entity-1",
     detail: dict | None = None,
+    actor_type: str = "SYSTEM",
+    actor_id: str | None = None,
+    actor_label: str | None = None,
+    request_id: str | None = None,
 ) -> AuditEvent:
     event = AuditEvent(
         tenant_id=tenant_id,
-        actor_type="SYSTEM",
+        actor_type=actor_type,
+        actor_id=actor_id,
+        actor_label=actor_label,
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
+        request_id=request_id,
         detail=detail or {},
         created_at=at,
     )
@@ -190,7 +198,9 @@ def test_empty_workspace_reads_are_empty_shapes_not_zeros(client, identity, auth
 
     audit = client.get(f"/api/v1/workspaces/{workspace}/audit", headers=headers)
     assert audit.status_code == 200
-    assert audit.json() == []
+    assert audit.json()["items"] == []
+    assert audit.json()["has_more"] is False
+    assert audit.json()["next_before"] is None
 
 
 def test_dashboard_counts_real_rows_and_names_the_latest_eight_jobs(
@@ -598,6 +608,9 @@ def test_workspace_audit_is_tenant_scoped_ordered_and_filterable(
         entity_type="exam",
         at=_at(1),
         entity_id="exam-1",
+        actor_type="USER",
+        actor_id=str(identity.user_a.id),
+        actor_label="Ada Lovelace",
     )
     second = _audit(
         db_session,
@@ -623,6 +636,7 @@ def test_workspace_audit_is_tenant_scoped_ordered_and_filterable(
         at=_at(4),
         entity_id="job-7",
         detail={"approved_marks": 3},
+        request_id="req-abc",
     )
     beta = _audit(
         db_session,
@@ -642,49 +656,233 @@ def test_workspace_audit_is_tenant_scoped_ordered_and_filterable(
     )
     db_session.commit()
 
-    response = client.get(
-        f"/api/v1/workspaces/{identity.tenant_a.id}/audit", headers=headers
-    )
+    base = f"/api/v1/workspaces/{identity.tenant_a.id}/audit"
+    response = client.get(base, headers=headers)
     assert response.status_code == 200, response.text
-    rows = response.json()
+    payload = response.json()
+    rows = payload["items"]
     assert [row["id"] for row in rows] == [
         str(fourth.id),
         str(third.id),
         str(second.id),
         str(first.id),
     ]
+    assert payload["has_more"] is False
+    assert payload["next_before"] is None
+    assert payload["retrieved_at"]
     assert str(beta.id) not in {row["id"] for row in rows}
     assert str(platform.id) not in {row["id"] for row in rows}
     assert rows[0]["detail"] == {"approved_marks": 3}
     assert rows[0]["entity_id"] == "job-7"
+    assert rows[0]["request_id"] == "req-abc"
+    # A workspace read never names another tenant, and the event time is the
+    # ledger's own, not the page's retrieval time.
+    assert {row["tenant_id"] for row in rows} == {str(identity.tenant_a.id)}
+    assert rows[0]["created_at"] != payload["retrieved_at"]
 
-    by_action = client.get(
-        f"/api/v1/workspaces/{identity.tenant_a.id}/audit",
+    by_action = client.get(base, headers=headers, params={"action": "exam.created"})
+    assert [row["entity_id"] for row in by_action.json()["items"]] == ["exam-2", "exam-1"]
+
+    by_type = client.get(base, headers=headers, params={"entity_type": "criterion"})
+    assert [row["id"] for row in by_type.json()["items"]] == [str(second.id)]
+
+    by_entity = client.get(base, headers=headers, params={"entity_id": "exam-2"})
+    assert [row["id"] for row in by_entity.json()["items"]] == [str(third.id)]
+
+    by_actor_label = client.get(base, headers=headers, params={"actor": "lovelace"})
+    assert [row["id"] for row in by_actor_label.json()["items"]] == [str(first.id)]
+
+    by_actor_id = client.get(base, headers=headers, params={"actor": str(identity.user_a.id)})
+    assert [row["id"] for row in by_actor_id.json()["items"]] == [str(first.id)]
+
+    by_actor_type = client.get(base, headers=headers, params={"actor_type": "USER"})
+    assert [row["id"] for row in by_actor_type.json()["items"]] == [str(first.id)]
+
+    by_date = client.get(
+        base,
         headers=headers,
-        params={"action": "exam.created"},
+        params={"date_from": _at(2).isoformat(), "date_to": _at(3).isoformat()},
     )
-    assert [row["entity_id"] for row in by_action.json()] == ["exam-2", "exam-1"]
+    assert [row["id"] for row in by_date.json()["items"]] == [str(third.id), str(second.id)]
 
-    by_type = client.get(
-        f"/api/v1/workspaces/{identity.tenant_a.id}/audit",
-        headers=headers,
-        params={"entity_type": "criterion"},
-    )
-    assert [row["id"] for row in by_type.json()] == [str(second.id)]
+    page = client.get(base, headers=headers, params={"limit": 2})
+    assert [row["id"] for row in page.json()["items"]] == [str(fourth.id), str(third.id)]
+    assert page.json()["has_more"] is True
+    assert page.json()["next_before"] == str(third.id)
 
-    page = client.get(
-        f"/api/v1/workspaces/{identity.tenant_a.id}/audit",
-        headers=headers,
-        params={"limit": 2, "offset": 1},
+    older = client.get(
+        base, headers=headers, params={"limit": 2, "before": page.json()["next_before"]}
     )
-    assert [row["id"] for row in page.json()] == [str(third.id), str(second.id)]
+    assert [row["id"] for row in older.json()["items"]] == [str(second.id), str(first.id)]
+    assert older.json()["has_more"] is False
+    assert older.json()["next_before"] is None
 
-    viewer = client.get(
-        f"/api/v1/workspaces/{identity.tenant_a.id}/audit",
-        headers=auth_headers(identity.viewer),
-    )
+    viewer = client.get(base, headers=auth_headers(identity.viewer))
     assert viewer.status_code == 200
-    assert len(viewer.json()) == 4
+    assert len(viewer.json()["items"]) == 4
+
+
+#: A cursor from another tenant is not a page boundary for this one.
+def test_audit_cursor_is_scoped_and_malformed_filters_are_refused(
+    client, identity, auth_headers, db_session
+) -> None:
+    headers = auth_headers(identity.user_a)
+    _audit(
+        db_session,
+        identity.tenant_a.id,
+        action="exam.created",
+        entity_type="exam",
+        at=_at(1),
+    )
+    beta = _audit(
+        db_session,
+        identity.tenant_b.id,
+        action="beta.secret",
+        entity_type="exam",
+        at=_at(2),
+    )
+    db_session.commit()
+
+    base = f"/api/v1/workspaces/{identity.tenant_a.id}/audit"
+    listed = client.get(base, headers=headers).json()["items"]
+    assert str(beta.id) not in {row["id"] for row in listed}
+
+    foreign_cursor = client.get(base, headers=headers, params={"before": str(beta.id)})
+    assert foreign_cursor.status_code == 422
+    assert foreign_cursor.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    unknown_cursor = client.get(base, headers=headers, params={"before": str(uuid.uuid4())})
+    assert unknown_cursor.status_code == 422
+
+    reversed_range = client.get(
+        base,
+        headers=headers,
+        params={"date_from": _at(5).isoformat(), "date_to": _at(1).isoformat()},
+    )
+    assert reversed_range.status_code == 422
+    assert reversed_range.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    bad_type = client.get(base, headers=headers, params={"actor_type": "ROBOT"})
+    assert bad_type.status_code == 422
+
+    bad_date = client.get(base, headers=headers, params={"date_from": "not-a-date"})
+    assert bad_date.status_code == 422
+
+    excessive = client.get(base, headers=headers, params={"limit": 500})
+    assert excessive.status_code == 422
+
+
+#: Paging must not skip or repeat a row when several events share a timestamp.
+def test_audit_paging_is_stable_across_duplicate_timestamps(
+    client, identity, auth_headers, db_session
+) -> None:
+    headers = auth_headers(identity.user_a)
+    inserted = [
+        _audit(
+            db_session,
+            identity.tenant_a.id,
+            action="exam.created",
+            entity_type="exam",
+            at=_at(1),
+            entity_id=f"exam-{index}",
+        )
+        for index in range(5)
+    ]
+    db_session.commit()
+
+    base = f"/api/v1/workspaces/{identity.tenant_a.id}/audit"
+    collected: list[str] = []
+    cursor: str | None = None
+    for _ in range(5):
+        params = {"limit": 2}
+        if cursor:
+            params["before"] = cursor
+        response = client.get(base, headers=headers, params=params)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        collected.extend(row["id"] for row in body["items"])
+        cursor = body["next_before"]
+        if not body["has_more"]:
+            break
+
+    assert len(collected) == len(set(collected)) == len(inserted)
+    assert set(collected) == {str(event.id) for event in inserted}
+
+    # The full ordering is deterministic and exactly the paged ordering.
+    whole = client.get(base, headers=headers, params={"limit": 200}).json()["items"]
+    assert collected == [row["id"] for row in whole]
+
+
+#: Secrets are replaced, ordinary metadata is preserved, and long values bounded.
+def test_audit_projection_redacts_secrets_without_rewriting_metadata(
+    client, identity, auth_headers, db_session
+) -> None:
+    headers = auth_headers(identity.user_a)
+    _audit(
+        db_session,
+        identity.tenant_a.id,
+        action="provider.key.registered",
+        entity_type="provider_credential",
+        at=_at(1),
+        detail={
+            "account_label": "lent-key",
+            "key_fingerprint": "abc123",
+            "api_key": "AIza-secret-value",
+            "nested": {"refresh_token": "token-value", "keep": 7},
+            "note": "x" * 2500,
+        },
+    )
+    db_session.commit()
+
+    response = client.get(
+        f"/api/v1/workspaces/{identity.tenant_a.id}/audit", headers=headers
+    )
+    assert response.status_code == 200, response.text
+    detail = response.json()["items"][0]["detail"]
+    assert detail["account_label"] == "lent-key"
+    assert detail["key_fingerprint"] == "abc123"
+    assert detail["api_key"] == "[redacted]"
+    assert detail["nested"] == {"refresh_token": "[redacted]", "keep": 7}
+    assert detail["note"].endswith("[truncated]")
+    assert len(detail["note"]) < 2500
+    assert "AIza-secret-value" not in response.text
+    assert "token-value" not in response.text
+
+
+#: A read is a read: the ledger does not grow or change when it is viewed.
+def test_reading_the_audit_log_does_not_write_to_it(
+    client, identity, auth_headers, db_session
+) -> None:
+    headers = auth_headers(identity.user_a)
+    event = _audit(
+        db_session,
+        identity.tenant_a.id,
+        action="exam.created",
+        entity_type="exam",
+        at=_at(1),
+        detail={"title": "Algebra"},
+    )
+    db_session.commit()
+    before = (event.action, event.created_at, dict(event.detail))
+
+    for _ in range(3):
+        assert (
+            client.get(
+                f"/api/v1/workspaces/{identity.tenant_a.id}/audit", headers=headers
+            ).status_code
+            == 200
+        )
+
+    db_session.expire_all()
+    stored = db_session.get(AuditEvent, event.id)
+    assert stored is not None
+    count = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.tenant_id == identity.tenant_a.id)
+        .count()
+    )
+    assert count == 1
+    assert (stored.action, stored.created_at, dict(stored.detail)) == before
 
 
 def test_platform_audit_requires_the_platform_operator(
@@ -721,8 +919,34 @@ def test_platform_audit_requires_the_platform_operator(
 
     allowed = client.get("/api/v1/admin/audit", headers=auth_headers(platform_user))
     assert allowed.status_code == 200, allowed.text
-    actions = [row["action"] for row in allowed.json()]
+    items = allowed.json()["items"]
+    actions = [row["action"] for row in items]
     assert actions == ["workspace.provisioned", "beta.secret", "exam.created"]
+    # A platform-wide read names where each event came from, and a platform-level
+    # event honestly has no workspace.
+    assert items[0]["tenant_id"] is None
+    assert items[0]["tenant_name"] is None
+    assert items[1]["tenant_name"] == "Beta"
+    assert items[2]["tenant_name"] == "Alpha"
+
+    narrowed = client.get(
+        "/api/v1/admin/audit",
+        headers=auth_headers(platform_user),
+        params={"workspace_id": str(identity.tenant_b.id)},
+    )
+    assert narrowed.status_code == 200
+    assert [row["action"] for row in narrowed.json()["items"]] == ["beta.secret"]
+
+    paged = client.get(
+        "/api/v1/admin/audit", headers=auth_headers(platform_user), params={"limit": 2}
+    )
+    assert paged.json()["has_more"] is True
+    rest = client.get(
+        "/api/v1/admin/audit",
+        headers=auth_headers(platform_user),
+        params={"limit": 2, "before": paged.json()["next_before"]},
+    )
+    assert [row["action"] for row in rest.json()["items"]] == ["exam.created"]
 
     owner_refused = client.get("/api/v1/admin/audit", headers=auth_headers(identity.user_a))
     assert owner_refused.status_code == 403

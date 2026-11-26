@@ -43,6 +43,41 @@ an unreadable page, a missing page or an exhausted retry budget produces a revie
 zero. `UnavailablePipeline` survives only as the explicit "nothing to run" object the
 job-infrastructure tests use.
 
+## Correction modes
+
+A job records the mode it is corrected in (`correction_jobs.marking_mode`), fixed on its first
+marking execution. The mode may be named when the job is created (`CorrectionCreate.marking_mode`)
+or left to `settings.marking.marking_mode`; a resumed job and a teacher-requested recovery keep the
+mode already recorded, so one paper never mixes request shapes. All three values execute different
+paths in `AetrixPipeline` — none of them is a label on another path.
+
+| Mode | Execution | Verification |
+| --- | --- | --- |
+| `WHOLE_PAPER` (default) | One audited request for the whole script and scheme; leaves the reply did not decide are marked individually by the retained per-question loop. | Same stages, per stored row. |
+| `PER_QUESTION` | One audited request per scoreable leaf, sequentially. | Same stages, per stored row. |
+| `PARALLEL` | The same per-question request and contract, with independent questions corrected concurrently in dependency-aware waves (`backend/app/correction/aetrix/parallel.py`). | Same stages, per stored row. |
+
+Parallel execution plans every scoreable leaf first, chains sub-questions of one parent in paper order
+(a later part is not dispatched until its prerequisite has a stored decision), and runs separate
+parent questions together under `settings.marking.parallel_max_concurrency` (default 3, 1–8). Inputs
+are built on the orchestrating thread; each worker opens its own session for the provider call and
+its append-only usage row; parsing, validation and persistence happen on the orchestrating thread in
+blueprint order, so one question cannot corrupt another's rows. A refused question is recorded and
+the rest of the paper continues; a question with no stored decision makes the paper incomplete and
+sends it to review instead of presenting a total. Totals are recomputed from stored rows in blueprint
+order, and a missing, duplicated or over-maximum question blocks acceptance.
+
+Every mode goes through the same credential pool, project/model quota accounting, project cooldown,
+bounded retry policy and append-only `provider_usage` ledger. Parallel workers share a process lock
+around the lease read-and-reserve; quota remains a project property, so additional concurrency cannot
+create capacity the provider does not have. Each attempt records provider latency and the time it
+waited for a lease (`provider_usage.latency_ms`, `provider_usage.queue_wait_ms`), so contention is
+measured separately from the provider being slow. There is no automatic fallback to another mode: a
+provider failure parks or reviews the job in the mode it recorded.
+
+Not implemented: an operator UI control for the mode, an automatic mode fallback, and any measured
+accuracy, reliability or speed comparison between the modes. No such comparison is claimed.
+
 ## Review modes
 
 `assignments.review_mode` is read from the job's tenant-scoped assignment on every run; it is not
@@ -57,7 +92,22 @@ the double check, and no mode enables it against that setting.
 | `ACCURACY` | up to `max(double_check_max_questions, 12)` | `max(double_check_min_confidence, 0.95)` | 2 | up to min(`transcription_max_questions`, 6) | 3 |
 
 `assignments.review_mode` is the authority; `settings.marking.review_mode` is the fallback for a
-submission whose assignment row predates review modes, so the two cannot silently disagree.
+submission whose assignment row predates review modes, so the two cannot silently disagree. The
+threshold is real: marking sends anything below `min_confidence` (0.6 by default) to review, so a
+`MARKED` row may still carry 0.6-0.949 confidence, and `ACCURACY`'s 0.95 threshold reviews it while
+`BALANCED` does not.
+
+Validation preparation. `settings.marking.marking_prompt_version` pins the marking prompt to one
+manifest version (`None` uses the newest); it exists so a controlled experiment can compare prompt
+v1 and v2 on identical papers, and it is recorded on every result row and engine run like any other
+prompt version. A retry may not change that version: if a job already has result rows
+marked with a different version, the engine fails closed before spending another request, and
+the harness refuses a run whose per-question versions disagree. Certified references are
+validated twice: `experiment/live_validation/evaluate.py`
+re-applies certification, two-marker and adjudication rules while scoring, and
+`experiment/live_validation/validate_dataset.py` checks the whole directory and its SHA-256
+manifest before a run is allowed to start. Neither tool can promote an uncertified paper, drop a
+missing question from a denominator, or compare configurations on different papers.
 Transcription additionally requires `settings.marking.transcription_enabled`: a mode can spend
 more of that budget, never enable it against the operator, and `ECONOMY` never spends it.
 
@@ -110,6 +160,32 @@ concerns already doubt it (a question already with a person is not read again: t
 not change its state). The stage is off by default because it costs a request per selected
 question, and `settings.marking.double_check_enabled` does not disable it — transcription is a
 reading, not a second opinion.
+
+The same reading answers a second question at no extra request: does the text the marking pass
+quoted actually appear on the page? Each quotation is normalised and matched against the blind
+transcript (`correction/evidence_check.py`). The verdict is `PASS` only when every quote is found,
+`FAIL` when one is absent, and `UNVERIFIABLE` when there is no usable reading or the quote is too
+short to be distinctive. A failure raises `EVIDENCE_NOT_FOUND`; an unverifiable quotation of an
+awarded question raises `EVIDENCE_UNVERIFIED`. Neither changes an award.
+
+The check runs only where a blind reading was bought, and that selection targets zero or
+uncertain answers, so an awarded question whose citations were not selected reports `EVIDENCE`
+as a missing required check (`PARTIALLY_VERIFIED`) rather than as a pass. Extending the reading
+to every awarded question would add provider requests to every paper, which the transcription
+budget deliberately bounds; that remains a stated limitation rather than a silent claim.
+
+## Verification completeness
+
+`correction/verification_status.py` derives a state per question from the stored verdicts, never
+from the absence of review flags. `INTEGRITY` is required for every decided question;
+`MATHEMATICAL` or `SCHEME_MATHEMATICAL` when the reply or the approved scheme defines an expected
+answer; `EVIDENCE` whenever marks were awarded; `TRANSCRIPTION` and `DOUBLE_CHECK` when they ran.
+A missing required check is a gap; a mathematical check that neither the reply nor the approved
+scheme defines an answer for is `NOT_APPLICABLE`; and a contradiction outranks everything else. The states are `FULLY_VERIFIED`, `PARTIALLY_VERIFIED`,
+`REVIEW_REQUIRED`, `VERIFICATION_FAILED` and `VERIFICATION_NOT_REQUIRED`; the paper reports the
+worst of its questions, so `COMPLETED` never implies `FULLY_VERIFIED`. The state is stored on
+`correction_jobs.verification_status` and returned with per-question detail by the results API,
+which is how the screen shows completion and verification as two separate facts.
 
 Page coverage is assessed before any request is spent: a document in the submission that is not
 `PROCESSED` (`UNPROCESSED_DOCUMENT`), or a page the document declares but storage does not hold

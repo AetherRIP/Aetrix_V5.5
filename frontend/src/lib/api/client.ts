@@ -136,6 +136,10 @@ export async function apiPatch<T>(
   )
 }
 
+export async function apiDelete<T>(path: string, options?: RequestOptions): Promise<ApiResult<T>> {
+  return apiRequest<T>(path, { method: 'DELETE' }, options)
+}
+
 /** Multipart upload: the browser sets the boundary, so no content-type here. */
 export async function apiUpload<T>(
   path: string,

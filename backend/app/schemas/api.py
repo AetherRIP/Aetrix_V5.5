@@ -38,6 +38,10 @@ class AssignmentCreate(BaseModel):
     blueprint_version_id: UUID
     scheme_version_id: UUID
     name: str = Field(min_length=1, max_length=300)
+    #: The Classroom course the assignment belongs to.  The HTTP route requires
+    #: it; only the engine's own manual-correction flow may create an assignment
+    #: without a class, and it passes that intent explicitly.
+    course_id: str | None = Field(default=None, min_length=1, max_length=200)
     completion_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
     review_mode: str = Field(default="BALANCED", pattern="^(ECONOMY|BALANCED|ACCURACY)$")
 
@@ -52,6 +56,9 @@ class AssignmentRead(BaseModel):
     name: str
     completion_threshold: float
     review_mode: str
+    classroom_allocation_id: UUID | None = None
+    course_id: str | None = None
+    class_name: str | None = None
     created_at: datetime
 
 

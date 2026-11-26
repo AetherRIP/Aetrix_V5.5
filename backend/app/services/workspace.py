@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from datetime import UTC, datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
+from ..audit.read import redact_detail
 from ..core.errors import AppError, ErrorCode
+from ..core.logging import get_logger
 from ..core.security import Principal
 from ..correction.guard import RESULT_SOURCE_REFUSED
 from ..correction.processing import effective_state, is_scoreable
@@ -24,6 +27,7 @@ from ..db.models import (
     JobApproval,
     QuestionResult,
     Submission,
+    Tenant,
 )
 from ..db.repositories import (
     InvitationRepository,
@@ -32,6 +36,7 @@ from ..db.repositories import (
 )
 from ..jobs.states import ACTIVE_STATES, JobState
 from ..schemas.workspace import (
+    AuditEventPage,
     AuditEventRead,
     DashboardRead,
     GradebookAssignment,
@@ -44,6 +49,9 @@ from ..schemas.workspace import (
     NotificationRead,
     ReportRow,
 )
+from .platform_settings import ensure_platform_audit_access
+
+log = get_logger("aetrix.audit")
 
 _FAILED_STATES = {JobState.FAILED.value, JobState.RETRY_SUSPENDED.value}
 
@@ -626,59 +634,199 @@ class WorkspaceService:
         *,
         action: str | None = None,
         entity_type: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[AuditEventRead]:
+        entity_id: str | None = None,
+        actor: str | None = None,
+        actor_type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        before: uuid.UUID | None = None,
+        limit: int = 50,
+    ) -> AuditEventPage:
+        """The caller's own ledger, newest first.
+
+        The workspace id is checked against the principal before it is used, so a
+        browser cannot name another tenant.  The read never writes.
+        """
+
         self._check(principal, workspace_id)
-        return self._audit_rows(
+        return self._audit_page(
             tenant_id=principal.tenant_id,
+            platform=False,
             action=action,
             entity_type=entity_type,
+            entity_id=entity_id,
+            actor=actor,
+            actor_type=actor_type,
+            date_from=date_from,
+            date_to=date_to,
+            before=before,
             limit=limit,
-            offset=offset,
         )
 
     def platform_audit(
         self,
         principal: Principal,
         *,
+        tenant_id: uuid.UUID | None = None,
         action: str | None = None,
         entity_type: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[AuditEventRead]:
-        if principal.role != "PLATFORM_OWNER":
-            raise AppError(
-                ErrorCode.FORBIDDEN,
-                "Platform audit is restricted to the platform operator.",
-            )
-        return self._audit_rows(
-            tenant_id=None,
+        entity_id: str | None = None,
+        actor: str | None = None,
+        actor_type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        before: uuid.UUID | None = None,
+        limit: int = 50,
+    ) -> AuditEventPage:
+        """Cross-tenant audit, for the platform operator only.
+
+        Platform authority comes from the verified token claim through
+        ``platform_authority``; a workspace OWNER is not a platform operator.
+        The read is recorded in the service log so an access path exists without
+        writing a second audit record for every page view.
+        """
+
+        # The platform owner decides which platform account types may open this
+        # cross-tenant view.  The check runs on every request, not in the UI, and
+        # only ever narrows platform authority: a workspace member has none, so
+        # a tenant membership can never be traded for the cross-tenant ledger.
+        # Workspace members reading their own tenant ledger use ``audit`` above,
+        # which stays membership-scoped and is unaffected by this setting.
+        ensure_platform_audit_access(self.session, principal)
+        page = self._audit_page(
+            tenant_id=tenant_id,
+            platform=True,
             action=action,
             entity_type=entity_type,
+            entity_id=entity_id,
+            actor=actor,
+            actor_type=actor_type,
+            date_from=date_from,
+            date_to=date_to,
+            before=before,
             limit=limit,
-            offset=offset,
         )
+        log.info(
+            "Platform audit read by user %s (workspace filter %s): %s events",
+            principal.user_id,
+            tenant_id or "all",
+            len(page.items),
+        )
+        return page
 
-    def _audit_rows(
+    def _audit_page(
         self,
         *,
         tenant_id: uuid.UUID | None,
+        platform: bool,
         action: str | None,
         entity_type: str | None,
+        entity_id: str | None,
+        actor: str | None,
+        actor_type: str | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+        before: uuid.UUID | None,
         limit: int,
-        offset: int,
-    ) -> list[AuditEventRead]:
-        statement = select(AuditEvent)
+    ) -> AuditEventPage:
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "The start of the date range is after its end.",
+            )
+
+        conditions: list[object] = []
+        # A workspace read always names its tenant.  A platform read without a
+        # workspace filter deliberately matches every tenant plus platform-level
+        # events whose ``tenant_id`` is null.
         if tenant_id is not None:
-            statement = statement.where(AuditEvent.tenant_id == tenant_id)
+            conditions.append(AuditEvent.tenant_id == tenant_id)
         if action:
-            statement = statement.where(AuditEvent.action == action)
+            conditions.append(AuditEvent.action == action)
         if entity_type:
-            statement = statement.where(AuditEvent.entity_type == entity_type)
-        rows = self.session.scalars(
-            statement.order_by(AuditEvent.created_at.desc()).limit(limit).offset(offset)
+            conditions.append(AuditEvent.entity_type == entity_type)
+        if entity_id:
+            conditions.append(AuditEvent.entity_id == entity_id)
+        if actor_type:
+            conditions.append(AuditEvent.actor_type == actor_type)
+        if actor and actor.strip():
+            term = actor.strip()
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append(
+                or_(
+                    AuditEvent.actor_id == term,
+                    AuditEvent.actor_label.ilike(f"%{escaped}%", escape="\\"),
+                )
+            )
+        if date_from is not None:
+            conditions.append(AuditEvent.created_at >= date_from)
+        if date_to is not None:
+            conditions.append(AuditEvent.created_at <= date_to)
+
+        if before is not None:
+            cursor_at = self.session.scalar(
+                select(AuditEvent.created_at).where(AuditEvent.id == before, *conditions)
+            )
+            if cursor_at is None:
+                raise AppError(
+                    ErrorCode.VALIDATION_ERROR,
+                    "The audit page cursor is not valid for this view.",
+                )
+            conditions.append(
+                or_(
+                    AuditEvent.created_at < cursor_at,
+                    and_(AuditEvent.created_at == cursor_at, AuditEvent.id < before),
+                )
+            )
+
+        rows = list(
+            self.session.scalars(
+                select(AuditEvent)
+                .where(*conditions)
+                .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+                .limit(limit + 1)
+            )
         )
-        # Audit rows are ORM instances, so they are read through attribute mode;
-        # without it the audit routes answered 500 instead of listing events.
-        return [AuditEventRead.model_validate(row, from_attributes=True) for row in rows]
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        names: dict[uuid.UUID, str] = {}
+        if platform:
+            tenant_ids = {row.tenant_id for row in rows if row.tenant_id is not None}
+            if tenant_ids:
+                names = dict(
+                    self.session.execute(
+                        select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+                    ).all()
+                )
+
+        return AuditEventPage(
+            items=[self._audit_event(row, names) for row in rows],
+            has_more=has_more,
+            next_before=rows[-1].id if has_more and rows else None,
+            limit=limit,
+            retrieved_at=datetime.now(UTC),
+        )
+
+    @staticmethod
+    def _audit_event(
+        row: AuditEvent, tenant_names: dict[uuid.UUID, str]
+    ) -> AuditEventRead:
+        detail = row.detail if isinstance(row.detail, dict) else {"value": row.detail}
+        redacted = redact_detail(detail)
+        return AuditEventRead(
+            id=row.id,
+            created_at=row.created_at,
+            action=row.action,
+            entity_type=row.entity_type,
+            entity_id=row.entity_id,
+            actor_type=row.actor_type,
+            actor_id=row.actor_id,
+            actor_label=row.actor_label,
+            request_id=row.request_id,
+            before_hash=row.before_hash,
+            after_hash=row.after_hash,
+            tenant_id=row.tenant_id,
+            tenant_name=tenant_names.get(row.tenant_id) if row.tenant_id else None,
+            detail=redacted if isinstance(redacted, dict) else {"value": redacted},
+        )

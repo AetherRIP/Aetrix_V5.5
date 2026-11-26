@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
+import { ClassroomMonitoringPanel } from '../components/app/ClassroomMonitoringPanel'
 import { StatePanel, StatusChip } from '../components/app/StatePanel'
 import { Panel } from '../components/app/PageBlocks'
 import { useEngineSession } from '../lib/api/session'
 import { useAuth } from '../lib/auth/AuthProvider'
 import {
   approveSubmission,
+  classroomClassAssignments,
   classroomRoster,
+  createClassroomClassAssignment,
+  removeClassroomClassAssignment,
   courseworkSubmissions,
   createCoursework,
   ingestSubmission,
@@ -19,6 +23,7 @@ import {
   startSubmissionCorrection,
   workspaceAssignments,
   workspaceCourses,
+  type ClassroomClassAssignment,
   type Coursework,
   type RosterEntry,
   type Submission,
@@ -26,6 +31,8 @@ import {
   type WorkspaceAssignment,
 } from '../lib/api/classroom'
 import { useResource } from '../lib/api/useResource'
+import type { Member } from '../lib/api/types'
+import { identityService } from '../lib/services'
 
 export const Route = createFileRoute('/_app/classroom')({
   component: Classroom,
@@ -151,6 +158,34 @@ function Classroom() {
         </div>
       ) : null}
 
+      <Panel title="Your class workflow" note="Start here">
+        <p className="panel-copy">
+          Your administrator has already attached each class to this workspace. Work through
+          Aetrix rather than Google Classroom: create the assignment here, publish it to
+          Classroom, and follow the work as it comes back.
+        </p>
+        <ul className="app-list">
+          <li>
+            <span>
+              Create the assignment in Aetrix, with its approved blueprint and mark scheme.{' '}
+              <Link to="/assignments">Open Assignments</Link>.
+            </span>
+          </li>
+          <li>
+            <span>
+              Publish the assignment as Classroom coursework from the class below, then retrieve
+              the submissions students turn in.
+            </span>
+          </li>
+          <li>
+            <span>
+              Follow correction jobs in the marking queue and open a submission to review it.{' '}
+              <Link to="/queue">Open Marking queue</Link>.
+            </span>
+          </li>
+        </ul>
+      </Panel>
+
       <Panel title="Allocated Classroom courses" note="Assigned by platform administration">
         {courses.state === 'loading' ? (
           <p className="panel-copy">Reading this workspace’s courses…</p>
@@ -200,6 +235,15 @@ function Classroom() {
           </div>
         )}
       </Panel>
+
+      {courseId ? (
+        <ClassAssignmentsPanel
+          workspace={tenantId}
+          token={token}
+          courseId={courseId}
+          canManage={engine.capabilities.includes('manage_class_assignments')}
+        />
+      ) : null}
 
       {courseId ? (
         <Panel
@@ -322,6 +366,8 @@ function Classroom() {
         />
       ) : null}
 
+      <ClassroomMonitoringPanel tenantId={tenantId} token={token} />
+
       <Panel title="How a grade reaches Classroom" note="Approval before publication">
         <ol className="panel-copy">
           <li>A submission is retrieved and ingested through the engine’s existing pipeline.</li>
@@ -344,6 +390,172 @@ type RunAction = (
   key: string,
   action: () => Promise<{ ok: boolean; message: string }>,
 ) => Promise<void>
+
+function ClassAssignmentsPanel({
+  workspace,
+  token,
+  courseId,
+  canManage,
+}: {
+  workspace: string
+  token: string
+  courseId: string
+  canManage: boolean
+}) {
+  const [assignments, reloadAssignments] = useResource<ClassroomClassAssignment[]>(
+    `classroom-assignments:${workspace}:${courseId}:${token}`,
+    canManage
+      ? (signal) => classroomClassAssignments(workspace, courseId, { token, signal })
+      : null,
+  )
+  const [members] = useResource<Member[]>(
+    `classroom-members:${workspace}:${token}`,
+    canManage ? (signal) => identityService.members(workspace, { token, signal }) : null,
+  )
+  const [memberId, setMemberId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  if (!canManage) return null
+
+  const assigned = assignments.state === 'ok' ? assignments.data : []
+  const candidates =
+    members.state === 'ok'
+      ? members.data.filter(
+          (member) =>
+            (member.role === 'TEACHER' || member.role === 'REVIEWER') &&
+            !assigned.some((row) => row.user_id === member.id),
+        )
+      : []
+
+  async function add() {
+    if (!memberId) return
+    setBusy(true)
+    setNotice(null)
+    const result = await createClassroomClassAssignment(workspace, courseId, memberId, {
+      token,
+    })
+    setBusy(false)
+    if (result.status === 'ok') {
+      setMemberId('')
+      setNotice('Class assignment recorded.')
+      reloadAssignments()
+    } else {
+      setNotice(result.reason)
+    }
+  }
+
+  async function remove(row: ClassroomClassAssignment) {
+    setBusy(true)
+    setNotice(null)
+    const result = await removeClassroomClassAssignment(
+      workspace,
+      courseId,
+      row.id,
+      { token },
+    )
+    setBusy(false)
+    if (result.status === 'ok') {
+      setNotice('Assignment removed; access is revoked immediately.')
+      reloadAssignments()
+    } else {
+      setNotice(result.reason)
+    }
+  }
+
+  return (
+    <Panel title="Class assignments" note="Workspace owner or administrator only">
+      <p className="panel-copy">
+        Membership does not grant a class. Add a teacher or reviewer here; they see this
+        course and its roster, and removing the row revokes both immediately.
+      </p>
+      {assignments.state === 'loading' ? (
+        <p className="panel-copy">Reading class assignments…</p>
+      ) : assignments.state === 'unavailable' || assignments.state === 'error' ? (
+        <p className="panel-copy">{assignments.reason}</p>
+      ) : assigned.length === 0 ? (
+        <p className="panel-copy">No teacher or reviewer is assigned to this class yet.</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table">
+            <caption className="visually-hidden">People assigned to this class</caption>
+            <thead>
+              <tr>
+                <th scope="col">Person</th>
+                <th scope="col">Role</th>
+                <th scope="col">Assigned by</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assigned.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <span className="data-table__strong">
+                      {row.user_label ?? row.user_email ?? row.user_id}
+                    </span>
+                    <span className="gem-footnote">{row.user_email ?? '—'}</span>
+                  </td>
+                  <td>{row.user_role}</td>
+                  <td>{row.assigned_by_label ?? '—'}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--danger"
+                      disabled={busy}
+                      onClick={() => void remove(row)}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="app-form__row">
+        <label className="app-form__label" htmlFor="class-assignment-member">
+          Add a teacher or reviewer
+        </label>
+        <select
+          id="class-assignment-member"
+          className="app-input"
+          value={memberId}
+          onChange={(event) => setMemberId(event.target.value)}
+          disabled={busy || candidates.length === 0}
+        >
+          <option value="">
+            {candidates.length === 0
+              ? 'No unassigned teacher or reviewer in this workspace'
+              : 'Select a workspace member…'}
+          </option>
+          {candidates.map((member) => (
+            <option key={member.id} value={member.id}>
+              {member.display_name ?? member.email ?? member.subject} ({member.role})
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="app-inline-actions">
+        <button
+          type="button"
+          className="btn btn--small btn--primary"
+          disabled={busy || !memberId}
+          onClick={() => void add()}
+        >
+          {busy ? 'Saving…' : 'Assign class'}
+        </button>
+      </div>
+      {notice ? (
+        <p className="panel-copy" role="status">
+          {notice}
+        </p>
+      ) : null}
+    </Panel>
+  )
+}
 
 function CourseworkPanel({
   tenantId,

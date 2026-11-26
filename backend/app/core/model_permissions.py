@@ -47,9 +47,10 @@ from enum import StrEnum
 from typing import Any
 
 from .marking_policy import (
+    PRIMARY_MARKING_MODELS,
     PRODUCTION_MARKING_MODEL,
     is_disabled_marking_model,
-    is_production_marking_model,
+    is_primary_marking_model,
     normalise_model_id,
 )
 
@@ -88,20 +89,40 @@ EXECUTABLE_STATUSES = frozenset(
 #: Both Lite models are reserved for transcription only.  Neither is permitted
 #: for marking, and neither may stand in for the reviewer.
 _SPECIALIST_PERMISSIONS: dict[str, dict[AICapability, PermissionStatus]] = {
+    # Retired by Google on 2026-10-20; the documented replacement is
+    # gemini-3.8-flash or gemini-3.5-flash-lite.  It keeps that record and no
+    # grant: a retired model must not be the answer to "which model reviews?"
+    "gemini-2.5-flash": {
+        AICapability.TRANSCRIPTION: PermissionStatus.DISABLED,
+        AICapability.INDEPENDENT_REVIEW: PermissionStatus.DISABLED,
+    },
+    # The three primary marking models.  None of them holds a specialist grant:
+    # a reading taken by the marking model is not an independent one, so they may
+    # only be named (RESERVED) for those roles, never executed there.
+    "gemini-4-hydrogen": {
+        AICapability.TRANSCRIPTION: PermissionStatus.RESERVED,
+        AICapability.INDEPENDENT_REVIEW: PermissionStatus.RESERVED,
+    },
+    "gemini-3.8-flash": {
+        AICapability.TRANSCRIPTION: PermissionStatus.RESERVED,
+        AICapability.INDEPENDENT_REVIEW: PermissionStatus.RESERVED,
+    },
     "gemini-3.6-flash": {
         AICapability.TRANSCRIPTION: PermissionStatus.RESERVED,
         AICapability.INDEPENDENT_REVIEW: PermissionStatus.RESERVED,
     },
-    # Disabled for marking.  Reserved for transcription only: after validation
-    # it may be enabled for that role, and still never for marking or review.
+    # The evidence checker: it independently inspects the approved criteria and
+    # the student's evidence for the questions it is given, and never marks.
+    # It is not the blind reader as well — one model must not supply both
+    # independent readings, or neither is independent of the other.
     "gemini-3.5-flash-lite": {
         AICapability.TRANSCRIPTION: PermissionStatus.RESERVED,
-        AICapability.INDEPENDENT_REVIEW: PermissionStatus.DISABLED,
+        AICapability.INDEPENDENT_REVIEW: PermissionStatus.ENABLED,
     },
-    # Disabled for marking, and disabled for review.  Reserved for transcription
-    # only, on the same terms as 3.5 Flash Lite.
+    # The blind transcription checker: it reads the page without the criteria and
+    # without the primary model's marks, and never reviews or marks.
     "gemini-3.1-flash-lite": {
-        AICapability.TRANSCRIPTION: PermissionStatus.RESERVED,
+        AICapability.TRANSCRIPTION: PermissionStatus.ENABLED,
         AICapability.INDEPENDENT_REVIEW: PermissionStatus.DISABLED,
     },
     # Recorded by the production migration as unavailable: it is listed by no
@@ -152,7 +173,7 @@ def marking_permission(model: str | None) -> PermissionStatus:
 
     return (
         PermissionStatus.ENABLED
-        if is_production_marking_model(model)
+        if is_primary_marking_model(model)
         else PermissionStatus.DISABLED
     )
 
@@ -249,15 +270,17 @@ def permission_problem(
     if not candidate:
         return f"No model is configured for {role.value}."
     if role is AICapability.MARKING:
+        verified = ", ".join(PRIMARY_MARKING_MODELS)
         if is_disabled_marking_model(candidate):
             return (
                 f"{candidate} cannot mark a paper: it is a disabled lightweight "
-                f"model. {PRODUCTION_MARKING_MODEL} is the only marking model, "
-                "and there is no marking fallback."
+                f"or independent checking model. The verified marking models are "
+                f"{verified}, and a paper is never moved to another of them "
+                "after a failure."
             )
         return (
-            f"{candidate} cannot mark a paper. {PRODUCTION_MARKING_MODEL} is the "
-            "only model a production correction job may use."
+            f"{candidate} cannot mark a paper. The verified marking models are "
+            f"{verified}."
         )
     if status is PermissionStatus.RESERVED:
         return (
@@ -344,6 +367,7 @@ def model_permission_report() -> dict[str, Any]:
     }
     return {
         "marking_model": PRODUCTION_MARKING_MODEL,
+        "marking_models": list(PRIMARY_MARKING_MODELS),
         "models": rows,
         "role_capabilities": {
             role: capability.value for role, capability in MODEL_CHAIN_CAPABILITY.items()
@@ -367,14 +391,15 @@ def model_permission_report() -> dict[str, Any]:
             capability.value: models_with(capability, PermissionStatus.DISABLED)
             for capability in AICapability
         },
-        "specialist_roles_implemented": False,
+        "specialist_roles_implemented": True,
         "note": (
-            "Marking is active with "
-            f"{PRODUCTION_MARKING_MODEL} only, and no model may mark in its "
-            "place. Transcription and independent review are not implemented in "
-            "this build; their rows describe what each model would be permitted "
-            "to do once those roles exist and are validated. A role with no "
-            "permitted model refuses before a request is sent."
+            "Marking is active with the verified primary models ("
+            f"{', '.join(PRIMARY_MARKING_MODELS)}); one model marks a given paper "
+            "and no model is substituted for it after a failure. Blind "
+            "transcription and independent evidence review are separate roles "
+            "held by separate models, so neither reading is the marking model's "
+            "own. A role with no permitted model refuses before a request is "
+            "sent."
         ),
     }
 

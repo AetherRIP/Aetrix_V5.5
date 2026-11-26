@@ -45,6 +45,7 @@ from ...services.contributors import (
     suspend_contributor,
     withdraw_contributor,
 )
+from ...services.quota import QuotaEstimator
 from .admin_providers import key_read, require_fleet_admin
 
 router = APIRouter(prefix="/admin/providers/contributions", tags=["contributions"])
@@ -185,7 +186,13 @@ def add_contributed_key(
             "fingerprint": credential.key_fingerprint,
         },
     )
-    return key_read(credential, None)
+    # A contributed pool has its own budget from the moment it is registered;
+    # the response states that, while Google-level capacity stays UNKNOWN until
+    # the project is established.
+    estimate = QuotaEstimator(session, settings).pool_estimate(
+        credential, settings.provider.model_primary
+    )
+    return key_read(credential, None, estimate=estimate)
 
 
 @router.delete(

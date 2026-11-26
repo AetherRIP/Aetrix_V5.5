@@ -24,12 +24,16 @@ from sqlalchemy.orm import Session
 from ..core.config import Settings
 from ..core.errors import AppError, ErrorCode
 from ..core.ids import utcnow
+from ..core.model_registry import registry_report
 from ..core.monitoring_models import filter_monitored
 from ..core.security import SecretBox, fingerprint
-from ..db.models import ProviderCredential, ProviderUsage
+from ..db.models import (
+    GOOGLE_QUOTA_UNKNOWN,
+    ProviderCredential,
+    ProviderUsage,
+)
 from ..db.repositories import (
     CredentialRepository,
-    QuotaReservationRepository,
     UsageRepository,
 )
 from ..providers.base import LLMProvider, LLMRequest, ProviderNotConfigured, TokenUsage
@@ -47,10 +51,25 @@ from ..providers.errors import (
     category_for_legacy_error,
     failure_category,
 )
+from . import model_scheduler
+from .credential_pools import (
+    POOL_NOTE,
+    pool_enabled,
+    quarantine_for,
+)
+from .google_cloud import is_verifiable_project_id
 from .google_quota import (
     PROJECT_VERIFICATION_FALLBACK,
     is_stale,
     verification_summary,
+)
+from .project_identity import (
+    PROJECT_IDENTITY_UNVERIFIED,
+    classify,
+    google_project_verified,
+    is_established,
+    is_pool_label,
+    pool_identity,
 )
 from .quota import QuotaEstimator, day_start, next_reset, quota_timezone
 
@@ -125,6 +144,7 @@ def add_credential(
     auth_type: str = "api_key",
     tenant_id: uuid.UUID | None = None,
     contributor_id: uuid.UUID | None = None,
+    declared_by: str | None = None,
 ) -> ProviderCredential:
     raw = api_key.get_secret_value().strip()
     if not raw:
@@ -135,6 +155,15 @@ def add_credential(
         raise AppError(ErrorCode.VALIDATION_ERROR, "Unknown authentication type.")
 
     project = _clean_project(project_id)
+    # A key added by an administrator with an explicit project is an assertion of
+    # identity, recorded with who made it; a key added by a script or a
+    # contributor is not, and stays unrouted until someone asserts it.
+    declared_at = utcnow() if declared_by else None
+    identity, identity_reason = classify(
+        project_id=project,
+        google_verified=google_project_verified(session, project),
+        declared_at=declared_at,
+    )
     credentials = CredentialRepository(session)
     key_fingerprint = fingerprint(raw)
     existing = credentials.get_by_fingerprint(key_fingerprint)
@@ -155,9 +184,63 @@ def add_credential(
         model_access=list(model_access or []),
         auth_type=auth_type,
         tier=tier,
+        project_identity=identity,
+        project_identity_reason=identity_reason,
+        project_identity_declared_at=declared_at,
+        project_identity_declared_by=declared_by,
         # Unknown until a validation call actually succeeds.
         health="UNKNOWN",
     )
+    session.commit()
+    return credential
+
+
+def declare_project_identity(
+    session: Session,
+    credential: ProviderCredential,
+    *,
+    project_id: str | None,
+    declared_by: str,
+    note: str | None = None,
+) -> ProviderCredential:
+    """Record an administrator's assertion of which project a key bills.
+
+    Google stays the authority: if Resource Manager has verified the project the
+    credential is stored ``VERIFIED``, otherwise ``DECLARED``.  Only the identity
+    columns and the declared id change; ``provider_usage`` keeps the project id
+    each request was recorded under, so the ledger is never rewritten.
+    """
+
+    target = _clean_project(project_id or credential.project_id)
+    if is_pool_label(target):
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "That is a pooled label, not a Google Cloud project. Declare the "
+            "project id from the Google Cloud console: keys sharing a pool name "
+            "cannot be told apart from keys billing different projects, and this "
+            "change exists to stop that being counted as one allowance.",
+        )
+    if not is_verifiable_project_id(target):
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "That is not a Google Cloud project id, so it cannot be asserted as a "
+            "project identity. Use the id from the Google Cloud console (for "
+            "example 'my-project-123456').",
+        )
+    now = utcnow()
+    credential.project_id = target
+    identity, reason = classify(
+        project_id=target,
+        google_verified=google_project_verified(session, target),
+        declared_at=now,
+    )
+    extra = (note or "").strip()
+    credential.project_identity = identity
+    credential.project_identity_reason = (
+        f"{reason} {extra}" if extra else reason
+    )[:300]
+    credential.project_identity_declared_at = now
+    credential.project_identity_declared_by = declared_by[:200]
     session.commit()
     return credential
 
@@ -166,6 +249,7 @@ def import_credentials(
     session: Session,
     settings: Settings,
     entries: Iterable[dict[str, Any]],
+    declared_by: str | None = None,
 ) -> list[ImportOutcome]:
     """Register many keys, reporting each outcome instead of failing the batch.
 
@@ -205,6 +289,7 @@ def import_credentials(
                 tier=str(entry.get("tier") or "UNKNOWN"),
                 auth_type=str(entry.get("auth_type") or "api_key"),
                 tenant_id=entry.get("tenant_id"),
+                declared_by=declared_by,
             )
         except AppError as error:
             outcomes.append(
@@ -234,6 +319,14 @@ def import_credentials(
 #: that a key belongs to that Google Cloud project, so no row is labelled
 #: VERIFIED.
 PROJECT_VERIFICATION = "OPERATOR_DECLARED"
+
+#: What the model section of the fleet report does and does not claim.
+MODEL_NOTE = (
+    "Model selection and credential selection are separate decisions. The five "
+    "verified models are recorded with the capabilities they were verified to "
+    "have; the scheduler chooses one primary per paper from health, recorded "
+    "Aetrix budgets and load. A credential count is not a Google quota count."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,13 +540,23 @@ def validate_credential(
         credential.last_failure_at = now
         credential.last_failure_status = error.status_code
         credential.last_validated_at = now
+        credential.consecutive_failures = int(credential.consecutive_failures or 0) + 1
         if verdict.category == "quota":
-            # The probe spent this key's allowance, which says nothing about
-            # the rest of the fleet; a project-wide pause here would stop
-            # marking on the strength of one probe.
+            # The probe spent this pool's allowance, which says nothing about
+            # the rest of the fleet: quarantine this credential only.
             credential.cooldown_until = now + timedelta(
                 seconds=settings.quota.cooldown_seconds
             )
+            credential.cooldown_kind = "QUOTA"
+            credential.last_quota_exhausted_at = now
+            credential.last_quota_reason = (
+                " ".join(
+                    part
+                    for part in (error.provider_code, error.provider_message)
+                    if part
+                )
+                or f"{type(error).__name__}: {error}"
+            )[:300]
         error_usage = error.usage or TokenUsage()
         usage.record(
             tenant_id=credential.tenant_id,
@@ -501,6 +604,8 @@ def validate_credential(
     credential.last_success_at = now
     credential.last_validated_at = now
     credential.cooldown_until = None
+    credential.cooldown_kind = None
+    credential.consecutive_failures = 0
     credential.last_error = None
     usage.record(
         tenant_id=credential.tenant_id,
@@ -561,8 +666,11 @@ def set_enabled(
         if credential.health == "DISABLED":
             credential.health = "UNKNOWN"
             credential.cooldown_until = None
+            credential.cooldown_kind = None
     else:
         credential.health = "DISABLED"
+        credential.cooldown_until = None
+        credential.cooldown_kind = None
     session.commit()
     return credential
 
@@ -649,7 +757,6 @@ def _project_operational(
 def fleet_overview(session: Session, settings: Settings) -> dict[str, Any]:
     credentials = CredentialRepository(session).all_credentials()
     usage = UsageRepository(session)
-    quota = QuotaEstimator(session, settings)
     now = utcnow()
     zone = settings.quota.daily_reset_timezone
     _, effective_zone = quota_timezone(zone)
@@ -659,7 +766,6 @@ def fleet_overview(session: Session, settings: Settings) -> dict[str, Any]:
     latest_success = usage.latest_success()
     latest_failures = usage.latest_failures(1)
     latest_failure = latest_failures[0] if latest_failures else None
-    latest_project = usage.latest_by_project(sorted({c.project_id for c in credentials}))
 
     by_health: dict[str, int] = {}
     projects: dict[str, list[ProviderCredential]] = {}
@@ -667,56 +773,12 @@ def fleet_overview(session: Session, settings: Settings) -> dict[str, Any]:
         by_health[credential.health] = by_health.get(credential.health, 0) + 1
         projects.setdefault(credential.project_id, []).append(credential)
 
-    project_rows: list[dict[str, Any]] = []
     verifications = verification_summary(session, sorted(projects))
-    for project_id, keys in sorted(projects.items()):
-        estimates = quota.project_estimates(project_id, _models(settings, keys), now)
-        cooldown_until = max(
-            (key.cooldown_until for key in keys if key.cooldown_until), default=None
-        )
-        verification = verifications.get(project_id)
-        verification_status = (
-            verification.verification_status
-            if verification is not None
-            else PROJECT_VERIFICATION_FALLBACK
-        )
-        project_rows.append(
-            {
-                "project_id": project_id,
-                "verification": verification_status,
-                "verified": verification_status == "VERIFIED",
-                "project_number": (
-                    verification.project_number if verification is not None else None
-                ),
-                "google_last_attempt_at": (
-                    verification.last_attempt_at if verification is not None else None
-                ),
-                "google_quota_last_synced_at": (
-                    verification.last_success_at if verification is not None else None
-                ),
-                "google_quota_stale": is_stale(
-                    verification.last_success_at if verification is not None else None,
-                    now,
-                    settings.google_cloud.stale_after_seconds,
-                ),
-                "keys": len(keys),
-                "contributors": len(
-                    {key.contributor_id for key in keys if key.contributor_id is not None}
-                ),
-                "healthy": sum(1 for key in keys if key.health == "HEALTHY"),
-                "unknown": sum(1 for key in keys if key.health == "UNKNOWN"),
-                "disabled": sum(1 for key in keys if key.health == "DISABLED"),
-                "invalid": sum(1 for key in keys if key.health == "INVALID"),
-                "cooldown_until": cooldown_until,
-                "operational_status": _project_operational(
-                    keys,
-                    latest_project.get(project_id),
-                    now=now,
-                    cooldown_until=cooldown_until,
-                ),
-                "estimates": [estimate.as_dict() for estimate in estimates],
-            }
-        )
+    verified_projects = sum(
+        1
+        for verification in verifications.values()
+        if verification.verification_status == "VERIFIED"
+    )
 
     latest = latest_calls[0] if latest_calls else None
     operational = operational_status(
@@ -736,11 +798,40 @@ def fleet_overview(session: Session, settings: Settings) -> dict[str, Any]:
         "keys_by_health": by_health,
         "projects": len(projects),
         "declared_projects": len(projects),
-        "verified_projects": sum(1 for row in project_rows if row["verified"]),
+        "verified_projects": verified_projects,
+        # ── Aetrix pools: the unit of administration, not of Google quota ────
+        "credential_pools": len(credentials),
+        "pools_available": sum(
+            1
+            for key in credentials
+            if pool_enabled(key) and not quarantine_for(key, now).active
+        ),
+        "pools_quarantined": sum(
+            1 for key in credentials if quarantine_for(key, now).active
+        ),
+        "routable_keys": sum(
+            1
+            for key in credentials
+            if pool_enabled(key) and not quarantine_for(key, now).active
+        ),
+        "identity_unverified_keys": sum(
+            1
+            for key in credentials
+            if key.project_identity == PROJECT_IDENTITY_UNVERIFIED
+        ),
+        #: Projects Google or an administrator has established.  A pool count is
+        #: not a project count and is never reported as one.
+        "authorised_projects": len(
+            {
+                key.project_id
+                for key in credentials
+                if is_established(key.project_identity)
+            }
+        ),
+        "pinned_credential_id": settings.provider.pinned_credential_id,
+        "pool_note": POOL_NOTE,
         "project_verification": (
-            "GOOGLE_CLOUD"
-            if any(row["verified"] for row in project_rows)
-            else PROJECT_VERIFICATION
+            "GOOGLE_CLOUD" if verified_projects else PROJECT_VERIFICATION
         ),
         "attempted_today": today["attempted"],
         "requests_today": today["attempted"],
@@ -764,8 +855,126 @@ def fleet_overview(session: Session, settings: Settings) -> dict[str, Any]:
         "reset_at": next_reset(now, zone),
         "reset_timezone": effective_zone,
         "quota_accounting": "AETRIX_RESERVATIONS_PLUS_VALIDATION",
-        "projects_detail": project_rows,
+        # Project rows carry per-project quota estimates and are served by
+        # ``fleet_projects`` so the fleet counts above do not wait for them.
+        "projects_detail": [],
+        # ── The model dimension: five verified models, two decisions ─────────
+        # Which model performs the work is separate from which credential pays
+        # for it.  The registry states what each model may do and when it was
+        # verified; the scheduler states which primary would take a new paper
+        # and why.  Neither adds credential quotas up into a Google allowance.
+        "model_registry": registry_report(),
+        "model_scheduler": model_scheduler.scheduler_report(session, settings),
+        "model_note": MODEL_NOTE,
     }
+
+
+def _project_rows(
+    session: Session,
+    settings: Settings,
+    credentials: list[ProviderCredential],
+    *,
+    now: Any,
+) -> list[dict[str, Any]]:
+    """One row per declared project label, with its Aetrix-labelled budgets."""
+
+    projects: dict[str, list[ProviderCredential]] = {}
+    for credential in credentials:
+        projects.setdefault(credential.project_id, []).append(credential)
+    if not projects:
+        return []
+    latest_project = UsageRepository(session).latest_by_project(sorted(projects))
+    verifications = verification_summary(session, sorted(projects))
+    quota = QuotaEstimator(session, settings)
+    # Labels advertising the same monitored models are estimated together, so
+    # the page reads one set of counters instead of one set per label.
+    targets: dict[tuple[str, ...], list[str]] = {}
+    for project_id, keys in projects.items():
+        targets.setdefault(tuple(_models(settings, keys)), []).append(project_id)
+    estimates_by_project: dict[str, list[Any]] = {}
+    for models, project_ids in targets.items():
+        if not models:
+            estimates_by_project.update({project: [] for project in project_ids})
+            continue
+        estimates_by_project.update(
+            quota.project_estimates_many(project_ids, list(models), now=now)
+        )
+
+    rows: list[dict[str, Any]] = []
+    for project_id, keys in sorted(projects.items()):
+        estimates = estimates_by_project.get(project_id, [])
+        cooldown_until = max(
+            (key.cooldown_until for key in keys if key.cooldown_until), default=None
+        )
+        verification = verifications.get(project_id)
+        verification_status = (
+            verification.verification_status
+            if verification is not None
+            else PROJECT_VERIFICATION_FALLBACK
+        )
+        rows.append(
+            {
+                "project_id": project_id,
+                "verification": verification_status,
+                "verified": verification_status == "VERIFIED",
+                "project_number": (
+                    verification.project_number if verification is not None else None
+                ),
+                "google_last_attempt_at": (
+                    verification.last_attempt_at if verification is not None else None
+                ),
+                "google_quota_last_synced_at": (
+                    verification.last_success_at if verification is not None else None
+                ),
+                "google_quota_stale": is_stale(
+                    verification.last_success_at if verification is not None else None,
+                    now,
+                    settings.google_cloud.stale_after_seconds,
+                ),
+                "keys": len(keys),
+                # Every credential is a pool; "routable" here means the pool is
+                # enabled and not quarantined, not that Google gave it capacity.
+                "pools": len(keys),
+                "routable_keys": sum(
+                    1
+                    for key in keys
+                    if pool_enabled(key) and not quarantine_for(key, now).active
+                ),
+                "identity": pool_identity([key.project_identity for key in keys]),
+                "google_quota_status": (
+                    estimates[0].google_quota_status
+                    if estimates
+                    else GOOGLE_QUOTA_UNKNOWN
+                ),
+                "contributors": len(
+                    {key.contributor_id for key in keys if key.contributor_id is not None}
+                ),
+                "healthy": sum(1 for key in keys if key.health == "HEALTHY"),
+                "unknown": sum(1 for key in keys if key.health == "UNKNOWN"),
+                "disabled": sum(1 for key in keys if key.health == "DISABLED"),
+                "invalid": sum(1 for key in keys if key.health == "INVALID"),
+                "cooldown_until": cooldown_until,
+                "operational_status": _project_operational(
+                    keys,
+                    latest_project.get(project_id),
+                    now=now,
+                    cooldown_until=cooldown_until,
+                ),
+                "estimates": [estimate.as_dict() for estimate in estimates],
+            }
+        )
+    return rows
+
+
+def fleet_projects(session: Session, settings: Settings) -> list[dict[str, Any]]:
+    """The project labels the fleet page groups keys under, and their budgets."""
+
+    return _project_rows(
+        session,
+        settings,
+        CredentialRepository(session).all_credentials(),
+        now=utcnow(),
+    )
 
 
 def fleet_alerts(session: Session, settings: Settings) -> list[dict[str, Any]]:
@@ -773,7 +982,6 @@ def fleet_alerts(session: Session, settings: Settings) -> list[dict[str, Any]]:
 
     credentials = CredentialRepository(session).all_credentials()
     usage = UsageRepository(session)
-    reservations = QuotaReservationRepository(session)
     quota = QuotaEstimator(session, settings)
     now = utcnow()
     start = day_start(now, settings.quota.daily_reset_timezone)
@@ -783,17 +991,24 @@ def fleet_alerts(session: Session, settings: Settings) -> list[dict[str, Any]]:
     for credential in credentials:
         projects.setdefault(credential.project_id, []).append(credential)
 
+    primary = settings.provider.model_primary
+    # One set of pool counters for the whole fleet; reading them per credential
+    # put four round trips between the page and each of its pools.
+    estimates = quota.pool_estimates(credentials, primary, now=now)
+
     for project_id, keys in sorted(projects.items()):
-        cooldown = reservations.project_cooldown(project_id)
-        if cooldown is not None and cooldown.cooldown_until > now:
+        identity = pool_identity([key.project_identity for key in keys])
+        if not is_established(identity):
             alerts.append(
                 {
-                    "severity": "critical",
-                    "kind": "project_cooldown",
+                    "severity": "info",
+                    "kind": "project_identity_unknown",
                     "project_id": project_id,
                     "message": (
-                        f"Project {project_id} is paused until "
-                        f"{cooldown.cooldown_until.isoformat()} — {cooldown.reason}"
+                        f"Google-level capacity for {len(keys)} key(s) under "
+                        f"{project_id} is UNKNOWN (identity {identity}). "
+                        "Aetrix pools are per credential; they are not evidence "
+                        "of separate Google projects and may share one."
                     ),
                 }
             )
@@ -821,7 +1036,25 @@ def fleet_alerts(session: Session, settings: Settings) -> list[dict[str, Any]]:
                 }
             )
 
-        for estimate in quota.project_estimates(project_id, _models(settings, keys), now):
+        # Quarantine and budget are pool properties.  Reporting them per project
+        # would imply a shared Google allowance that Aetrix cannot observe.
+        for key in keys:
+            quarantine = quarantine_for(key, now)
+            if quarantine.active and quarantine.kind == "QUOTA":
+                alerts.append(
+                    {
+                        "severity": "critical",
+                        "kind": "credential_quarantined",
+                        "project_id": project_id,
+                        "pool_id": key.pool_id,
+                        "message": (
+                            f"Credential pool {key.pool_id} is quarantined until "
+                            f"{quarantine.until.isoformat()} — "
+                            f"{quarantine.reason}"
+                        ),
+                    }
+                )
+            estimate = estimates[key.id]
             for label, window in (
                 ("requests/minute", estimate.requests_per_minute),
                 ("tokens/minute", estimate.tokens_per_minute),
@@ -833,12 +1066,14 @@ def fleet_alerts(session: Session, settings: Settings) -> list[dict[str, Any]]:
                 if share >= 1.0:
                     alerts.append(
                         {
-                            "severity": "critical",
-                            "kind": "quota_exhausted",
+                            "severity": "warning",
+                            "kind": "credential_budget_exhausted",
                             "project_id": project_id,
+                            "pool_id": key.pool_id,
                             "message": (
-                                f"{project_id} has no {label} left for "
-                                f"{estimate.model} ({window.confidence.lower()} limit)."
+                                f"Aetrix pool {key.pool_id} has no {label} left "
+                                f"for {estimate.model} ({window.confidence.lower()} "
+                                "configured limit)."
                             ),
                         }
                     )
@@ -846,11 +1081,13 @@ def fleet_alerts(session: Session, settings: Settings) -> list[dict[str, Any]]:
                     alerts.append(
                         {
                             "severity": "warning",
-                            "kind": "quota_approaching",
+                            "kind": "credential_budget_approaching",
                             "project_id": project_id,
+                            "pool_id": key.pool_id,
                             "message": (
-                                f"{project_id} has used {share:.0%} of its {label} for "
-                                f"{estimate.model} ({window.confidence.lower()} limit)."
+                                f"Aetrix pool {key.pool_id} has used {share:.0%} of "
+                                f"its {label} for {estimate.model} "
+                                f"({window.confidence.lower()} configured limit)."
                             ),
                         }
                     )

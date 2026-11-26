@@ -107,8 +107,11 @@ def test_the_default_review_chain_starts_with_a_usable_model() -> None:
     settings = get_settings()
     review = settings.provider.model_chains["review"]
 
-    assert review[0].model == "gemini-2.5-flash"
+    # The evidence checker, not the retired gemini-2.5-flash (shut down
+    # 2026-10-20) and not a marking model.
+    assert review[0].model == "gemini-3.5-flash-lite"
     assert review[0].enabled
+    assert is_permitted(review[0].model, AICapability.INDEPENDENT_REVIEW)
     # The model no credential in this deployment may call is gone, rather than
     # sitting in front of every review request as an unusable first entry.
     assert "gemini-3.1-pro-preview" not in {entry.model for entry in review}
@@ -145,10 +148,11 @@ def test_the_review_role_the_transcription_prompt_uses_exists() -> None:
 def test_a_review_chain_of_unpermitted_models_is_refused() -> None:
     """Configuring a fallback is not authorising it.
 
-    Every model in this chain is either disabled for independent review or only
-    reserved for it, so the role has no permitted model and must refuse before a
+    The marking model is only *reserved* for independent review, so a review
+    chain that names it has no permitted model and must refuse before a
     credential is leased.  Calling ``gemini-3.6-flash`` here would be the silent
-    fallback this test exists to prevent.
+    fallback this test exists to prevent, and would make the "independent"
+    reading the model that produced the marks.
     """
 
     base = get_settings()
@@ -156,10 +160,7 @@ def test_a_review_chain_of_unpermitted_models_is_refused() -> None:
         update={
             "model_chains": {
                 "primary": [ModelChainEntry(model="gemini-3.6-flash")],
-                "review": [
-                    ModelChainEntry(model="gemini-2.5-flash"),
-                    ModelChainEntry(model="gemini-3.6-flash"),
-                ],
+                "review": [ModelChainEntry(model="gemini-3.6-flash")],
                 "lightweight": [ModelChainEntry(model="gemini-2.5-flash")],
             }
         }
@@ -171,8 +172,7 @@ def test_a_review_chain_of_unpermitted_models_is_refused() -> None:
         service.model_chain("review")
 
     assert error.value.code.value == "CONFIGURATION_ERROR"
-    assert "gemini-2.5-flash" in error.value.message
-    assert "gemini-3.6-flash" in error.value.message
+    assert "gemini-3.6-flash (RESERVED)" in error.value.message
     assert "independent_review" in error.value.message
 
 

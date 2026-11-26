@@ -53,6 +53,15 @@ from .google_cloud import (
     credential_source,
     is_verifiable_project_id,
 )
+from .project_health import (
+    QuotaView,
+    RunView,
+    build_health,
+    monitor_snapshot,
+    project_alerts,
+    usage_signal_rows,
+)
+from .project_identity import apply_google_verification
 
 SyncTrigger = Literal["MANUAL", "SCHEDULED"]
 
@@ -367,6 +376,10 @@ def _sync_project(
         )
 
     _apply_identity(project, identity, utcnow())
+    # Google's verdict is the strongest identity evidence there is, so every key
+    # of this project becomes routable.  Only identity columns change: the usage
+    # ledger keeps the project id each request was recorded under.
+    apply_google_verification(session, project_id)
 
     services_error: GoogleCloudError | None = None
     try:
@@ -571,11 +584,19 @@ def quota_report(
     stale_after = settings.google_cloud.stale_after_seconds
     declared = declared_project_ids(session)
     projects_by_id = verification_summary(session, declared)
+    usage_by_project = usage_signal_rows(
+        session, declared, since=observed - timedelta(hours=24)
+    )
 
     projects: list[dict[str, Any]] = []
+    alerts: list[dict[str, Any]] = []
     total_quotas = 0
     usage_observed = 0
     stale_projects = 0
+    healthy_projects = 0
+    degraded_projects = 0
+    unknown_projects = 0
+    quota_warnings = 0
     last_success: datetime | None = None
     last_failure: datetime | None = None
     last_failure_message: str | None = None
@@ -603,6 +624,43 @@ def quota_report(
         )
         success_at = project.last_success_at if project else None
         stale = is_stale(success_at, observed, stale_after)
+        health = build_health(
+            project_id,
+            [
+                RunView(
+                    id=str(run.id),
+                    status=run.status,
+                    error_code=run.error_code,
+                    started_at=run.started_at,
+                    finished_at=run.finished_at,
+                )
+                for run in runs
+            ],
+            [
+                QuotaView(
+                    limit_value=float(row.limit_value)
+                    if row.limit_value is not None
+                    else None,
+                    limit_source=row.limit_source,
+                    exceeded_value=float(row.exceeded_value)
+                    if row.exceeded_value is not None
+                    else None,
+                )
+                for row in quotas
+            ],
+            usage_by_project.get(project_id, []),
+            now=observed,
+            stale_after_seconds=stale_after,
+        )
+        alerts.extend(project_alerts(project_id, health))
+        if health["state"] == "HEALTHY":
+            healthy_projects += 1
+        elif health["state"] == "UNKNOWN":
+            unknown_projects += 1
+        else:
+            degraded_projects += 1
+        if health["quota_status"] in {"WARNING", "EXHAUSTED"}:
+            quota_warnings += 1
         if success_at is not None and (last_success is None or success_at > last_success):
             last_success = success_at
         failure_run = next((run for run in runs if run.status != "SUCCEEDED"), None)
@@ -639,6 +697,29 @@ def quota_report(
                 "usage_observed": sum(1 for row in quotas if row.usage_value is not None),
                 "quotas": [_snapshot_read(row) for row in quotas],
                 "runs": [_run_read(run) for run in runs],
+                "health": health,
+            }
+        )
+
+    monitor = monitor_snapshot(
+        session, interval_seconds=settings.google_cloud.sync_interval_seconds, now=observed
+    )
+    if monitor["state"] in {"STALE", "UNAVAILABLE", "UNKNOWN"}:
+        alerts.append(
+            {
+                "id": f"monitor:{monitor['state'].lower()}",
+                "kind": "monitoring_stale"
+                if monitor["state"] == "STALE"
+                else "monitoring_unavailable",
+                "severity": "critical"
+                if monitor["state"] != "STALE"
+                else "warning",
+                "project_id": None,
+                "title": "Monitoring stale"
+                if monitor["state"] == "STALE"
+                else "Monitoring unavailable",
+                "detail": monitor["detail"],
+                "since": monitor["last_cycle_at"],
             }
         )
 
@@ -668,6 +749,10 @@ def quota_report(
                 for row in projects
                 if row["verification"] == "VERIFIED"
             ),
+            "healthy_projects": healthy_projects,
+            "degraded_projects": degraded_projects,
+            "unknown_projects": unknown_projects,
+            "quota_warnings": quota_warnings,
             "quotas_total": total_quotas,
             "usage_observed": usage_observed,
             "stale_projects": stale_projects,
@@ -676,6 +761,8 @@ def quota_report(
             "last_failure_message": last_failure_message,
         },
         "projects": projects,
+        "monitor": monitor,
+        "alerts": alerts,
         "apis": apis,
         "ai_studio": {
             "available": AISTUDIO_AVAILABLE,

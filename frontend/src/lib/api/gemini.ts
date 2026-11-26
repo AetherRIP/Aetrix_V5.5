@@ -46,6 +46,9 @@ export type QuotaEstimate = {
   cooldown_until: string | null
   accounting?: string
   exhausted: boolean
+  project_identity?: 'VERIFIED' | 'DECLARED' | 'PROJECT_IDENTITY_UNVERIFIED'
+  /** What Aetrix can say about the Google allowance behind the label. */
+  google_quota_status?: 'KNOWN' | 'EXHAUSTED' | 'UNKNOWN'
   /** Requests today whose consumption the provider never confirmed (5xx, timeout). */
   unconfirmed_requests?: number
   notes: string[]
@@ -64,6 +67,12 @@ export type ProjectRow = {
   project_id: string
   verification?: ProjectVerification
   verified?: boolean
+  /** Credential pools under this label. Not a count of Google projects. */
+  pools?: number
+  /** Pools enabled and outside quarantine. */
+  routable_keys?: number
+  identity?: string | null
+  google_quota_status?: 'KNOWN' | 'EXHAUSTED' | 'UNKNOWN'
   project_number?: string | null
   google_last_attempt_at?: string | null
   google_quota_last_synced_at?: string | null
@@ -78,8 +87,12 @@ export type ProjectRow = {
   estimates: QuotaEstimate[]
 }
 
+export type GoogleQuotaStatus = 'KNOWN' | 'EXHAUSTED' | 'UNKNOWN'
+
 export type FleetKey = {
   id: string
+  /** The Aetrix operational pool, `gemini-key-{id}`. Not a Google project. */
+  pool_id?: string
   contributor_id: string | null
   contributor_name: string | null
   revoked_at: string | null
@@ -90,7 +103,28 @@ export type FleetKey = {
   tier: string
   health: Health
   operational_status?: OperationalStatus
-  project_verification?: 'OPERATOR_DECLARED'
+  project_verification?: 'VERIFIED' | 'DECLARED' | 'PROJECT_IDENTITY_UNVERIFIED' | 'OPERATOR_DECLARED'
+  project_identity_reason?: string | null
+  /** False when the enable switch or a quarantine withholds this pool. */
+  enabled?: boolean
+  routable?: boolean
+  google_quota_status?: GoogleQuotaStatus
+  google_quota_note?: string | null
+  quarantined?: boolean
+  quarantine_until?: string | null
+  quarantine_kind?: 'QUOTA' | 'AUTH' | 'NONE'
+  quarantine_reason?: string | null
+  /** This pool's configured daily budget remaining, never a Google figure. */
+  remaining_today?: number | null
+  remaining_minute?: number | null
+  /** Reservation rows in the pool's windows, separate from validation probes. */
+  reservations_today?: number
+  reservations_minute?: number
+  validations_today?: number
+  last_quota_exhausted_at?: string | null
+  last_quota_reason?: string | null
+  consecutive_failures?: number
+  pool_note?: string | null
   model_access: string[]
   cooldown_until: string | null
   last_success_at: string | null
@@ -117,6 +151,57 @@ export type KeyPage = {
   offset: number
 }
 
+export type RegisteredModel = {
+  model_id: string
+  display_name: string
+  role: 'primary' | 'transcription_checker' | 'evidence_checker'
+  priority: number
+  stability: string
+  context_limit: number
+  max_output: number
+  pdf_input: boolean
+  image_input: boolean
+  structured_outputs: boolean
+  thinking: boolean
+  free_tier: boolean
+  /** Free-tier content is recorded by Google as used to improve its products. */
+  free_tier_used_for_product_improvement: boolean
+  retirement_date: string | null
+  source_url: string
+  verified_on: string
+  notes: string
+}
+
+export type ModelRegistryReport = {
+  verified_on: string
+  primary_models: RegisteredModel[]
+  checker_models: RegisteredModel[]
+  marking_excluded: string[]
+  retiring: string[]
+  sources: Record<string, string>
+}
+
+export type SchedulerCandidate = {
+  model_id: string
+  healthy_credentials: number
+  in_flight: number
+  requests_today: number
+  daily_budget: number | null
+  remaining_budget: number | null
+  failures_recent: number
+  successes_recent: number
+  mean_latency_ms: number | null
+  eligible: boolean
+  reason: string
+}
+
+export type ModelSchedulerReport = {
+  enabled: boolean
+  would_choose: string | null
+  reason: string
+  candidates: SchedulerCandidate[]
+}
+
 export type FleetOverview = {
   keys_total: number
   keys_by_health: Partial<Record<Health, number>>
@@ -124,6 +209,15 @@ export type FleetOverview = {
   declared_projects?: number
   verified_projects?: number
   project_verification?: 'OPERATOR_DECLARED' | 'GOOGLE_CLOUD'
+  routable_keys?: number
+  identity_unverified_keys?: number
+  authorised_projects?: number
+  /** One Aetrix pool per credential; not a count of Google projects. */
+  credential_pools?: number
+  pools_available?: number
+  pools_quarantined?: number
+  pinned_credential_id?: string | null
+  pool_note?: string | null
   attempted_today?: number
   requests_today: number
   successful_today?: number
@@ -142,7 +236,13 @@ export type FleetOverview = {
   reset_at: string
   reset_timezone?: string
   quota_accounting?: string
-  projects_detail: ProjectRow[]
+  /** Served by `projects()`; empty in the overview payload by design. */
+  projects_detail?: ProjectRow[]
+  /** The five verified models and what each was verified to do. */
+  model_registry?: ModelRegistryReport
+  /** Which primary would take a new paper, and why. */
+  model_scheduler?: ModelSchedulerReport
+  model_note?: string | null
 }
 
 export type RecentProviderCall = {
@@ -192,6 +292,8 @@ export type FleetAlert = {
   severity: 'critical' | 'warning' | 'info'
   kind: string
   project_id: string | null
+  /** The Aetrix pool an alert is about, when it is about one credential. */
+  pool_id?: string | null
   message: string
 }
 
@@ -479,6 +581,14 @@ export function overview(options: RequestOptions): Promise<ApiResult<FleetOvervi
   return apiGet<FleetOverview>(`${BASE}/overview`, options)
 }
 
+/**
+ * The project labels and their quota estimates. A separate read so the fleet
+ * counts above appear without waiting for per-project counters.
+ */
+export function projects(options: RequestOptions): Promise<ApiResult<ProjectRow[]>> {
+  return apiGet<ProjectRow[]>(`${BASE}/projects`, options)
+}
+
 export function alerts(options: RequestOptions): Promise<ApiResult<FleetAlert[]>> {
   return apiGet<FleetAlert[]>(`${BASE}/alerts`, options)
 }
@@ -536,6 +646,69 @@ export type GoogleQuotaProject = {
   usage_observed: number
   quotas: GoogleQuotaValue[]
   runs: GoogleQuotaRun[]
+  health: GoogleProjectHealth
+}
+
+export type GoogleProjectModelHealth = {
+  model: string
+  requests: number
+  successes: number
+  failures: number
+  last_success_at: string | null
+  last_failure_at: string | null
+  last_http_status: number | null
+  state: 'AVAILABLE' | 'FAILING' | 'UNKNOWN'
+}
+
+export type GoogleProjectHealth = {
+  state:
+    | 'HEALTHY'
+    | 'DEGRADED'
+    | 'OUTAGE'
+    | 'AUTH_FAILURE'
+    | 'PERMISSION_FAILURE'
+    | 'RATE_LIMITED'
+    | 'QUOTA_EXHAUSTED'
+    | 'UNKNOWN'
+  state_confidence: 'CONFIRMED' | 'ESTIMATED' | 'UNKNOWN'
+  reason: string
+  quota_status: 'KNOWN' | 'WARNING' | 'EXHAUSTED' | 'UNKNOWN'
+  quota_confidence: 'CONFIRMED' | 'ESTIMATED' | 'UNKNOWN'
+  quota_reason: string
+  last_sample_at: string | null
+  sample_stale: boolean
+  last_attempt_at: string | null
+  last_status: string | null
+  last_error_code: string | null
+  recovered: boolean
+  signals: {
+    counts: Record<string, number>
+    models: GoogleProjectModelHealth[]
+    last_success_at: string | null
+    last_failure_at: string | null
+    average_latency_ms: number | null
+    confidence: 'CONFIRMED' | 'ESTIMATED' | 'UNKNOWN'
+  }
+}
+
+export type GoogleQuotaAlert = {
+  id: string
+  kind: string
+  severity: 'critical' | 'warning' | 'info'
+  project_id: string | null
+  title: string
+  detail: string
+  since: string | null
+}
+
+export type GoogleMonitor = {
+  state: 'OK' | 'STALE' | 'UNAVAILABLE' | 'UNKNOWN'
+  last_cycle_at: string | null
+  age_seconds: number | null
+  interval_seconds: number
+  grace_seconds: number
+  detail: string
+  last_cycle: Record<string, unknown>
 }
 
 export type GoogleApiRequirement = {
@@ -557,6 +730,10 @@ export type GoogleQuotaReport = {
     stale_after_seconds: number
     declared_projects: number
     verified_projects: number
+    healthy_projects: number
+    degraded_projects: number
+    unknown_projects: number
+    quota_warnings: number
     quotas_total: number
     usage_observed: number
     stale_projects: number
@@ -565,6 +742,8 @@ export type GoogleQuotaReport = {
     last_failure_message: string | null
   }
   projects: GoogleQuotaProject[]
+  monitor: GoogleMonitor
+  alerts: GoogleQuotaAlert[]
   apis: GoogleApiRequirement[]
   ai_studio: { available: boolean; reason: string; source: string }
   coverage: { supported: string[]; unavailable: string[] }
@@ -665,10 +844,15 @@ export type ContributorRow = {
   today: ContributionUsage
 }
 
-export type CapacityProject = {
+/** One credential's Aetrix pool. Not a Google Cloud project. */
+export type CapacityPool = {
+  pool_id: string
+  credential_id: string
   project_id: string
-  contributors: number
-  keys: number
+  contributor_id: string | null
+  quarantined: boolean
+  /** UNKNOWN whenever no Google Cloud project is established. */
+  google_quota_status: 'KNOWN' | 'EXHAUSTED' | 'UNKNOWN'
   requests_per_minute_remaining: number | null
   requests_per_day_remaining: number | null
   confidence: Confidence
@@ -677,11 +861,15 @@ export type CapacityProject = {
 
 export type CapacityModel = {
   model: string
-  projects: CapacityProject[]
+  pools: CapacityPool[]
   totals: {
-    projects: number
-    requests_per_minute_remaining: number | null
-    requests_per_day_remaining: number | null
+    pools: number
+    pools_quarantined: number
+    /** Sums of configured pool budgets, never Google's remaining quota. */
+    aetrix_requests_per_minute_remaining: number | null
+    aetrix_requests_per_day_remaining: number | null
+    google_quota_known: number
+    google_quota_unknown: number
     windows_measured: number
     windows_unknown: number
     confidence: Confidence

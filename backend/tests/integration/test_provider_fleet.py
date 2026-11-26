@@ -33,14 +33,30 @@ from tests.support import FakeProvider, single_model_chains
 
 
 def _settings(*, rpm: int = 100, rpd: int = 5000, limits: dict[str, ModelQuota] | None = None):
+    """Settings whose fleet has a *stated* allowance for the models it calls.
+
+    Aetrix refuses to spend a request against a model with no configured daily
+    limit, because an unknown allowance is not an allowance.  The fleet therefore
+    declares one for every model a test may call; a test that asserts specific
+    estimator figures passes ``limits`` explicitly instead of inheriting these.
+    """
+
     base = get_settings()
+    stated = (
+        limits
+        if limits is not None
+        else {
+            model: ModelQuota(requests_per_minute=rpm, requests_per_day=rpd)
+            for model in (base.provider.model_primary, base.provider.model_review)
+        }
+    )
     return base.model_copy(
         update={
             "quota": base.quota.model_copy(
                 update={
                     "requests_per_minute": rpm,
                     "requests_per_day": rpd,
-                    "model_limits": limits or {},
+                    "model_limits": stated,
                 }
             )
         }
@@ -138,25 +154,50 @@ def test_import_reports_duplicates_and_rejections_without_losing_good_rows(
     assert provider_fleet.CredentialRepository(db_session).fleet()[1] == 2
 
 
-def test_project_quota_is_not_multiplied_by_keys(db_session, identity) -> None:
+def test_pool_budgets_are_per_credential_and_never_a_project_claim(
+    db_session, identity
+) -> None:
+    """Aetrix budgets each key separately, and says nothing about Google's.
+
+    Five keys carry one project label and each has a two-request minute budget.
+    An exhausted pool is skipped and the next enabled pool serves the request,
+    with the usage recorded against the credential that actually answered.  That
+    is Aetrix scheduling — it is *not* evidence that the shared Google project
+    has five times the allowance, which is why the project is never paused and no
+    summed capacity is claimed.
+    """
+
     settings = single_model_chains(_settings(rpm=2))
-    _register(db_session, settings, "shared-proj", 5)
+    keys = _register(db_session, settings, "shared-proj", 5)
     service = _service(db_session, FakeProvider('{"questions": []}'), settings)
 
-    _call(service, identity)
-    _call(service, identity)
+    results = [_call(service, identity) for _ in range(3)]
 
-    with pytest.raises(AppError) as error:
-        _call(service, identity)
-    assert error.value.code.value == "PROVIDER_UNAVAILABLE"
-    assert "quota" in error.value.message.lower()
-
-    # Five keys, one project, two requests: the second call consumed the pool.
+    rows = [
+        db_session.scalar(select(ProviderUsage).where(ProviderUsage.id == result.usage_id))
+        for result in results
+    ]
+    assert all(row is not None for row in rows)
+    served_by = {row.credential_id for row in rows if row is not None}
+    # Three requests out of five pools, so at least two pools answered; a single
+    # two-request pool could not have served all three.
+    assert len(served_by) >= 2
+    assert served_by <= {key.id for key in keys}
     assert (
         provider_fleet.UsageRepository(db_session).window_stats(
             _now() - timedelta(minutes=5)
         )["requests"]
-        == 2
+        == 3
+    )
+    # One project, one shared Google allowance: no project-wide pause is recorded,
+    # because a per-pool skip is not evidence about Google.
+    assert (
+        db_session.scalar(
+            select(ProviderProjectCooldown).where(
+                ProviderProjectCooldown.project_id == "shared-proj"
+            )
+        )
+        is None
     )
 
 
@@ -176,15 +217,16 @@ def test_a_second_project_has_its_own_allowance(db_session, identity) -> None:
     assert row is not None and row.project_id == "proj-b"
 
 
-def test_429_pauses_only_the_key_that_spent_its_quota(db_session, identity) -> None:
-    """A quota rejection is key-scoped, and the call rotates past it.
+def test_a_429_quarantines_one_key_and_never_leases_a_sibling(
+    db_session, identity
+) -> None:
+    """A quota refusal stops the operation instead of reaching for another key.
 
-    Live evidence: one key answered 429 while a second key under the same
-    registered project answered 200 in the same second.  Pausing the project
-    on the first 429 parked a paper the fleet could still mark, so a quota
-    failure now cools the leased key only and the next candidate takes the
-    call; the attempt budget still ends in a truthful park when every key is
-    spent.
+    Aetrix cannot tell from a 429 whether a sibling key shares the exhausted
+    Google project, so leasing one would be an attempt to evade a quota rather
+    than to recover from a fault.  The refusal therefore quarantines exactly the
+    key that received it, records Google's reason, and stops: one request was
+    sent, the other pools stay untouched, and the project is not paused.
     """
 
     settings = _settings(rpm=100)
@@ -195,7 +237,7 @@ def test_429_pauses_only_the_key_that_spent_its_quota(db_session, identity) -> N
     with pytest.raises(AppError):
         _call(service, identity)
 
-    # No project-wide pause: the siblings were never given the call.
+    # No project-wide pause: a project label is not evidence about Google capacity.
     assert (
         db_session.scalar(
             select(ProviderProjectCooldown).where(
@@ -204,9 +246,16 @@ def test_429_pauses_only_the_key_that_spent_its_quota(db_session, identity) -> N
         )
         is None
     )
-    # Every candidate was tried and each 429 cooled only its own key.
-    assert len(provider.keys) == 3
-    assert all(key.cooldown_until is not None for key in keys)
+    # Exactly one request was paid for, and only the key that received the 429
+    # was quarantined for it.
+    assert len(provider.keys) == 1
+    db_session.expire_all()
+    cooled = [key for key in keys if key.cooldown_until is not None]
+    assert len(cooled) == 1
+    assert cooled[0].cooldown_kind == "QUOTA"
+    assert cooled[0].last_quota_exhausted_at is not None
+    assert cooled[0].last_quota_reason
+    assert [key.id for key in keys if key.cooldown_until is None]
     # A quota rejection is an operational condition, not proof of invalidity.
     assert {key.health for key in keys} == {"UNKNOWN"}
 

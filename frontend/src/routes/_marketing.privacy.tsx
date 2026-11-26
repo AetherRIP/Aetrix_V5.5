@@ -361,11 +361,13 @@ function PrivacyPolicy() {
         <p>
           When a marking job runs, Aetrix sends the relevant page images and the associated
           prompt, mark-scheme and blueprint content to Google’s Gemini API at{' '}
-          <code>generativelanguage.googleapis.com</code>. The pilot is configured with{' '}
-          <code>gemini-3.6-flash</code> as the primary model and{' '}
-          <code>gemini-3.1-pro-preview</code> for review. The live provider is currently enabled
-          in the pilot environment, so uploaded scripts can be sent to Google when a teacher
-          starts marking.
+          <code>generativelanguage.googleapis.com</code>. Production marking uses{' '}
+          <code>gemini-3.6-flash</code> as its only marking model; a job records the model that
+          actually answered. The optional second opinion and the blind transcription use a
+          separate review role. The lightweight models <code>gemini-3.5-flash-lite</code> and{' '}
+          <code>gemini-3.1-flash-lite</code> are disabled for marking and are never a fallback.
+          The live provider is currently enabled in the pilot environment, so uploaded scripts
+          can be sent to Google when a teacher starts marking.
         </p>
         <p>
           Google processes that content under its own terms and privacy policy. Aetrix has not

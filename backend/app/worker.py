@@ -11,6 +11,7 @@ import argparse
 import signal
 import socket
 import threading
+import time
 from datetime import UTC, datetime
 from os import getpid
 from typing import Any
@@ -107,6 +108,7 @@ def _start_google_quota_sync(
 
     def loop() -> None:
         while not stop.is_set():
+            cycle_started = time.monotonic()
             try:
                 with session_factory() as lock_session:
                     connection = lock_session.connection()
@@ -146,6 +148,21 @@ def _start_google_quota_sync(
                     "scheduled google cloud quota sync failed; will retry",
                     exc_info=True,
                 )
+            try:
+                from .services.project_health import record_monitor_heartbeat
+
+                with session_factory() as heartbeat_session:
+                    record_monitor_heartbeat(
+                        heartbeat_session,
+                        {
+                            "pid": getpid(),
+                            "duration_ms": int((time.monotonic() - cycle_started) * 1000),
+                            "interval_seconds": settings.google_cloud.sync_interval_seconds,
+                        },
+                    )
+            except Exception:
+                # A heartbeat write must never stop the monitor from sampling.
+                log.warning("google cloud monitor heartbeat failed", exc_info=True)
             if stop.wait(settings.google_cloud.sync_interval_seconds):
                 return
 
@@ -159,6 +176,85 @@ def _start_google_quota_sync(
             "extra_fields": {
                 "interval_seconds": settings.google_cloud.sync_interval_seconds,
                 "service": settings.google_cloud.service,
+            }
+        },
+    )
+    return thread
+
+
+def _start_classroom_monitoring(
+    session_factory: Any, settings: Settings, stop: threading.Event
+) -> threading.Thread | None:
+    """Poll monitored Classroom assignments beside the marking workers.
+
+    It is a separate thread with its own session and a PostgreSQL advisory lock,
+    so a slow Google call never delays a marking job and two worker processes
+    cannot poll the same assignment at once.  It makes no provider call: eligible
+    work is only queued for the existing worker.
+    """
+
+    if not settings.classroom.monitoring_enabled:
+        log.info("classroom submission monitoring is disabled by configuration")
+        return None
+    if not settings.classroom.configured():
+        log.info(
+            "classroom submission monitoring needs the Classroom OAuth client; "
+            "scheduled monitoring is disabled"
+        )
+        return None
+
+    from .classroom_monitoring.monitor import ClassroomMonitorService
+    from .storage import build_storage
+
+    storage = build_storage(settings)
+    lock_key = 20261126
+
+    def loop() -> None:
+        while not stop.is_set():
+            try:
+                with session_factory() as lock_session:
+                    connection = lock_session.connection()
+                    locked = connection.execute(
+                        text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_key}
+                    ).scalar()
+                    if locked:
+                        try:
+                            with Session(bind=connection) as session:
+                                counts = ClassroomMonitorService(
+                                    session, settings, storage
+                                ).cycle()
+                            log.info(
+                                "classroom monitoring cycle finished",
+                                extra={"extra_fields": counts},
+                            )
+                        finally:
+                            connection.execute(
+                                text("SELECT pg_advisory_unlock(:key)"),
+                                {"key": lock_key},
+                            )
+                            connection.commit()
+                    else:
+                        log.info(
+                            "classroom monitoring skipped; another worker holds the lock"
+                        )
+            except Exception:
+                log.warning(
+                    "scheduled classroom monitoring failed; will retry",
+                    exc_info=True,
+                )
+            if stop.wait(settings.classroom.monitor_tick_seconds):
+                return
+
+    thread = threading.Thread(
+        target=loop, name="aetrix-classroom-monitoring", daemon=True
+    )
+    thread.start()
+    log.info(
+        "classroom submission monitoring scheduled",
+        extra={
+            "extra_fields": {
+                "tick_seconds": settings.classroom.monitor_tick_seconds,
+                "max_per_cycle": settings.classroom.monitor_max_per_cycle,
             }
         },
     )
@@ -189,6 +285,7 @@ def run(settings: Settings | None = None) -> int:
     host = socket.gethostname()
     heartbeat = _start_heartbeat(session_factory, resolved, stop)
     quota_sync = _start_google_quota_sync(session_factory, resolved, stop)
+    classroom_monitor = _start_classroom_monitoring(session_factory, resolved, stop)
 
     threads: list[threading.Thread] = []
     for index in range(resolved.worker.concurrency):
@@ -222,6 +319,8 @@ def run(settings: Settings | None = None) -> int:
     heartbeat.join(timeout=2.0)
     if quota_sync is not None:
         quota_sync.join(timeout=2.0)
+    if classroom_monitor is not None:
+        classroom_monitor.join(timeout=2.0)
     log.info("worker process stopped")
     return 0
 

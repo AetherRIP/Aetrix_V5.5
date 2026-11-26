@@ -51,9 +51,9 @@ from ...core.config import CORRECTION_ENGINE_VERSION, Settings
 from ...core.errors import AppError, ErrorCode
 from ...core.ids import sha256_hex
 from ...core.marking_policy import (
+    PRIMARY_MARKING_MODELS,
     PRODUCTION_MARKING_MODEL,
-    is_disabled_marking_model,
-    is_production_marking_model,
+    is_primary_marking_model,
 )
 from ...db.models import (
     Assignment,
@@ -1136,7 +1136,7 @@ class _MarkingRun:
                 response_schema=response_schema or MARKING_RESPONSE_SCHEMA,
                 max_output_tokens=max_output_tokens,
                 model=(
-                    PRODUCTION_MARKING_MODEL if purpose == "marking" else None
+                    self._marking_model() if purpose == "marking" else None
                 ),
             )
         except AppError as error:
@@ -1157,6 +1157,31 @@ class _MarkingRun:
         return call
 
     # -- one question ----------------------------------------------------
+    def _marking_model(self) -> str:
+        """The model assigned to mark this paper, decided once.
+
+        The scheduler records the assignment on the job before the first paid
+        request, so a resumed job keeps the model that started it and a paper is
+        never marked by two models.  With no recorded assignment the configured
+        default applies.  Either way the answer is one model: the three verified
+        primaries are alternatives across papers, never inside one paper.
+        """
+
+        assigned = (getattr(self.job, "primary_model", None) or "").strip()
+        candidate = assigned or PRODUCTION_MARKING_MODEL
+        if not is_primary_marking_model(candidate):
+            raise AppError(
+                ErrorCode.CONFIGURATION_ERROR,
+                f"This paper is assigned to {candidate!r}, which is not a "
+                "verified primary marking model. Nothing was sent to the "
+                "provider and no other model was tried.",
+                details={
+                    "assigned_model": candidate,
+                    "verified_marking_models": list(PRIMARY_MARKING_MODELS),
+                },
+            )
+        return candidate
+
     def _remember_marking_model(self, call: Any) -> None:
         """Record which model actually read this paper's script.
 
@@ -1170,18 +1195,21 @@ class _MarkingRun:
         model = (getattr(call.response, "model", None) or "").strip()
         if not model:
             return
-        if not is_production_marking_model(model):
+        assigned = (getattr(self.job, "primary_model", None) or "").strip()
+        if not is_primary_marking_model(model) or (assigned and model != assigned):
             # The request named one model, so a different model answering is a
-            # provider or configuration contradiction.  Record it as a refusal
-            # rather than attributing the paper to a model the policy disabled.
+            # provider or configuration contradiction -- including a silent
+            # substitution between two verified primaries.  Record it as a
+            # refusal rather than attributing the paper to another model.
             raise AppError(
                 ErrorCode.CONFIGURATION_ERROR,
-                f"A marking request was answered by {model!r}, but "
-                f"{PRODUCTION_MARKING_MODEL!r} is the only enabled production "
-                "marking model. Nothing from that reply was stored.",
+                f"A marking request for this paper was answered by {model!r}, "
+                f"but it is assigned to {assigned or PRODUCTION_MARKING_MODEL!r}. "
+                "Nothing from that reply was stored.",
                 details={
                     "answered_by": model,
-                    "production_marking_model": PRODUCTION_MARKING_MODEL,
+                    "assigned_model": assigned or PRODUCTION_MARKING_MODEL,
+                    "verified_marking_models": list(PRIMARY_MARKING_MODELS),
                 },
             )
         self.marking_models.add(model)
@@ -2092,19 +2120,21 @@ class AetrixPipeline(CorrectionPipeline):
                 JobState.REVIEW_REQUIRED,
                 {"reason": "SCHEME_NOT_APPROVED", "scheme_status": scheme.status},
             )
-        if current.primary_model and is_disabled_marking_model(current.primary_model):
-            # A job stamped before the single-model policy still names a Lite
-            # model.  Continuing would mark it with a different model while the
-            # job claimed the old one, so it stops for a person instead.
+        if current.primary_model and not is_primary_marking_model(current.primary_model):
+            # A job stamped before this policy still names a Lite model, and a
+            # job with an unknown id could never be resumed safely.  Continuing
+            # would mark it with a different model while the job claimed the old
+            # one, so it stops for a person instead of being re-assigned.
             detail = {
                 "reason": "MODEL_POLICY_MISMATCH",
                 "recorded_model": current.primary_model,
-                "production_marking_model": PRODUCTION_MARKING_MODEL,
+                "verified_marking_models": list(PRIMARY_MARKING_MODELS),
                 "message": (
                     f"This job records {current.primary_model!r} as its marking "
-                    f"model, which is disabled. It was not marked. "
-                    f"{PRODUCTION_MARKING_MODEL} is the only production marking "
-                    "model; re-create the job to mark this paper with it."
+                    "model, which is not a verified primary marking model. It was "
+                    f"not marked. The verified models are "
+                    f"{', '.join(PRIMARY_MARKING_MODELS)}; re-create the job to "
+                    "mark this paper with one of them."
                 ),
             }
             runs.record_run(

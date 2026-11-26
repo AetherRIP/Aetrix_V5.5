@@ -52,6 +52,8 @@ from ..schemas.api import (
     RecoveryRequest,
 )
 from ..schemas.blueprint import BlueprintStructure
+from ..services import model_scheduler
+from ..services.classroom_job_access import require_job_access, visible_jobs
 from .states import JobState
 
 
@@ -116,6 +118,28 @@ class JobService:
         if existing is not None:
             return self._existing(existing, request_hash)
 
+        # The model is chosen once, here, before any paid request exists.  The
+        # scheduler reads the verified registry, credential health, in-flight
+        # load and the per-model ledger; it never guesses a quota and never
+        # spends one.
+        #
+        # A momentarily unhealthy fleet must not make the product unqueueable:
+        # credentials can recover between now and the run, and the provider
+        # layer already parks an unusable job with a typed provider error rather
+        # than inventing a mark.  So the assignment falls back to the configured
+        # model and says why, instead of refusing the job outright.
+        try:
+            model_choice = model_scheduler.choose(self.session, self.settings)
+        except model_scheduler.NoEligibleModelError as error:
+            model_choice = model_scheduler.Assignment(
+                model_id=self.settings.provider.model_primary,
+                reason=(
+                    "no model was eligible at creation, so the configured model "
+                    f"is assigned and the run will report the provider failure: {error}"
+                ),
+                candidates=tuple(error.considered),
+            )
+
         try:
             job = self.jobs.create(
                 tenant_id=principal.tenant_id,
@@ -128,6 +152,9 @@ class JobService:
                 max_attempts=self.settings.worker.max_attempts,
                 marking_mode=payload.marking_mode,
             )
+            # Recorded on the job itself, so a resumed job keeps the model that
+            # started it and the audit trail can explain the choice.
+            job.primary_model = model_choice.model_id
             self.jobs.add_event(
                 job,
                 from_state=None,
@@ -139,6 +166,8 @@ class JobService:
                     "scheme_version_id": str(scheme.id),
                     "request_hash": request_hash,
                     "marking_mode": payload.marking_mode or "CONFIGURED",
+                    "marking_model": model_choice.model_id,
+                    "marking_model_reason": model_choice.reason,
                 },
                 actor=f"user:{principal.user_id}",
             )
@@ -228,23 +257,24 @@ class JobService:
         job = self.get(tenant_id, job_id)
         return job, self.jobs.events(tenant_id, job_id)
 
-    def detail(self, tenant_id: uuid.UUID, job_id: uuid.UUID) -> JobDetailRead:
+    def detail(self, principal: Principal, job_id: uuid.UUID) -> JobDetailRead:
         """Everything the queue's detail view may show, scoped to one tenant.
 
         Context rows are fetched through tenant-scoped repositories as well, so
         a job UUID from another workspace cannot be used to read its submission,
         documents, provider calls or review decisions.
         """
-        job, events = self.get_with_events(tenant_id, job_id)
-        submission = self.submissions.get(tenant_id, job.submission_id)
-        assignment = self.assignments.get(tenant_id, job.assignment_id)
+        job, events = self.get_with_events(principal.tenant_id, job_id)
+        require_job_access(self.session, principal, job)
+        submission = self.submissions.get(principal.tenant_id, job.submission_id)
+        assignment = self.assignments.get(principal.tenant_id, job.assignment_id)
         documents = (
-            self.documents.list_for_submission(tenant_id, submission.id)
+            self.documents.list_for_submission(principal.tenant_id, submission.id)
             if submission is not None
             else []
         )
-        usage = self.jobs.latest_provider_usage(tenant_id, job.id)
-        decisions = self.jobs.review_decisions(tenant_id, job.id)
+        usage = self.jobs.latest_provider_usage(principal.tenant_id, job.id)
+        decisions = self.jobs.review_decisions(principal.tenant_id, job.id)
         base = JobRead.model_validate(job)
         return JobDetailRead(
             **base.model_dump(),
@@ -282,6 +312,7 @@ class JobService:
         job = self.jobs.get(principal.tenant_id, job_id, for_update=True)
         if job is None:
             raise AppError(ErrorCode.NOT_FOUND, "Correction job not found.")
+        require_job_access(self.session, principal, job)
         state = JobState(job.state)
         if state is JobState.CANCELLED:
             self.session.commit()
@@ -327,10 +358,10 @@ class JobService:
         return job
 
     def retry(self, principal: Principal, job_id: uuid.UUID) -> CorrectionJob:
-        ensure_reviewer(principal)
         job = self.jobs.get(principal.tenant_id, job_id, for_update=True)
         if job is None:
             raise AppError(ErrorCode.NOT_FOUND, "Correction job not found.")
+        require_job_access(self.session, principal, job)
         state = JobState(job.state)
         if state is JobState.REVIEW_REQUIRED:
             raise AppError(
@@ -404,6 +435,7 @@ class JobService:
         source = self.jobs.get(principal.tenant_id, job_id, for_update=True)
         if source is None:
             raise AppError(ErrorCode.NOT_FOUND, "Correction job not found.")
+        require_job_access(self.session, principal, source)
         if JobState(source.state) is not JobState.REVIEW_REQUIRED:
             raise AppError(
                 ErrorCode.JOB_NOT_RECOVERABLE,
@@ -534,9 +566,13 @@ class JobService:
             return self._existing(existing, request_hash)
 
     def list(
-        self, tenant_id: uuid.UUID, *, state: str | None = None, limit: int = 50
+        self, principal: Principal, *, state: str | None = None, limit: int = 50
     ) -> list[CorrectionJob]:
-        return self.jobs.list(tenant_id, state=state, limit=limit)
+        return visible_jobs(
+            self.session,
+            principal,
+            self.jobs.list(principal.tenant_id, state=state, limit=limit),
+        )
 
     def mark_failed(
         self,

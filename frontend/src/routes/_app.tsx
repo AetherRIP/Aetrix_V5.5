@@ -49,14 +49,20 @@ function pageMeta(pathname: string): PageMeta {
         'The working view of marking throughput and exceptions for the current workspace.',
     },
     '/workspace': {
-      title: 'Workspaces',
-      eyebrow: 'Workspace hub',
-      description: 'Every workspace you belong to, and the role the engine reports for you.',
+      title: 'Members & access',
+      eyebrow: 'Workspace · membership',
+      description: 'The people in this workspace and the role the engine gives each one.',
     },
     '/inbox': {
       title: 'Inbox',
       eyebrow: 'Attention',
       description: 'Exceptions raised by the correction pipeline that need a person.',
+    },
+    '/messages': {
+      title: 'Messages',
+      eyebrow: 'Workspace · communication',
+      description:
+        'Direct messages and workspace discussions, delivered from stored engine state.',
     },
     '/notifications': {
       title: 'Notifications',
@@ -72,6 +78,12 @@ function pageMeta(pathname: string): PageMeta {
       title: 'Marking queue',
       eyebrow: 'Correction jobs',
       description: 'Live state of every correction job in this workspace.',
+    },
+    '/manual-correction': {
+      title: 'Manual correction',
+      eyebrow: 'Correction workspace',
+      description:
+        'Upload a script and its mark scheme, then watch the real correction engine mark it.',
     },
     '/assignments': {
       title: 'Assignments',
@@ -119,10 +131,10 @@ function pageMeta(pathname: string): PageMeta {
       description: 'The operator view of the platform: workspaces, accounts and health.',
     },
     '/platform/workspaces': {
-      title: 'Workspace allocation',
-      eyebrow: 'Platform',
+      title: 'Workspaces',
+      eyebrow: 'Platform · workspaces',
       description:
-        'Every teacher workspace, the Classroom courses it owns, and the allocation history.',
+        'Attach Google Classroom classes to the teacher workspace that should own them.',
     },
     '/platform/users': {
       // This screen renders its own page header beside the directory controls.
@@ -132,7 +144,8 @@ function pageMeta(pathname: string): PageMeta {
         'Every Supabase account on the platform, its role, status and workspace memberships.',
     },
     '/platform/health': {
-      title: 'System health',
+      // The health screen renders its own heading above the instrument.
+      title: '',
       eyebrow: 'Platform',
       description: 'API, worker, database and provider status as the engine reports it.',
     },

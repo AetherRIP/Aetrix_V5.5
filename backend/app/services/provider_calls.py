@@ -31,7 +31,6 @@ from decimal import Decimal
 from typing import Any
 
 from pydantic import SecretStr
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.config import MODEL_CHAIN_ROLES, ModelChainEntry, Settings
@@ -52,7 +51,6 @@ from ..core.model_permissions import (
 )
 from ..core.security import SecretBox
 from ..db.models import (
-    GoogleCloudProject,
     ProviderCredential,
     ProviderQuotaReservation,
 )
@@ -83,6 +81,7 @@ from ..providers.routing import (
     classify_failure,
     decide,
 )
+from .credential_pools import POOL_NOTE, quarantine_for
 from .quota import day_start
 
 #: Shared breakers, one per configured (threshold, open_seconds) pair.
@@ -163,10 +162,13 @@ class CredentialLease:
     reservation_id: uuid.UUID
     api_key: SecretStr
     health: str
-    #: The Google Cloud project the key bills against: the unit of quota.
+    #: The Google Cloud project the key declares.  Shared by keys when Google
+    #: meters them together; never the Aetrix accounting unit.
     project_id: str
     #: Null for a platform-owned key; set when the key was contributed.
     contributor_id: uuid.UUID | None = None
+    #: The Aetrix operational pool this lease was taken from.
+    pool_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,46 +220,14 @@ class CredentialPool:
             )
         return None
 
-    def verified_independent_project(
-        self,
-        *,
-        tenant_id: uuid.UUID,
-        model: str,
-        excluded: set[uuid.UUID],
-        projects_tried: set[str],
-    ) -> bool:
-        """Whether a spare credential bills a project Google has *verified*.
+    def _within_quota(self, credential_id: uuid.UUID, model: str) -> bool:
+        """Whether this Aetrix pool may spend one more request on this model.
 
-        A quota fallback across projects is a different Google Cloud project or it
-        is nothing.  An operator-typed id that is a typo, a duplicate of the
-        exhausted project or a deleted project would look like fresh capacity and
-        spend an attempt to be told the same 429, so the switch is only taken when
-        Resource Manager has confirmed the project exists.
-        """
-
-        if self.session is None:
-            return False
-        candidates = self.credentials.claim_candidates(tenant_id, model, excluded)
-        spare = {
-            credential.project_id
-            for credential in candidates
-            if credential.project_id not in projects_tried
-        }
-        if not spare:
-            return False
-        rows = self.session.scalars(
-            select(GoogleCloudProject).where(
-                GoogleCloudProject.project_id.in_(sorted(spare))
-            )
-        ).all()
-        return any(row.verification_status == "VERIFIED" for row in rows)
-
-    def _within_quota(self, project_id: str, model: str) -> bool:
-        """Count against the project, never against the key alone.
-
-        Ten keys in one Google Cloud project share one free-tier allowance.  If
-        this counted per credential, rotation would multiply the real limit and
-        the fleet would answer 429s all day while believing it had capacity.
+        Counted per credential because the fleet is administered per credential:
+        each lent key has its own budget, its own quarantine and its own
+        administrator switch.  This is explicitly *not* a claim that the key has
+        a private Google allowance — several keys may share one project, which is
+        why a 429 is never answered by leasing a sibling.
 
         Two windows count differently on purpose.  A request whose consumption
         Google never confirmed still hits the per-minute gate, because retrying an
@@ -280,21 +250,25 @@ class CredentialPool:
         )
         minute_since = now - timedelta(minutes=1)
         day_since = day_start(now, self.settings.quota.daily_reset_timezone)
-        minute = self.reservations.count_since_project(
-            project_id,
+        minute = self.reservations.count_since_credential(
+            credential_id,
             minute_since,
             now,
             model=model,
             include_unconfirmed=True,
-        ) + self.usage.validation_count(project_id, model, minute_since)
+        ) + self.usage.validation_count_for_credential(
+            credential_id, model, minute_since
+        )
         # The daily allowance resets at local midnight in the configured quota
         # zone (Pacific by default), not at a rolling UTC 24-hour boundary.
-        day = self.reservations.count_since_project(
-            project_id,
+        day = self.reservations.count_since_credential(
+            credential_id,
             day_since,
             now,
             model=model,
-        ) + self.usage.validation_count(project_id, model, day_since)
+        ) + self.usage.validation_count_for_credential(
+            credential_id, model, day_since
+        )
         if minute >= per_minute or day >= per_day:
             return False
         tokens_per_minute = (
@@ -304,12 +278,21 @@ class CredentialPool:
         )
         if tokens_per_minute is None:
             return True
-        spent = self.usage.tokens_since_project(project_id, model, minute_since)
+        spent = self.usage.tokens_since_credential(
+            credential_id, model, minute_since
+        )
         return spent < tokens_per_minute
 
-    def _project_in_cooldown(self, project_id: str) -> bool:
-        cooldown = self.reservations.project_cooldown(project_id)
-        return cooldown is not None and cooldown.cooldown_until > utcnow()
+    def _quarantined(self, credential: ProviderCredential) -> bool:
+        """Whether this pool is inside a recorded cooldown window.
+
+        A cooldown is per credential.  A 429 quarantines the key that received it
+        and nothing else; Aetrix does not know whether a sibling shares the
+        project, and quarantining all fifteen would stop the fleet on one key's
+        refusal.
+        """
+
+        return quarantine_for(credential, utcnow()).active
 
     def acquire(
         self,
@@ -318,31 +301,45 @@ class CredentialPool:
         model: str,
         purpose: str,
         excluded: set[uuid.UUID] | None = None,
-        skip_projects: set[str] | None = None,
     ) -> CredentialLease:
+        """Lease one credential pool for one request.
+
+        Each credential is its own pool: its own budget, its own quarantine and
+        its own administrator switch.  An administrator may pin the fleet to one
+        credential pool; when they have, nothing else is substituted, because a
+        silent substitution would spread a production marking run across keys the
+        operator did not choose.
+        """
+
         excluded = excluded or set()
-        #: Projects a 429 has already proved exhausted for this model.  The
-        #: answer is scoped to this call and this model: Gemini meters each
-        #: model separately, so a flash-lite 429 says nothing about 2.5-flash.
-        skipped = skip_projects or set()
         # ``claim_candidates`` already excludes keys whose contributor is not
-        # ACTIVE or whose contributor revoked them, so a withdrawal takes effect
-        # before the next lease rather than at the next health sweep.
+        # ACTIVE, whose health is INVALID/DISABLED, or whose contributor revoked
+        # them, so a withdrawal takes effect before the next lease.
         candidates = self.credentials.claim_candidates(tenant_id, model, excluded)
-        cooling_projects: set[str] = set()
+
+        pinned = self.settings.provider.pinned_credential_id
+        if pinned is not None:
+            candidates = [item for item in candidates if item.id == pinned]
+            if not candidates:
+                raise AppError(
+                    ErrorCode.PROVIDER_UNAVAILABLE,
+                    "The credential pool pinned for this deployment is not "
+                    f"available (credential {pinned}). Aetrix does not substitute "
+                    "another key silently. Enable or un-quarantine that key, or "
+                    "clear AETRIX_PROVIDER__PINNED_CREDENTIAL_ID. No request was "
+                    "sent.",
+                    details={
+                        "model": model,
+                        "pinned_credential_id": str(pinned),
+                    },
+                )
+
         for credential in candidates:
-            project_id = credential.project_id
-            if project_id in skipped:
-                # Another key in an exhausted project would spend an attempt
-                # to be told exactly what the 429 already said.
+            if self._quarantined(credential):
+                # A 429 quarantines this key for its cooldown.  Another key is
+                # never leased to get around it.
                 continue
-            if project_id in cooling_projects:
-                continue
-            if self._project_in_cooldown(project_id):
-                cooling_projects.add(project_id)
-                continue
-            if not self._within_quota(project_id, model):
-                cooling_projects.add(project_id)
+            if not self._within_quota(credential.id, model):
                 continue
             api_key = SecretStr(self._box.decrypt(credential.encrypted_secret))
             reservation = self.reservations.reserve(
@@ -361,37 +358,50 @@ class CredentialPool:
                 reservation_id=reservation.id,
                 api_key=api_key,
                 health=credential.health,
-                project_id=project_id,
+                project_id=credential.project_id,
                 contributor_id=credential.contributor_id,
+                pool_id=credential.pool_id,
             )
+
+        unknown_identity = self.credentials.count_unknown_project_identity(model)
+        message = (
+            "No credential pool is available within its Aetrix budget for this "
+            "model: every eligible key is disabled, quarantined or out of its "
+            "configured allowance."
+        )
+        if unknown_identity:
+            message += (
+                f" {unknown_identity} eligible key(s) have no established Google "
+                "Cloud project, so their Google-level allowance is UNKNOWN and "
+                "may be shared with other keys. " + POOL_NOTE
+            )
+        message += " No request was sent."
         raise AppError(
             ErrorCode.PROVIDER_UNAVAILABLE,
-            "No provider credential is available within its project's quota.",
-            details={"model": model},
+            message,
+            details={
+                "model": model,
+                "project_identity_unknown": unknown_identity,
+                "pinned_credential_id": (
+                    str(pinned) if pinned is not None else None
+                ),
+            },
         )
 
-    def alternatives(
+    def another_credential(
         self,
         *,
         tenant_id: uuid.UUID,
         model: str,
         excluded: set[uuid.UUID],
-        projects_tried: set[str],
-    ) -> tuple[bool, bool]:
-        """Whether another key exists, and whether one bills a *different* project.
+    ) -> bool:
+        """Whether a different pool exists for a *key-specific* failure.
 
-        The second answer is the only one that can recover a project-scoped 429.
-        Treating every key as its own quota pool is exactly the mistake that
-        turns 15 keys into one exhausted project retried 15 times.
+        Deliberately not consulted for a 429: another pool is not evidence of
+        another Google allowance.
         """
 
-        candidates = self.credentials.claim_candidates(tenant_id, model, excluded)
-        if not candidates:
-            return False, False
-        independent = any(
-            credential.project_id not in projects_tried for credential in candidates
-        )
-        return True, independent
+        return bool(self.credentials.claim_candidates(tenant_id, model, excluded))
 
     def _finish(
         self,
@@ -402,6 +412,9 @@ class CredentialPool:
         error: str | None = None,
         status_code: int | None = None,
         cooldown_seconds: int | None = None,
+        kind: FailureKind | None = None,
+        provider_reason: str | None = None,
+        record_failure: bool = True,
     ) -> None:
         credential = self.session.get(ProviderCredential, lease.credential_id)
         reservation = self.session.get(ProviderQuotaReservation, lease.reservation_id)
@@ -416,34 +429,37 @@ class CredentialPool:
             if health == "HEALTHY":
                 credential.last_success_at = now
                 credential.cooldown_until = None
+                credential.cooldown_kind = None
+                credential.consecutive_failures = 0
             else:
+                if record_failure:
+                    credential.consecutive_failures = (
+                        int(credential.consecutive_failures or 0) + 1
+                    )
                 credential.last_failure_at = now
                 credential.last_failure_status = status_code
                 # Keep the last failure even after a later success: the key may
                 # be healthy now, and the operator still needs to know what
                 # broke and when.
                 credential.last_error = error[:400] if error else None
-                if health is not None and health != "HEALTHY":
-                    credential.last_failure_at = now
                 if cooldown_seconds:
                     credential.cooldown_until = now + timedelta(seconds=cooldown_seconds)
+                    credential.cooldown_kind = (
+                        "QUOTA" if kind is FailureKind.QUOTA else "AUTH"
+                    )
+                if kind is FailureKind.QUOTA:
+                    # Google's own reason is preserved verbatim; it is the only
+                    # thing that says *which* allowance was exhausted.
+                    credential.last_quota_exhausted_at = now
+                    credential.last_quota_reason = (
+                        provider_reason or error or "quota refusal"
+                    )[:300]
         self.session.commit()
 
     def success(self, lease: CredentialLease) -> None:
-        # A successful call proves the project is usable again, so a stale
-        # project-wide pause is lifted rather than left to expire.
-        self.reservations.clear_project_cooldown(lease.project_id)
+        # One answered request re-opens this pool.  It says nothing about any
+        # other key, even one that may share the same Google project.
         self._finish(lease, status="CONSUMED", health="HEALTHY")
-
-    def project_cooldown(self, lease: CredentialLease, seconds: int, reason: str) -> None:
-        """Pause every key in the project: the 429 is shared, not personal."""
-
-        self.reservations.set_project_cooldown(
-            project_id=lease.project_id,
-            reason=reason,
-            cooldown_until=utcnow() + timedelta(seconds=seconds),
-        )
-        self.session.commit()
 
     def failure(
         self,
@@ -455,12 +471,16 @@ class CredentialPool:
         count_toward_quota: bool = True,
         cooldown_seconds: int | None = None,
         reservation_status: str | None = None,
+        kind: FailureKind | None = None,
+        provider_reason: str | None = None,
+        record_failure: bool = True,
     ) -> None:
         """Close a reservation with an explicit, recorded outcome.
 
         ``reservation_status`` is the honest third state; ``count_toward_quota``
         remains for the two-state callers and is only consulted when no explicit
-        status is given.
+        status is given.  ``kind`` decides the quarantine kind and whether this
+        was a quota exhaustion; a quota failure always records both.
         """
 
         self._finish(
@@ -474,6 +494,9 @@ class CredentialPool:
             error=error,
             status_code=status_code,
             cooldown_seconds=cooldown_seconds,
+            kind=kind,
+            provider_reason=provider_reason,
+            record_failure=record_failure,
         )
 
 
@@ -601,6 +624,15 @@ class ProviderCallService:
 
         resolved = role if role in MODEL_CHAIN_ROLES else "primary"
         check = capability if capability is not None else capability_for_role(resolved)
+        # The blind transcription prompt is filed under the ``review`` role, so a
+        # transcription call arrives here as role ``review`` with capability
+        # ``transcription``.  The chain that holds the reader is the
+        # transcription role's chain: walking the evidence checker's chain would
+        # find no model permitted to transcribe and refuse a configuration that
+        # is in fact complete.  The capability decides which chain is walked; the
+        # permission table still decides which entries in it may answer.
+        if check is AICapability.TRANSCRIPTION:
+            resolved = "lightweight"
         chain: list[ModelChainEntry] = []
         candidates: list[ModelChainEntry] = []
         selected = self._selected_model(resolved)
@@ -625,6 +657,16 @@ class ProviderCallService:
         for entry in candidates:
             if is_permitted(entry.model, check):
                 chain.append(entry)
+
+        if check is AICapability.MARKING and len(chain) > 1:
+            # Marking is the one capability that is *assigned*, not walked.  The
+            # three verified primary models are alternatives across papers; a
+            # second entry here would be a silent substitution of the model
+            # recorded on the paper, which is exactly what the marking policy
+            # forbids.  The scheduler chose this model before the job existed;
+            # a failure here is reported, not routed around.
+            chain = chain[:1]
+
         if not chain:
             raise AppError(
                 ErrorCode.CONFIGURATION_ERROR,
@@ -813,7 +855,6 @@ class ProviderCallService:
             attempts_allowed = entry.max_attempts or self.settings.provider.max_attempts
             next_model_available = position + 1 < len(chain)
             excluded: set[uuid.UUID] = set()
-            projects_tried: set[str] = set()
             breaker_state = self.breaker.status(self.provider.name, model)
             if breaker_state.open:
                 # The provider is overloaded for this model.  Walking the fleet
@@ -838,7 +879,6 @@ class ProviderCallService:
                             model=model,
                             purpose=purpose,
                             excluded=excluded,
-                            skip_projects=projects_tried,
                         )
                     else:
                         with self._acquire_lock:
@@ -847,7 +887,6 @@ class ProviderCallService:
                                 model=model,
                                 purpose=purpose,
                                 excluded=excluded,
-                                skip_projects=projects_tried,
                             )
                 except AppError:
                     # No key is available or within quota for this model.  No
@@ -876,6 +915,7 @@ class ProviderCallService:
                         error=str(error),
                         count_toward_quota=False,
                         reservation_status="RELEASED",
+                        record_failure=False,
                     )
                     self._record(
                         tenant_id=tenant_id,
@@ -913,11 +953,8 @@ class ProviderCallService:
                         FailureKind.QUOTA,
                     )
                     if is_key_failure:
+                        # The key itself is not offered again in this operation.
                         excluded.add(lease.credential_id)
-                    if kind is FailureKind.QUOTA:
-                        # One project's allowance is shared by every key in
-                        # it, so the project is what is recorded as tried.
-                        projects_tried.add(lease.project_id)
                     cooldown_seconds = (
                         int(error.retry_after_seconds)
                         if kind is FailureKind.QUOTA and error.retry_after_seconds
@@ -940,33 +977,31 @@ class ProviderCallService:
                         count_toward_quota=kind is not FailureKind.AUTHENTICATION,
                         cooldown_seconds=cooldown_seconds,
                         reservation_status=reservation_status_for(kind, error),
+                        kind=kind,
+                        provider_reason=" ".join(
+                            part
+                            for part in (error.provider_code, error.provider_message)
+                            if part
+                        )
+                        or None,
                     )
                     if kind.value in TRANSIENT_FAILURES:
                         # A 5xx is the model being overloaded, not this key
                         # misbehaving.  Repeated overload opens the breaker.
                         self.breaker.record_failure(self.provider.name, model)
-                    other_credential, independent_credential = self.pool.alternatives(
-                        tenant_id=tenant_id,
-                        model=model,
-                        excluded=excluded,
-                        projects_tried=projects_tried,
-                    )
-                    # Cross-project quota recovery needs a *verified* project,
-                    # not merely a key that names a different id.  Pools without
-                    # the check (test doubles) cannot satisfy it, which is the
-                    # safe default.
-                    verified_independent = False
-                    verifier = getattr(
-                        self.pool, "verified_independent_project", None
-                    )
-                    if independent_credential and callable(verifier):
-                        verified_independent = bool(
-                            verifier(
-                                tenant_id=tenant_id,
-                                model=model,
-                                excluded=excluded,
-                                projects_tried=projects_tried,
-                            )
+                    # A spare pool is only relevant to a fault that is about the
+                    # key (401/403).  A 429 is never answered by another key:
+                    # the two may share one Google project, and Aetrix has no
+                    # evidence that a sibling has an allowance of its own.
+                    other_credential = False
+                    if kind in (
+                        FailureKind.AUTHENTICATION,
+                        FailureKind.PERMISSION,
+                    ):
+                        other_credential = self.pool.another_credential(
+                            tenant_id=tenant_id,
+                            model=model,
+                            excluded=excluded,
                         )
                     action = decide(
                         kind,
@@ -974,8 +1009,6 @@ class ProviderCallService:
                         attempts_allowed=attempts_allowed,
                         next_model_available=next_model_available,
                         other_credential_available=other_credential,
-                        independent_credential_available=independent_credential,
-                        independent_project_verified=verified_independent,
                     )
                     self._record(
                         tenant_id=tenant_id,
@@ -1052,8 +1085,9 @@ class ProviderCallService:
                         + (
                             "the credential was refused"
                             if refused
-                            else "this project's quota for the model is "
-                            "exhausted"
+                            else "this credential pool's allowance for the model "
+                            "is exhausted, and Aetrix does not answer a quota "
+                            "refusal by leasing another key"
                             if kind is FailureKind.QUOTA
                             else "the request or response was rejected"
                         )
@@ -1072,6 +1106,8 @@ class ProviderCallService:
                         error=f"Internal: {type(error).__name__}: {error}",
                         count_toward_quota=False,
                         reservation_status="RELEASED",
+                        # An Aetrix defect is not the credential misbehaving.
+                        record_failure=False,
                     )
                     self._record(
                         tenant_id=tenant_id,

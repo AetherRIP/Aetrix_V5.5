@@ -18,12 +18,13 @@ marking that skips :func:`app.correction.scheme_criteria.criteria_readiness`.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..audit.service import AuditService
@@ -53,6 +54,7 @@ from ..documents.service import DocumentService
 from ..prompts.registry import PromptRegistry
 from ..providers.base import LLMInput
 from ..providers.json import parse_json_text
+from ..schemas.documents import SchemeCriterionCreate, SchemeCriterionUpdate
 from ..storage.base import Storage
 from .provider_calls import ProviderCallResult, ProviderCallService
 
@@ -416,6 +418,301 @@ class SchemeCriteriaService:
         )
         self.session.commit()
         return version
+
+    # -- manual authoring ------------------------------------------------
+    def add_criterion(
+        self,
+        principal: Principal,
+        version_id: uuid.UUID,
+        payload: SchemeCriterionCreate,
+    ) -> MarkingCriterion:
+        """Add one mark point a person typed, before any approval exists.
+
+        The question must be a scoreable leaf of the blueprint this scheme is
+        being written against, and the question's stored mark points may never
+        exceed its maximum.  Nothing is invented: a missing question stays
+        missing and the readiness gate keeps refusing the scheme.
+        """
+
+        ensure_exam_manager(principal)
+        version, scheme = self._version_and_scheme(principal.tenant_id, version_id)
+        self._writable(version)
+        blueprint = self._approved_blueprint(
+            principal.tenant_id, scheme.exam_id, payload.blueprint_version_id
+        )
+        question_id = payload.question_id.strip()
+        leaves = blueprint_leaves(blueprint.structure)
+        if question_id not in leaves:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                f"Question {question_id!r} is not a scoreable leaf of this blueprint.",
+            )
+        rows = self.schemes.list_criteria(principal.tenant_id, version.id)
+        recorded = sum(row.marks for row in rows if row.question_id == question_id)
+        remaining = leaves[question_id] - recorded
+        if payload.marks > remaining:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                f"Question {question_id} has {remaining} mark(s) left; "
+                f"a {payload.marks}-mark criterion would exceed its maximum.",
+            )
+        code = payload.code.strip().upper()
+        if any(
+            row.question_id == question_id
+            and row.code.upper() == code
+            and row.ordinal == payload.ordinal
+            for row in rows
+        ):
+            raise AppError(
+                ErrorCode.CONFLICT,
+                f"Question {question_id} already has criterion {code} at that position.",
+            )
+        row = MarkingCriterion(
+            tenant_id=principal.tenant_id,
+            scheme_version_id=version.id,
+            blueprint_version_id=blueprint.id,
+            question_id=question_id,
+            code=code,
+            marks=payload.marks,
+            ordinal=payload.ordinal,
+            description=payload.description.strip(),
+            expected_answer=(payload.expected_answer or "").strip() or None,
+            award_conditions=(payload.award_conditions or "").strip() or None,
+            withhold_conditions=(payload.withhold_conditions or "").strip() or None,
+            dependencies=[],
+            alternatives=[],
+            source_ref={},
+        )
+        self.session.add(row)
+        self.audit.record(
+            tenant_id=principal.tenant_id,
+            action="scheme_criteria.manually_created",
+            entity_type="marking_criterion",
+            entity_id=row.id,
+            actor_type="USER",
+            actor_id=principal.user_id,
+            detail={
+                "scheme_version_id": str(version.id),
+                "blueprint_version_id": str(blueprint.id),
+                "question_id": question_id,
+                "code": code,
+                "marks": payload.marks,
+            },
+        )
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    def update_criterion(
+        self,
+        principal: Principal,
+        version_id: uuid.UUID,
+        criterion_id: uuid.UUID,
+        payload: SchemeCriterionUpdate,
+    ) -> MarkingCriterion:
+        ensure_exam_manager(principal)
+        version, scheme = self._version_and_scheme(principal.tenant_id, version_id)
+        self._writable(version)
+        row = self._criterion_row(principal.tenant_id, version.id, criterion_id)
+        blueprint_id = payload.blueprint_version_id or row.blueprint_version_id
+        if blueprint_id is None:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "This criterion names no blueprint version; supply one to validate its marks.",
+            )
+        blueprint = self._approved_blueprint(
+            principal.tenant_id, scheme.exam_id, blueprint_id
+        )
+        leaves = blueprint_leaves(blueprint.structure)
+        if row.question_id not in leaves:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                f"Question {row.question_id!r} is not a scoreable leaf of this blueprint.",
+            )
+        if payload.marks is not None:
+            rows = self.schemes.list_criteria(principal.tenant_id, version.id)
+            recorded = sum(
+                item.marks
+                for item in rows
+                if item.question_id == row.question_id and item.id != row.id
+            )
+            remaining = leaves[row.question_id] - recorded
+            if payload.marks > remaining:
+                raise AppError(
+                    ErrorCode.VALIDATION_ERROR,
+                    f"Question {row.question_id} has {remaining} mark(s) left; "
+                    f"a {payload.marks}-mark criterion would exceed its maximum.",
+                )
+        changes: dict[str, Any] = {}
+        for field in (
+            "marks",
+            "description",
+            "expected_answer",
+            "award_conditions",
+            "withhold_conditions",
+        ):
+            value = getattr(payload, field)
+            if value is None:
+                continue
+            changes[field] = value.strip() if isinstance(value, str) else value
+        if not changes:
+            return row
+        for field, value in changes.items():
+            setattr(row, field, value)
+        row.blueprint_version_id = blueprint.id
+        self.audit.record(
+            tenant_id=principal.tenant_id,
+            action="scheme_criteria.manually_updated",
+            entity_type="marking_criterion",
+            entity_id=row.id,
+            actor_type="USER",
+            actor_id=principal.user_id,
+            detail={
+                "scheme_version_id": str(version.id),
+                "question_id": row.question_id,
+                "code": row.code,
+                "fields": sorted(changes),
+            },
+        )
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    def delete_criterion(
+        self,
+        principal: Principal,
+        version_id: uuid.UUID,
+        criterion_id: uuid.UUID,
+    ) -> None:
+        ensure_exam_manager(principal)
+        version, _scheme = self._version_and_scheme(principal.tenant_id, version_id)
+        self._writable(version)
+        row = self._criterion_row(principal.tenant_id, version.id, criterion_id)
+        detail = {
+            "scheme_version_id": str(version.id),
+            "question_id": row.question_id,
+            "code": row.code,
+            "marks": row.marks,
+        }
+        self.session.delete(row)
+        self.audit.record(
+            tenant_id=principal.tenant_id,
+            action="scheme_criteria.manually_removed",
+            entity_type="marking_criterion",
+            entity_id=criterion_id,
+            actor_type="USER",
+            actor_id=principal.user_id,
+            detail=detail,
+        )
+        self.session.commit()
+
+    def revise(
+        self, principal: Principal, version_id: uuid.UUID
+    ) -> MarkSchemeVersion:
+        """Carry an approved scheme into a new, unapproved version.
+
+        Approved rows are immutable, so a correction to them is a new version:
+        the copies start with no approval trail and the engine keeps refusing
+        them until a person approves the copy against a blueprint.
+        """
+
+        ensure_exam_manager(principal)
+        version, scheme = self._version_and_scheme(principal.tenant_id, version_id)
+        if version.criteria_approved_at is None:
+            raise AppError(
+                ErrorCode.CONFLICT,
+                "This scheme has no approved criteria to revise; edit it directly.",
+            )
+        rows = self.schemes.list_criteria(principal.tenant_id, version.id)
+        latest = self.session.scalar(
+            select(func.max(MarkSchemeVersion.version)).where(
+                MarkSchemeVersion.mark_scheme_id == scheme.id
+            )
+        )
+        number = int(latest or version.version) + 1
+        digest = hashlib.sha256(
+            f"{version.content_hash}:manual-revision:{number}".encode()
+        ).hexdigest()
+        revised = MarkSchemeVersion(
+            tenant_id=principal.tenant_id,
+            mark_scheme_id=scheme.id,
+            version=number,
+            status="DRAFT",
+            source="REVISION",
+            content_hash=digest,
+        )
+        self.session.add(revised)
+        self.session.flush()
+        self.session.add_all(
+            [
+                MarkingCriterion(
+                    tenant_id=principal.tenant_id,
+                    scheme_version_id=revised.id,
+                    blueprint_version_id=row.blueprint_version_id,
+                    question_id=row.question_id,
+                    code=row.code,
+                    marks=row.marks,
+                    ordinal=row.ordinal,
+                    description=row.description,
+                    required_evidence=row.required_evidence,
+                    dependencies=list(row.dependencies or []),
+                    alternatives=list(row.alternatives or []),
+                    award_conditions=row.award_conditions,
+                    withhold_conditions=row.withhold_conditions,
+                    source_ref=dict(row.source_ref or {}),
+                    question_text=row.question_text,
+                    expected_answer=row.expected_answer,
+                    source_page=row.source_page,
+                    source_quote=row.source_quote,
+                )
+                for row in rows
+            ]
+        )
+        self.audit.record(
+            tenant_id=principal.tenant_id,
+            action="scheme_version.revised",
+            entity_type="mark_scheme_version",
+            entity_id=revised.id,
+            actor_type="USER",
+            actor_id=principal.user_id,
+            detail={
+                "source_version_id": str(version.id),
+                "version": number,
+                "criteria": len(rows),
+            },
+        )
+        self.session.commit()
+        self.session.refresh(revised)
+        return revised
+
+    def _writable(self, version: MarkSchemeVersion) -> None:
+        if version.status == "SUPERSEDED":
+            raise AppError(
+                ErrorCode.CONFLICT, "A superseded mark scheme cannot be changed."
+            )
+        if version.criteria_approved_at is not None:
+            raise AppError(
+                ErrorCode.CONFLICT,
+                "These criteria are approved and cannot be edited. "
+                "Create a new scheme version first.",
+            )
+
+    def _criterion_row(
+        self,
+        tenant_id: uuid.UUID,
+        version_id: uuid.UUID,
+        criterion_id: uuid.UUID,
+    ) -> MarkingCriterion:
+        row = self.session.scalar(
+            select(MarkingCriterion).where(
+                MarkingCriterion.tenant_id == tenant_id,
+                MarkingCriterion.scheme_version_id == version_id,
+                MarkingCriterion.id == criterion_id,
+            )
+        )
+        if row is None:
+            raise AppError(ErrorCode.NOT_FOUND, "Marking criterion not found.")
+        return row
 
     # -- helpers ---------------------------------------------------------
     def _version_and_scheme(

@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from app.schemas.status import ComponentHealthRead, SystemStatusRead
+from app.schemas.status import ComponentHealthRead, SubsystemStatus, SystemStatusRead
 from app.services.status import (
-    FEATURES,
+    STATIC_FEATURES,
     WORKER_GRACE_MULTIPLIER,
     WORKER_MIN_GRACE_SECONDS,
+    _features,
     read_system_status,
 )
 from sqlalchemy.exc import ProgrammingError
@@ -123,17 +124,34 @@ def test_provider_availability_is_never_claimed() -> None:
 
 
 def test_the_engine_names_each_feature_and_its_state() -> None:
-    features = {feature.name: feature for feature in FEATURES}
+    worker = SubsystemStatus(state="ok", summary="heartbeat fresh")
+    provider = SubsystemStatus(state="ok", summary="recorded call")
+    features = {feature.name: feature for feature in _features(worker, provider)}
 
     assert {"Marking", "SymPy verification", "Cohort intelligence"} <= set(features)
-    # The worker runs a real marking pipeline and verifies every award, so neither
-    # may be reported as absent. Accuracy is a separate claim and stays unverified.
+    # Marking runs on the worker and the provider. With both observed working the
+    # capability is available; accuracy is a separate claim and stays unverified.
     assert features["Marking"].state == "available"
     assert features["SymPy verification"].state == "available"
     assert "UNVERIFIED" in features["Marking"].reason
-    # The capabilities this build genuinely lacks stay named rather than hidden.
-    assert features["Cohort intelligence"].state == "not_implemented"
-    assert all(feature.reason.strip() for feature in FEATURES)
+    # Cohort intelligence is implemented; topic aggregates remain explicitly
+    # unavailable because no stored topic metadata exists.
+    assert features["Cohort intelligence"].state == "available"
+    assert "Topic analysis is unavailable" in features["Cohort intelligence"].reason
+    assert all(feature.reason.strip() for feature in STATIC_FEATURES)
+
+
+def test_marking_is_not_available_when_its_subsystems_are_not() -> None:
+    """The playtest found Marking: Available beside a dead worker and no provider."""
+
+    worker = SubsystemStatus(state="unavailable", summary="heartbeat stale")
+    provider = SubsystemStatus(state="unknown", summary="no live provider")
+    features = {feature.name: feature for feature in _features(worker, provider)}
+
+    assert features["Marking"].state == "unavailable"
+    assert "worker is unavailable" in features["Marking"].reason
+    assert "provider is unknown" in features["Marking"].reason
+    assert features["SymPy verification"].state == "unavailable"
 
 
 def test_readiness_describes_the_pipeline_this_build_runs() -> None:

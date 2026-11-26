@@ -39,6 +39,7 @@ from ..schemas.status import (
     SubsystemStatus,
     SystemStatusRead,
 )
+from .project_health import monitor_subsystem
 
 #: The only process that writes a heartbeat today.  The name is the table key,
 #: not a role, so another observable process can be added without a migration.
@@ -53,38 +54,20 @@ WORKER_MIN_GRACE_SECONDS = 60
 #: What this build genuinely does not do.  Kept here (not in the browser) so the
 #: engine is the single source of "not implemented" and a UI cannot invent
 #: availability for an unimplemented capability.
-FEATURES: tuple[FeatureStatus, ...] = (
-    FeatureStatus(
-        name="Marking",
-        state="available",
-        reason=(
-            "The worker marks every scoreable question through the provider and stores a "
-            "question result with its criteria and quoted evidence. Live marking accuracy "
-            "is UNVERIFIED, and a question the engine cannot settle stops the job at "
-            "REVIEW_REQUIRED rather than producing a silent zero."
-        ),
-    ),
-    FeatureStatus(
-        name="SymPy verification",
-        state="available",
-        reason=(
-            "Each award is checked for internal consistency, and where the script and the "
-            "scheme both state an expression SymPy decides equivalence. A check SymPy "
-            "cannot decide forces human review."
-        ),
-    ),
+#:
+#: Marking and SymPy verification are deliberately absent: whether they are
+#: available depends on the worker and provider observed on this request, and a
+#: constant cannot tell the truth about that.  ``_features`` builds them.
+STATIC_FEATURES: tuple[FeatureStatus, ...] = (
     FeatureStatus(
         name="Cohort intelligence",
-        state="not_implemented",
+        state="available",
         reason=(
-            "The gradebook and reports aggregate stored marks, but question-level cohort "
-            "analysis has no endpoint yet."
+            "Question-level performance, completeness and evidence-based support "
+            "indicators are aggregated from stored correction results at "
+            "GET /workspaces/{id}/cohort. Topic analysis is unavailable because no "
+            "stored topic or skill metadata exists."
         ),
-    ),
-    FeatureStatus(
-        name="Provider quota monitoring",
-        state="not_implemented",
-        reason="No monitor samples Gemini project health yet.",
     ),
     FeatureStatus(
         name="Object storage",
@@ -102,6 +85,116 @@ FEATURES: tuple[FeatureStatus, ...] = (
         reason="The API does not rate-limit requests.",
     ),
 )
+
+
+def _quota_feature(session: Session, settings: Settings) -> FeatureStatus:
+    """Project quota monitoring, observed rather than assumed.
+
+    The monitor is a thread in the existing worker and writes a heartbeat every
+    cycle.  A configured monitor with no heartbeat is unavailable, a stale one is
+    degraded, and an unconfigured one is unavailable with the missing setting
+    named.  "Available" therefore means a cycle was observed, not that the code
+    exists.
+    """
+
+    google_cloud = getattr(settings, "google_cloud", None)
+    if google_cloud is None or not google_cloud.configured:
+        return FeatureStatus(
+            name="Provider quota monitoring",
+            state="unavailable",
+            reason=(
+                "No Google Cloud monitoring credential is configured, so no"
+                " project sample can be taken. Set"
+                " AETRIX_GOOGLE_CLOUD__SERVICE_ACCOUNT_FILE or enable the metadata"
+                " server."
+            ),
+        )
+    if not google_cloud.enabled:
+        return FeatureStatus(
+            name="Provider quota monitoring",
+            state="unavailable",
+            reason=(
+                "Google Cloud quota synchronisation is configured but disabled by"
+                " AETRIX_GOOGLE_CLOUD__ENABLED; no project is sampled."
+            ),
+        )
+    state, summary, detail = monitor_subsystem(
+        session, interval_seconds=google_cloud.sync_interval_seconds
+    )
+    mapped = {
+        "ok": "available",
+        "degraded": "degraded",
+        "unavailable": "unavailable",
+    }.get(state, "unavailable")
+    reason = summary if not detail else f"{summary} {detail}"
+    return FeatureStatus(
+        name="Provider quota monitoring", state=mapped, reason=reason
+    )
+
+
+def _features(
+    worker: SubsystemStatus,
+    provider: SubsystemStatus,
+    quota: FeatureStatus | None = None,
+) -> list[FeatureStatus]:
+    """Feature availability derived from the subsystems the feature runs on.
+
+    The playtest showed ``Marking: Available`` beside a dead worker and an
+    unconfigured provider.  A capability is only available when every process it
+    needs was observed working on this read; otherwise the reason names the
+    blocker instead of repeating what the code was written to do.
+    """
+
+    marking_ready = worker.state == "ok" and provider.state == "ok"
+    if marking_ready:
+        marking = FeatureStatus(
+            name="Marking",
+            state="available",
+            reason=(
+                "The worker is renewing its heartbeat and a live provider call is "
+                "recorded. Live marking accuracy is UNVERIFIED, and a question the "
+                "engine cannot settle stops the job at REVIEW_REQUIRED rather than "
+                "producing a silent zero."
+            ),
+        )
+    else:
+        blockers = []
+        if worker.state != "ok":
+            blockers.append(f"the worker is {worker.state}")
+        if provider.state != "ok":
+            blockers.append(f"the provider is {provider.state}")
+        marking = FeatureStatus(
+            name="Marking",
+            state="unavailable",
+            reason=(
+                "Marking cannot run: "
+                + " and ".join(blockers)
+                + ". A job that reaches the missing step parks with an error instead of "
+                "producing a mark."
+            ),
+        )
+
+    if worker.state == "ok":
+        verification = FeatureStatus(
+            name="SymPy verification",
+            state="available",
+            reason=(
+                "The worker is running, so each award can be checked for internal "
+                "consistency; where the script and the scheme both state an expression "
+                "SymPy decides equivalence. A check SymPy cannot decide forces human review."
+            ),
+        )
+    else:
+        verification = FeatureStatus(
+            name="SymPy verification",
+            state="unavailable",
+            reason=(
+                f"Verification runs inside the worker, and the worker is {worker.state}. "
+                "No award is checked until it is running."
+            ),
+        )
+
+    return [marking, verification, *([quota] if quota else []), *STATIC_FEATURES]
 
 
 def _grace_seconds(settings: Settings) -> int:
@@ -601,6 +694,7 @@ def read_system_status(session: Session, settings: Settings) -> SystemStatusRead
     ready = database.state == "ok"
     worker, worker_row, heartbeat_table_missing = _worker_observation(session, settings)
     provider_evidence = _provider_evidence(session)
+    provider = _provider_observation(settings, provider_evidence)
     job_evidence = _job_evidence(session)
 
     return SystemStatusRead(
@@ -621,7 +715,7 @@ def read_system_status(session: Session, settings: Settings) -> SystemStatusRead
         readiness=SubsystemStatus(
             state="ok" if ready else "unavailable",
             summary=(
-                "Initialised and accepting correction jobs"
+                "The API initialised and the database answered"
                 if ready
                 else "Not ready to accept correction jobs"
             ),
@@ -635,7 +729,7 @@ def read_system_status(session: Session, settings: Settings) -> SystemStatusRead
         ),
         database=database,
         worker=worker,
-        provider=_provider_observation(settings, provider_evidence),
+        provider=provider,
         components=[
             _api_component(now),
             _database_component(now, database),
@@ -648,5 +742,5 @@ def read_system_status(session: Session, settings: Settings) -> SystemStatusRead
             ),
             _provider_component(now, settings, provider_evidence),
         ],
-        features=list(FEATURES),
+        features=_features(worker, provider, _quota_feature(session, settings)),
     )

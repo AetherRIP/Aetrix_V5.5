@@ -426,8 +426,9 @@ function AssistantOverview() {
             </Pulse>
             <div className="dash-pulse__divider" />
             <p className="dash-note">
-              The engine does not expose a personal task, class or deadline table, so no
-              personal count is shown here.
+              Class assignments come from the engine and are limited to the classes an owner
+              or administrator assigned to this account. Tasks and deadlines remain
+              unimplemented, so no personal count is invented here.
             </p>
           </HubSection>
 
@@ -455,10 +456,10 @@ function AssistantOverview() {
             </Link>
           </Panel>
 
-          <Panel title="Personal records" index={6} note="Not implemented">
+          <Panel title="Personal records" index={6} note="Classes live; tasks not implemented">
             <p className="panel-copy">
-              Tasks, personal classes and deadlines have no engine record yet. These links explain
-              what the build does and does not hold; they do not show a placeholder queue.
+              Assigned classes and their rosters are read from the engine now. Personal tasks
+              and deadlines still have no engine record, so no placeholder list is shown.
             </p>
             <div className="dash-linkstack">
               <Link className="panel-link" to="/assistant/tasks">

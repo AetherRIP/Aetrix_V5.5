@@ -31,7 +31,9 @@ from ...schemas.documents import (
     SchemeCriteriaApprove,
     SchemeCriteriaExtractionRead,
     SchemeCriteriaExtractionRequest,
+    SchemeCriterionCreate,
     SchemeCriterionRead,
+    SchemeCriterionUpdate,
     SchemeRead,
     SchemeUploadRead,
     SchemeVersionRead,
@@ -261,6 +263,92 @@ def list_scheme_criteria(
         SchemeCriterionRead.model_validate(row)
         for row in service.criteria(principal.tenant_id, version.id)
     ]
+
+
+@router.post(
+    "/schemes/{version_id}/criteria",
+    response_model=SchemeCriterionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_scheme_criterion(
+    version_id: uuid.UUID,
+    payload: SchemeCriterionCreate,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    storage: Storage = Depends(get_storage),
+    registry: PromptRegistry = Depends(get_prompt_registry),
+    provider_calls: ProviderCallService = Depends(get_provider_calls),
+) -> SchemeCriterionRead:
+    """Record one mark point a person typed before the scheme is approved."""
+
+    row = SchemeCriteriaService(
+        session, settings, storage, registry, provider_calls
+    ).add_criterion(principal, version_id, payload)
+    return SchemeCriterionRead.model_validate(row)
+
+
+@router.patch(
+    "/schemes/{version_id}/criteria/{criterion_id}",
+    response_model=SchemeCriterionRead,
+)
+def update_scheme_criterion(
+    version_id: uuid.UUID,
+    criterion_id: uuid.UUID,
+    payload: SchemeCriterionUpdate,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    storage: Storage = Depends(get_storage),
+    registry: PromptRegistry = Depends(get_prompt_registry),
+    provider_calls: ProviderCallService = Depends(get_provider_calls),
+) -> SchemeCriterionRead:
+    row = SchemeCriteriaService(
+        session, settings, storage, registry, provider_calls
+    ).update_criterion(principal, version_id, criterion_id, payload)
+    return SchemeCriterionRead.model_validate(row)
+
+
+@router.delete(
+    "/schemes/{version_id}/criteria/{criterion_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_scheme_criterion(
+    version_id: uuid.UUID,
+    criterion_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    storage: Storage = Depends(get_storage),
+    registry: PromptRegistry = Depends(get_prompt_registry),
+    provider_calls: ProviderCallService = Depends(get_provider_calls),
+) -> Response:
+    SchemeCriteriaService(
+        session, settings, storage, registry, provider_calls
+    ).delete_criterion(principal, version_id, criterion_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/schemes/{version_id}/revisions",
+    response_model=SchemeVersionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def revise_scheme_version(
+    version_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    storage: Storage = Depends(get_storage),
+    registry: PromptRegistry = Depends(get_prompt_registry),
+    provider_calls: ProviderCallService = Depends(get_provider_calls),
+) -> SchemeVersionRead:
+    """Copy approved criteria into a new, unapproved version."""
+
+    version = SchemeCriteriaService(
+        session, settings, storage, registry, provider_calls
+    ).revise(principal, version_id)
+    return SchemeVersionRead.model_validate(version)
 
 
 @router.post(

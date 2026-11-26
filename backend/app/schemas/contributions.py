@@ -50,10 +50,18 @@ class ContributorRowRead(BaseModel):
     today: ContributionUsageRead
 
 
-class CapacityProjectRead(BaseModel):
+class CapacityPoolRead(BaseModel):
+    """One credential's Aetrix pool.  Not a Google Cloud project."""
+
+    pool_id: str
+    credential_id: UUID
     project_id: str
-    contributors: int
-    keys: int
+    contributor_id: UUID | None
+    quarantined: bool
+    #: ``KNOWN`` / ``EXHAUSTED`` / ``UNKNOWN``.  ``UNKNOWN`` whenever no project
+    #: is established, because a pool is not evidence of a separate allowance.
+    google_quota_status: Literal["KNOWN", "EXHAUSTED", "UNKNOWN"]
+    #: This pool's own configured budget, never a share of a Google project.
     requests_per_minute_remaining: int | None
     requests_per_day_remaining: int | None
     confidence: Confidence
@@ -61,9 +69,14 @@ class CapacityProjectRead(BaseModel):
 
 
 class CapacityTotalsRead(BaseModel):
-    projects: int
-    requests_per_minute_remaining: int | None
-    requests_per_day_remaining: int | None
+    pools: int
+    pools_quarantined: int
+    #: Sums of *configured pool budgets*, named so they cannot be mistaken for
+    #: Google's remaining quota.
+    aetrix_requests_per_minute_remaining: int | None
+    aetrix_requests_per_day_remaining: int | None
+    google_quota_known: int
+    google_quota_unknown: int
     windows_measured: int
     windows_unknown: int
     confidence: Confidence
@@ -71,7 +84,7 @@ class CapacityTotalsRead(BaseModel):
 
 class CapacityModelRead(BaseModel):
     model: str
-    projects: list[CapacityProjectRead]
+    pools: list[CapacityPoolRead]
     totals: CapacityTotalsRead
 
 

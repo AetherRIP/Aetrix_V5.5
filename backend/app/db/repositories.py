@@ -8,11 +8,11 @@ explicitly.  A caller cannot obtain another workspace's row by guessing a UUID:
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Select, func, or_, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from ..core.errors import AppError, ErrorCode
@@ -27,6 +27,7 @@ from ..jobs.states import (
     progress_for,
 )
 from .models import (
+    POOL_ID_PREFIX,
     Assignment,
     AuditEvent,
     BlueprintOverride,
@@ -506,6 +507,9 @@ class AssignmentRepository:
         completion_threshold: float,
         review_mode: str,
         created_by: uuid.UUID | None,
+        classroom_allocation_id: uuid.UUID | None = None,
+        course_id: str | None = None,
+        class_name: str | None = None,
     ) -> Assignment:
         assignment = Assignment(
             tenant_id=tenant_id,
@@ -516,6 +520,9 @@ class AssignmentRepository:
             completion_threshold=completion_threshold,
             review_mode=review_mode,
             created_by=created_by,
+            classroom_allocation_id=classroom_allocation_id,
+            course_id=course_id,
+            class_name=class_name,
         )
         self.session.add(assignment)
         self.session.flush()
@@ -1363,8 +1370,19 @@ class CredentialRepository:
         tier: str = "UNKNOWN",
         health: str = "UNKNOWN",
         contributor_id: uuid.UUID | None = None,
+        project_identity: str = "PROJECT_IDENTITY_UNVERIFIED",
+        project_identity_reason: str | None = None,
+        project_identity_declared_at: datetime | None = None,
+        project_identity_declared_by: str | None = None,
+        credential_id: uuid.UUID | None = None,
     ) -> ProviderCredential:
+        # The pool id is derived from the row's own primary key, so it is
+        # generated here (client-side) rather than after the insert: the column
+        # is NOT NULL and unique, and a pool must exist from the first write.
+        identifier = credential_id or uuid.uuid4()
         credential = ProviderCredential(
+            id=identifier,
+            pool_id=f"{POOL_ID_PREFIX}{identifier}",
             tenant_id=tenant_id,
             contributor_id=contributor_id,
             project_id=project_id,
@@ -1375,10 +1393,37 @@ class CredentialRepository:
             auth_type=auth_type,
             tier=tier,
             health=health,
+            project_identity=project_identity,
+            project_identity_reason=project_identity_reason,
+            project_identity_declared_at=project_identity_declared_at,
+            project_identity_declared_by=project_identity_declared_by,
         )
         self.session.add(credential)
         self.session.flush()
         return credential
+
+    def count_unknown_project_identity(self, model: str) -> int:
+        """Eligible keys whose Google Cloud project nobody has established.
+
+        These keys are usable as their own Aetrix pools; the count exists so a
+        dashboard and a refusal message can say that their *Google-level*
+        allowance is unknown, and that several of them may share one project.
+        It is not a count of blocked keys.
+        """
+
+        rows = self.session.scalars(
+            select(ProviderCredential).where(
+                ProviderCredential.project_identity
+                == "PROJECT_IDENTITY_UNVERIFIED",
+                ProviderCredential.revoked_at.is_(None),
+                ProviderCredential.health.not_in(["INVALID", "DISABLED"]),
+            )
+        ).all()
+        return sum(
+            1
+            for row in rows
+            if not row.model_access or model in row.model_access
+        )
 
     def get_by_fingerprint(self, key_fingerprint: str) -> ProviderCredential | None:
         return self.session.scalar(
@@ -1499,6 +1544,10 @@ class CredentialRepository:
                 ),
                 ProviderCredential.health.not_in(["INVALID", "DISABLED"]),
                 ProviderCredential.revoked_at.is_(None),
+                # Project identity is deliberately not filtered here.  A key is
+                # its own Aetrix pool whether or not anyone has established the
+                # Google project behind it; what an unknown project forbids is a
+                # *claim* about Google capacity, not the credential's use.
                 or_(
                     ProviderCredential.contributor_id.is_(None),
                     active_contributor,
@@ -1587,11 +1636,144 @@ class QuotaReservationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    #: A credential-scoped ``count_since`` used to live here.  It was removed
-    #: rather than fixed: quota is shared per Google Cloud project, so a
-    #: credential-scoped count is the wrong unit, and the method also ignored
-    #: ``UNCONFIRMED`` — reusing it for a gate would have silently under-counted
-    #: an outage.  ``count_since_project`` is the only counter.
+    #: Two counters, for two different questions.  ``count_since_credential`` is
+    #: the Aetrix pool's own budget and the one the lease enforces;
+    #: ``count_since_project`` is the aggregate over a declared project label and
+    #: is reported as Aetrix's record, never as Google capacity.  Neither hides
+    #: ``UNCONFIRMED`` rows from the per-minute window.
+    def count_since_credential(
+        self,
+        credential_id: uuid.UUID,
+        since: Any,
+        now: Any,
+        *,
+        model: str | None = None,
+        include_unconfirmed: bool = False,
+    ) -> int:
+        """Reservations for one Aetrix credential pool and one model.
+
+        This is the pool's own budget.  It is not a claim about Google: several
+        credentials may share one Google project, which is why this count is
+        never summed into a Google-level capacity figure.
+
+        ``include_unconfirmed`` adds requests whose consumption Google never
+        confirmed (a 5xx or a transport failure).  The per-minute gate includes
+        them; the daily gate excludes them, because an outage that served no
+        paper must not consume the day's allowance.
+        """
+
+        counted = [
+            ProviderQuotaReservation.status == "CONSUMED",
+            (ProviderQuotaReservation.status == "RESERVED")
+            & (ProviderQuotaReservation.expires_at > now),
+        ]
+        if include_unconfirmed:
+            counted.append(ProviderQuotaReservation.status == "UNCONFIRMED")
+        conditions = [
+            ProviderQuotaReservation.credential_id == credential_id,
+            ProviderQuotaReservation.created_at >= since,
+            or_(*counted),
+        ]
+        if model is not None:
+            conditions.append(ProviderQuotaReservation.model == model)
+        return int(
+            self.session.scalar(
+                select(func.count(ProviderQuotaReservation.id)).where(*conditions)
+            )
+            or 0
+        )
+
+    def credential_window_counts(
+        self,
+        credential_ids: list[uuid.UUID],
+        *,
+        minute_since: Any,
+        day_since: Any,
+        now: Any,
+        model: str | None = None,
+    ) -> dict[uuid.UUID, dict[str, int]]:
+        """Minute and day reservation counts for many pools in one statement.
+
+        The same predicates as ``count_since_credential`` and
+        ``unconfirmed_count_credential``, aggregated with FILTER.  The fleet
+        screen reads every pool, and four round trips per credential is what
+        made that page slow against a pooled database.
+        """
+
+        if not credential_ids:
+            return {}
+        counted = (
+            ProviderQuotaReservation.status == "CONSUMED",
+            (ProviderQuotaReservation.status == "RESERVED")
+            & (ProviderQuotaReservation.expires_at > now),
+        )
+        conditions = [ProviderQuotaReservation.credential_id.in_(credential_ids)]
+        if model is not None:
+            conditions.append(ProviderQuotaReservation.model == model)
+        rows = self.session.execute(
+            select(
+                ProviderQuotaReservation.credential_id,
+                func.count(ProviderQuotaReservation.id)
+                .filter(
+                    and_(
+                        ProviderQuotaReservation.created_at >= minute_since,
+                        or_(*counted, ProviderQuotaReservation.status == "UNCONFIRMED"),
+                    )
+                )
+                .label("minute"),
+                func.count(ProviderQuotaReservation.id)
+                .filter(
+                    and_(
+                        ProviderQuotaReservation.created_at >= day_since,
+                        or_(*counted),
+                    )
+                )
+                .label("day"),
+                func.count(ProviderQuotaReservation.id)
+                .filter(
+                    and_(
+                        ProviderQuotaReservation.created_at >= day_since,
+                        ProviderQuotaReservation.status == "UNCONFIRMED",
+                    )
+                )
+                .label("unconfirmed"),
+            )
+            .where(*conditions)
+            .group_by(ProviderQuotaReservation.credential_id)
+        ).all()
+        return {
+            credential_id: {
+                "minute": int(minute_count or 0),
+                "day": int(day_count or 0),
+                "unconfirmed": int(unconfirmed_count or 0),
+            }
+            for credential_id, minute_count, day_count, unconfirmed_count in rows
+            if credential_id is not None
+        }
+
+    def unconfirmed_count_credential(
+        self,
+        credential_id: uuid.UUID,
+        since: Any,
+        *,
+        model: str | None = None,
+    ) -> int:
+        """Ambiguous attempts recorded against one pool in the window."""
+
+        conditions = [
+            ProviderQuotaReservation.credential_id == credential_id,
+            ProviderQuotaReservation.created_at >= since,
+            ProviderQuotaReservation.status == "UNCONFIRMED",
+        ]
+        if model is not None:
+            conditions.append(ProviderQuotaReservation.model == model)
+        return int(
+            self.session.scalar(
+                select(func.count(ProviderQuotaReservation.id)).where(*conditions)
+            )
+            or 0
+        )
+
     def count_since_project(
         self,
         project_id: str,
@@ -1671,6 +1853,93 @@ class QuotaReservationRepository:
             )
             or 0
         )
+
+    def project_window_counts(
+        self,
+        project_ids: list[str],
+        *,
+        minute_since: Any,
+        day_since: Any,
+        now: Any,
+        model: str | None = None,
+    ) -> dict[str, dict[str, int]]:
+        """Minute and day reservation counts for many project labels at once.
+
+        Same predicates as ``count_since_project``/``unconfirmed_count_project``,
+        aggregated per label so one page visit costs one statement.
+        """
+
+        if not project_ids:
+            return {}
+        counted = (
+            ProviderQuotaReservation.status == "CONSUMED",
+            (ProviderQuotaReservation.status == "RESERVED")
+            & (ProviderQuotaReservation.expires_at > now),
+        )
+        conditions = [ProviderCredential.project_id.in_(project_ids)]
+        if model is not None:
+            conditions.append(ProviderQuotaReservation.model == model)
+        rows = self.session.execute(
+            select(
+                ProviderCredential.project_id,
+                func.count(ProviderQuotaReservation.id)
+                .filter(
+                    and_(
+                        ProviderQuotaReservation.created_at >= minute_since,
+                        or_(*counted, ProviderQuotaReservation.status == "UNCONFIRMED"),
+                    )
+                )
+                .label("minute"),
+                func.count(ProviderQuotaReservation.id)
+                .filter(
+                    and_(
+                        ProviderQuotaReservation.created_at >= day_since,
+                        or_(*counted),
+                    )
+                )
+                .label("day"),
+                func.count(ProviderQuotaReservation.id)
+                .filter(
+                    and_(
+                        ProviderQuotaReservation.created_at >= day_since,
+                        ProviderQuotaReservation.status == "UNCONFIRMED",
+                    )
+                )
+                .label("unconfirmed"),
+            )
+            .join(
+                ProviderCredential,
+                ProviderCredential.id == ProviderQuotaReservation.credential_id,
+            )
+            .where(*conditions)
+            .group_by(ProviderCredential.project_id)
+        ).all()
+        return {
+            project_id: {
+                "minute": int(minute_count or 0),
+                "day": int(day_count or 0),
+                "unconfirmed": int(unconfirmed_count or 0),
+            }
+            for project_id, minute_count, day_count, unconfirmed_count in rows
+        }
+
+    def active_cooldowns_for(
+        self, project_ids: list[str], now: Any
+    ) -> dict[str, Any]:
+        """Cooldown instants that are still in force, for many labels."""
+
+        if not project_ids:
+            return {}
+        rows = self.session.execute(
+            select(
+                ProviderProjectCooldown.project_id,
+                ProviderProjectCooldown.cooldown_until,
+            ).where(
+                ProviderProjectCooldown.project_id.in_(project_ids),
+                ProviderProjectCooldown.cooldown_until > now,
+            )
+        ).all()
+        return {project_id: until for project_id, until in rows}
 
     def project_cooldown(self, project_id: str) -> ProviderProjectCooldown | None:
         return self.session.get(ProviderProjectCooldown, project_id)
@@ -1886,6 +2155,166 @@ class UsageRepository:
             )
         )
         return int(value or 0)
+
+    def validation_count_for_credential(
+        self,
+        credential_id: uuid.UUID,
+        model: str,
+        since: Any,
+    ) -> int:
+        """Validation probes charged to one credential pool's allowance."""
+
+        return int(
+            self.session.scalar(
+                select(func.count(ProviderUsage.id)).where(
+                    ProviderUsage.credential_id == credential_id,
+                    ProviderUsage.model == model,
+                    ProviderUsage.purpose == "validate",
+                    ProviderUsage.created_at >= since,
+                )
+            )
+            or 0
+        )
+
+    def tokens_since_credential(
+        self, credential_id: uuid.UUID, model: str, since: Any
+    ) -> int:
+        """Reported tokens one credential pool has spent in a minute."""
+
+        value = self.session.scalar(
+            select(
+                func.coalesce(func.sum(ProviderUsage.input_tokens), 0)
+                + func.coalesce(func.sum(ProviderUsage.output_tokens), 0)
+            ).where(
+                ProviderUsage.credential_id == credential_id,
+                ProviderUsage.model == model,
+                ProviderUsage.created_at >= since,
+            )
+        )
+        return int(value or 0)
+
+    def credential_pool_usage(
+        self,
+        credential_ids: list[uuid.UUID],
+        *,
+        model: str,
+        minute_since: Any,
+        day_since: Any,
+    ) -> dict[uuid.UUID, dict[str, int]]:
+        """Validation probes and minute tokens for many pools in one statement."""
+
+        if not credential_ids:
+            return {}
+        rows = self.session.execute(
+            select(
+                ProviderUsage.credential_id,
+                func.count(ProviderUsage.id)
+                .filter(
+                    and_(
+                        ProviderUsage.purpose == "validate",
+                        ProviderUsage.created_at >= minute_since,
+                    )
+                )
+                .label("validations_minute"),
+                func.count(ProviderUsage.id)
+                .filter(
+                    and_(
+                        ProviderUsage.purpose == "validate",
+                        ProviderUsage.created_at >= day_since,
+                    )
+                )
+                .label("validations_day"),
+                (
+                    func.coalesce(
+                        func.sum(ProviderUsage.input_tokens).filter(
+                            ProviderUsage.created_at >= minute_since
+                        ),
+                        0,
+                    )
+                    + func.coalesce(
+                        func.sum(ProviderUsage.output_tokens).filter(
+                            ProviderUsage.created_at >= minute_since
+                        ),
+                        0,
+                    )
+                ).label("tokens_minute"),
+            )
+            .where(
+                ProviderUsage.credential_id.in_(credential_ids),
+                ProviderUsage.model == model,
+            )
+            .group_by(ProviderUsage.credential_id)
+        ).all()
+        return {
+            credential_id: {
+                "validations_minute": int(validations_minute or 0),
+                "validations_day": int(validations_day or 0),
+                "tokens_minute": int(tokens_minute or 0),
+            }
+            for credential_id, validations_minute, validations_day, tokens_minute in rows
+            if credential_id is not None
+        }
+
+    def project_pool_usage(
+        self,
+        project_ids: list[str],
+        *,
+        model: str,
+        minute_since: Any,
+        day_since: Any,
+    ) -> dict[str, dict[str, int]]:
+        """Validation probes and minute tokens per project label, in one statement."""
+
+        if not project_ids:
+            return {}
+        rows = self.session.execute(
+            select(
+                ProviderUsage.project_id,
+                func.count(ProviderUsage.id)
+                .filter(
+                    and_(
+                        ProviderUsage.purpose == "validate",
+                        ProviderUsage.created_at >= minute_since,
+                    )
+                )
+                .label("validations_minute"),
+                func.count(ProviderUsage.id)
+                .filter(
+                    and_(
+                        ProviderUsage.purpose == "validate",
+                        ProviderUsage.created_at >= day_since,
+                    )
+                )
+                .label("validations_day"),
+                (
+                    func.coalesce(
+                        func.sum(ProviderUsage.input_tokens).filter(
+                            ProviderUsage.created_at >= minute_since
+                        ),
+                        0,
+                    )
+                    + func.coalesce(
+                        func.sum(ProviderUsage.output_tokens).filter(
+                            ProviderUsage.created_at >= minute_since
+                        ),
+                        0,
+                    )
+                ).label("tokens_minute"),
+            )
+            .where(
+                ProviderUsage.project_id.in_(project_ids),
+                ProviderUsage.model == model,
+            )
+            .group_by(ProviderUsage.project_id)
+        ).all()
+        return {
+            project_id: {
+                "validations_minute": int(validations_minute or 0),
+                "validations_day": int(validations_day or 0),
+                "tokens_minute": int(tokens_minute or 0),
+            }
+            for project_id, validations_minute, validations_day, tokens_minute in rows
+        }
 
     def validation_count(
         self,

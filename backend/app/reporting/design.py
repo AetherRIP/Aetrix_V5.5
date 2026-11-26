@@ -877,6 +877,14 @@ class ReportDoc(BaseDocTemplate):
         if middle:
             canvas.drawCentredString(theme.left + width / 2.0, y, middle)
         counter = f"Page {page} of {total}" if total else f"Page {page}"
+        # Page 1 suppresses the running header (the letterhead is there instead),
+        # and the header is what carries the document id.  Without this the first
+        # page of a report — the only page of a one-page report — would have no
+        # identifier at all, so a report could not be traced to the correction
+        # that produced it.  It is printed once per page: here on page 1, in the
+        # header on every later page.
+        if self.chrome.doc_id and page <= 1:
+            counter = f"{counter} · {safe_text(self.chrome.doc_id)}"
         canvas.drawRightString(theme.left + width, y, counter)
         canvas.restoreState()
 

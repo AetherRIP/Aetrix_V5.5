@@ -101,7 +101,7 @@ test.describe('platform administrator', () => {
     await expect(page.locator('.app-topbar__role')).toHaveText('Platform administrator')
 
     const nav = page.locator('.app-nav')
-    await expect(nav.getByRole('link', { name: 'Allocation' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Workspaces' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Account management' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'System health' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Audit log' })).toBeVisible()
@@ -260,7 +260,7 @@ test.describe('platform owner', () => {
     await expect(page.locator('.app-topbar__role')).toHaveText('Platform owner')
 
     const nav = page.locator('.app-nav')
-    await expect(nav.getByRole('link', { name: 'Allocation' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Workspaces' })).toBeVisible()
     // The owner is not locked out of the other two dashboards.
     await expect(nav.getByRole('link', { name: 'Teacher dashboard' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Assistant overview' })).toBeVisible()
@@ -414,16 +414,21 @@ test.describe('no role', () => {
  * renders its parent's page would still show the right page title, so each entry
  * below names a card that exists only on that screen.
  */
-const ROUTE_CONTENT: { role: Role; path: string; card: string }[] = [
+const ROUTE_CONTENT: { role: Role; path: string; card: string; selector?: string }[] = [
   { role: 'owner', path: '/platform', card: 'Workspace allocation' },
   { role: 'owner', path: '/platform/users', card: 'Role assignment' },
   { role: 'owner', path: '/platform/gemini', card: 'Gemini fleet' },
   { role: 'owner', path: '/students', card: 'Classes' },
   { role: 'owner', path: '/assistant', card: 'Review rules' },
   { role: 'platform_operator', path: '/platform', card: 'Workspace allocation' },
-  { role: 'platform_operator', path: '/platform/workspaces', card: 'Allocation rules' },
+  { role: 'platform_operator', path: '/platform/workspaces', card: 'What allocation does — and does not do' },
   { role: 'platform_operator', path: '/platform/users', card: 'Role assignment' },
-  { role: 'platform_operator', path: '/platform/health', card: 'Service state' },
+  {
+    role: 'platform_operator',
+    path: '/platform/health',
+    card: 'System health',
+    selector: '.health-head__title',
+  },
   { role: 'platform_operator', path: '/platform/audit', card: 'What is recorded' },
   { role: 'platform_operator', path: '/platform/integrations', card: 'Gemini usage' },
   { role: 'platform_operator', path: '/platform/gemini', card: 'Gemini fleet' },
@@ -445,7 +450,7 @@ test.describe('dashboard routes', () => {
     for (const entry of ROUTE_CONTENT) {
       const page = await open(context, entry.path, { role: entry.role })
       await expect(
-        page.locator('.app-card__title', { hasText: entry.card }),
+        page.locator(entry.selector ?? '.app-card__title', { hasText: entry.card }),
         `${entry.path} should show “${entry.card}”`,
       ).toBeVisible()
       await expect(page.locator('.app')).toHaveAttribute('data-role', entry.role)
@@ -466,7 +471,9 @@ test.describe('shell behaviour', () => {
 
     await expect(page.locator('.app')).toHaveClass(/app--rail-collapsed/)
     // Icons remain reachable, so the collapsed rail is still a navigation.
-    await expect(page.locator('.app-nav__link')).toHaveCount(12)
+    // The teacher rail includes the manual-correction entry alongside the
+    // twelve destinations it had before this workspace was added.
+    await expect(page.locator('.app-nav__link')).toHaveCount(14)
     expect(await page.evaluate(() => localStorage.getItem('aetrix:rail'))).toBe('collapsed')
 
     await page.reload({ waitUntil: 'load' })

@@ -40,7 +40,7 @@ import {
   type WorkspaceTarget,
 } from '../lib/api/allocations'
 import { platformService } from '../lib/services'
-import type { AuditEvent } from '../lib/api/types'
+import type { AuditEvent, AuditEventPage } from '../lib/api/types'
 
 export const Route = createFileRoute('/_app/platform/')({
   component: PlatformOverviewPage,
@@ -517,9 +517,11 @@ function PlatformOverviewPage() {
       ? (signal) => listAccounts({ pageSize: 5 }, { token, signal })
       : null,
   )
-  const [auditState, reloadAudit] = useResource<AuditEvent[]>(
+  const [auditState, reloadAudit] = useResource<AuditEventPage>(
     `platform-audit:${token ?? 'none'}:${isOwner ? 'owner' : 'restricted'}`,
-    token && isOwner ? (signal) => platformService.audit({ token, signal }) : null,
+    token && isOwner
+      ? (signal) => platformService.audit({ limit: 6 }, { token, signal })
+      : null,
   )
 
   const reloadEverything = () => {
@@ -715,7 +717,7 @@ function PlatformOverviewPage() {
           >
             <AuditPanel
               status={engine.status}
-              events={auditState.state === 'ok' ? auditState.data : []}
+              events={auditState.state === 'ok' ? auditState.data.items : []}
               state={
                 auditState.state === 'ok'
                   ? 'ok'

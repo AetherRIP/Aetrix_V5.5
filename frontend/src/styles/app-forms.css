@@ -150,9 +150,7 @@ input[type='file'].app-input::file-selector-button {
   z-index: -1;
   inset: calc(var(--s-6) * -1) 0 auto;
   height: 440px;
-  background:
-    radial-gradient(58% 78% at 16% 0%, var(--glow), transparent 74%),
-    repeating-linear-gradient(90deg, transparent 0 79px, var(--grid-line) 79px 80px);
+  background: radial-gradient(58% 78% at 16% 0%, var(--glow), transparent 74%);
   pointer-events: none;
 }
 
@@ -1539,8 +1537,7 @@ textarea.app-input {
   height: 520px;
   background:
     radial-gradient(52% 76% at 14% 0%, rgba(69, 214, 160, 0.17), transparent 72%),
-    radial-gradient(40% 62% at 90% 0%, rgba(69, 214, 160, 0.07), transparent 74%),
-    repeating-linear-gradient(90deg, transparent 0 79px, var(--grid-line) 79px 80px);
+    radial-gradient(40% 62% at 90% 0%, rgba(69, 214, 160, 0.07), transparent 74%);
 }
 
 /* ── record header ───────────────────────────────────────────────────── */

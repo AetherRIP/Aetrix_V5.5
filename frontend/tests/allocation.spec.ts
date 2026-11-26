@@ -2,12 +2,12 @@ import { expect, test } from './support/fixtures'
 import type { Locator, Page } from '@playwright/test'
 
 /**
- * Workspace allocation.
+ * Workspaces and Classroom allocation.
  *
  * The engine routes are intercepted with a small stateful fake so the screen is
- * exercised as an operator would: record a course, allocate it, release it, then
- * allocate and reassign again. The fake enforces the one-active-allocation rule,
- * so the UI cannot appear to succeed twice.
+ * exercised as an operator would: record a course, allocate it through the
+ * guided flow, release it, allocate again and move it. The fake enforces the
+ * one-active-allocation rule, so the UI cannot appear to succeed twice.
  */
 
 const OWNER_ID = '00000000-0000-4000-8000-000000000001'
@@ -34,6 +34,15 @@ type Allocation = {
   release_reason: string | null
   reason: string | null
   previous_allocation_id: string | null
+}
+
+type Workspace = {
+  id: string
+  name: string
+  slug: string
+  owner_label: string
+  owner_email: string
+  active_allocations: number
 }
 
 async function signIn(page: Page) {
@@ -64,8 +73,16 @@ async function signIn(page: Page) {
   })
 }
 
-async function open(page: Page) {
-  const workspaces = [
+async function open(
+  page: Page,
+  options: {
+    workspaces?: Workspace[]
+    deny?: boolean
+    unavailable?: boolean
+    failAllocate?: boolean
+  } = {},
+) {
+  const workspaces: Workspace[] = options.workspaces ?? [
     {
       id: ALPHA,
       name: 'Alpha workspace',
@@ -100,6 +117,17 @@ async function open(page: Page) {
     const path = url.pathname
     const method = request.method()
 
+    if (options.deny && method === 'GET') {
+      return json(route, 403, {
+        error: { code: 'FORBIDDEN', message: 'Platform authority is required.' },
+      })
+    }
+    if (options.unavailable && method === 'GET') {
+      return json(route, 503, {
+        error: { code: 'UNAVAILABLE', message: 'The correction engine is not available.' },
+      })
+    }
+
     if (method === 'GET' && path.endsWith('/capability')) {
       return json(route, 200, {
         allocation_available: true,
@@ -107,13 +135,7 @@ async function open(page: Page) {
         verification: 'UNVERIFIED',
         reason:
           'No Google Classroom OAuth client is configured in this engine. The authorisation and sync routes exist, but they report CLASSROOM_NOT_CONFIGURED until the client is configured.',
-        operations: [
-          {
-            name: 'discover classes from Google Classroom',
-            supported: true,
-            note: 'A workspace owner or administrator authorises the classroom.courses.readonly scope and runs a course sync.',
-          },
-        ],
+        operations: [],
       })
     }
     if (method === 'GET' && path.endsWith('/workspaces')) {
@@ -150,11 +172,23 @@ async function open(page: Page) {
       return json(route, 201, classroom)
     }
     if (method === 'POST' && path.endsWith('/allocations')) {
+      if (options.failAllocate) {
+        return json(route, 409, {
+          error: {
+            code: 'CONFLICT',
+            message: 'That class already has an active allocation.',
+          },
+        })
+      }
       const draft = request.postDataJSON() as {
         classroom_class_id: string
         workspace_id: string
       }
-      if (allocations.some((row) => row.status === 'ACTIVE' && row.classroom_class_id === draft.classroom_class_id)) {
+      if (
+        allocations.some(
+          (row) => row.status === 'ACTIVE' && row.classroom_class_id === draft.classroom_class_id,
+        )
+      ) {
         return json(route, 409, {
           error: { code: 'CONFLICT', message: 'That class already has an active allocation.' },
         })
@@ -236,7 +270,7 @@ async function open(page: Page) {
 
   const response = await page.goto('/platform/workspaces', { waitUntil: 'load' })
   expect(response?.status()).toBe(200)
-  await expect(page.getByRole('heading', { level: 1, name: 'Workspace allocation' })).toBeVisible({
+  await expect(page.getByRole('heading', { level: 1, name: 'Workspaces' })).toBeVisible({
     timeout: 30_000,
   })
   await page.evaluate(() => {
@@ -248,78 +282,173 @@ async function open(page: Page) {
   })
 }
 
-function classRow(root: Locator, courseId: string) {
-  return root.locator('tbody tr').filter({ hasText: courseId })
+function historyRow(page: Page, courseId: string): Locator {
+  return page
+    .getByRole('region', { name: 'Allocation history' })
+    .locator('tbody tr')
+    .filter({ hasText: courseId })
 }
 
-function panel(page: Page, title: string): Locator {
-  return page.getByRole('region', { name: title })
+function readyRow(page: Page, courseId: string): Locator {
+  return page
+    .getByRole('region', { name: 'Classes ready to allocate' })
+    .locator('.ws-ready__row')
+    .filter({ hasText: courseId })
 }
 
-test.describe('workspace allocation', () => {
-  test('an operator records, allocates, releases and reassigns a class', async ({ page }) => {
+async function recordClass(page: Page, courseId: string, name: string) {
+  await page.locator('.ws-manual summary').click()
+  await page.locator('#classroom-course-id').fill(courseId)
+  await page.locator('#classroom-name').fill(name)
+  await page.getByLabel(/I have read this course from Google Classroom/).check()
+  await page.getByRole('button', { name: 'Record class' }).click()
+  await expect(page.getByRole('status')).toContainText('Class record succeeded.')
+}
+
+test.describe('workspaces and allocation', () => {
+  test('an operator records, allocates, releases, reallocates and moves a class', async ({
+    page,
+  }) => {
     await open(page)
 
-    await expect(
-      page.getByRole('heading', { name: 'Google Classroom discovery is not configured' }),
-    ).toBeVisible()
-    await expect(page.getByText('Alpha workspace').first()).toBeVisible()
-    await expect(page.getByText('Beta workspace').first()).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Workspaces' })).toContainText(
+      'Alpha workspace',
+    )
+    await expect(page.getByRole('region', { name: 'Workspaces' })).toContainText(
+      'Beta workspace',
+    )
+    await expect(page.getByText('is not configured', { exact: false })).toBeVisible()
 
-    await page.locator('#classroom-course-id').fill('600100')
-    await page.locator('#classroom-name').fill('10A Mathematics')
-    await page.getByLabel(/I have read this course from Google Classroom/).check()
-    await page.getByRole('button', { name: 'Record class' }).click()
+    await recordClass(page, '600100', '10A Mathematics')
 
-    const availablePanel = panel(page, 'Available classes')
-    const historyPanel = panel(page, 'Allocation history')
-    const availableRow = classRow(availablePanel, '600100')
-    await expect(availableRow).toContainText('UNVERIFIED')
-    await expect(availableRow).toContainText('10A Mathematics')
+    const ready = readyRow(page, '600100')
+    await expect(ready).toContainText('UNVERIFIED')
+    await expect(ready).toContainText('10A Mathematics')
 
-    await availableRow.getByRole('button', { name: 'Allocate' }).click()
-    await page.locator('#allocation-workspace').selectOption(BETA)
-    await page.locator('#allocation-reason').fill('timetable')
-    await page.getByRole('button', { name: 'Confirm' }).click()
+    // The guided flow: the class is already chosen, then workspace, review and write.
+    await ready.getByRole('button', { name: 'Allocate…' }).click()
+    const dialog = page.locator('.ws-dialog')
+    await expect(dialog.getByRole('heading', { name: 'Attach a class to a workspace' })).toBeVisible()
+    await dialog.getByRole('radio', { name: /Beta workspace/ }).check()
+    await dialog.getByRole('button', { name: 'Continue' }).click()
+    await expect(dialog.getByRole('heading', { name: 'Review the allocation' })).toBeVisible()
+    await expect(dialog).toContainText('10A Mathematics')
+    await expect(dialog).toContainText('Teacher B')
+    await expect(dialog).toContainText('does not invite or remove Google Classroom teachers')
+    await dialog.getByLabel('Reason (optional)').fill('timetable')
+    await dialog.getByRole('button', { name: 'Allocate class' }).click()
 
-    await expect(page.getByRole('status')).toContainText('Allocation succeeded.')
+    const allocated = page.getByRole('status').filter({ hasText: 'Class allocated' })
+    await expect(allocated).toContainText('Beta workspace')
+    await expect(allocated).toContainText('Teacher B')
     await expect
       .poll(() => page.locator('body').getAttribute('data-platform-overview-changes'))
       .toBe('1')
-    const activeRow = classRow(historyPanel, '600100')
-    await expect(activeRow).toContainText('Beta workspace')
-    await expect(activeRow).toContainText('ACTIVE')
 
-    await activeRow.getByRole('button', { name: 'Release' }).click()
-    await page.getByRole('button', { name: 'Release allocation' }).click()
-    await expect(page.getByRole('status')).toContainText('Release succeeded.')
-    await expect(classRow(historyPanel, '600100')).toContainText('RELEASED')
+    await expect(historyRow(page, '600100')).toContainText('Beta workspace')
+    await expect(historyRow(page, '600100')).toContainText('ACTIVE')
+    await expect(
+      page.locator('.ws-card').filter({ hasText: 'Beta workspace' }).locator('.ws-classes'),
+    ).toContainText('10A Mathematics')
+
+    // Release is a confirmation, not an immediate write.
+    await historyRow(page, '600100').getByRole('button', { name: 'Release…' }).click()
+    const release = page.getByRole('alertdialog', { name: /Release 10A Mathematics/ })
+    await expect(release).toContainText('teachers lose access')
+    await release.getByRole('button', { name: 'Release allocation' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Allocation released' })).toBeVisible()
     await expect
       .poll(() => page.locator('body').getAttribute('data-platform-overview-changes'))
       .toBe('2')
+    await expect(historyRow(page, '600100')).toContainText('RELEASED')
+    await expect(readyRow(page, '600100')).toBeVisible()
 
-    // Released means available again: allocate to Beta, then reassign to Alpha.
-    await classRow(availablePanel, '600100').getByRole('button', { name: 'Allocate' }).click()
-    await page.locator('#allocation-workspace').selectOption(BETA)
-    await page.getByRole('button', { name: 'Confirm' }).click()
-    await expect(page.getByRole('status')).toContainText('Allocation succeeded.')
+    // A released class can be allocated again.
+    await readyRow(page, '600100').getByRole('button', { name: 'Allocate…' }).click()
+    await dialog.getByRole('radio', { name: /Beta workspace/ }).check()
+    await dialog.getByRole('button', { name: 'Continue' }).click()
+    await dialog.getByRole('button', { name: 'Allocate class' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Class allocated' })).toBeVisible()
 
-    await classRow(historyPanel, '600100').getByRole('button', { name: 'Reassign' }).click()
-    await page.locator('#allocation-workspace').selectOption(ALPHA)
-    await page.locator('#allocation-reason').fill('teacher changed')
-    await page.getByRole('button', { name: 'Confirm' }).click()
-    await expect(page.getByRole('status')).toContainText('Reassignment succeeded.')
+    // Moving requires a reason and states which workspace loses access.
+    await historyRow(page, '600100').getByRole('button', { name: 'Move…' }).click()
+    const move = page.getByRole('dialog', { name: 'Move 10A Mathematics' })
+    await expect(move).toContainText('Beta workspace')
+    await move.getByLabel('Move to workspace').selectOption(ALPHA)
+    await move.getByLabel('Reason (required)').fill('teacher changed')
+    await move.getByRole('button', { name: 'Move class' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Class moved' })).toBeVisible()
 
-    const rows = classRow(historyPanel, '600100')
-    await expect(rows).toHaveCount(3)
-    await expect(rows.filter({ hasText: 'Alpha workspace' })).toContainText('ACTIVE')
-    await expect(rows.filter({ hasText: 'Alpha workspace' })).toContainText('reassigned')
+    await expect(historyRow(page, '600100')).toHaveCount(3)
+    const active = historyRow(page, '600100').filter({ hasText: 'Alpha workspace' })
+    await expect(active).toContainText('ACTIVE')
+    await expect(active).toContainText('moved here')
   })
 
-  test('an empty platform offers the record form without inventing classes', async ({ page }) => {
+  test('an empty platform explains what is missing without inventing rows', async ({ page }) => {
     await open(page)
-    await expect(page.getByText('No unallocated course is recorded.')).toBeVisible()
-    await expect(page.getByText('No allocation matches this filter.')).toBeVisible()
+
+    await expect(page.getByText('No unallocated class is recorded')).toBeVisible()
+    await expect(page.getByText('No allocation matches this filter')).toBeVisible()
+
+    await page.locator('.ws-manual summary').click()
     await expect(page.getByRole('button', { name: 'Record class' })).toBeDisabled()
+
+    await page.getByRole('button', { name: 'Allocate a Classroom class' }).click()
+    const dialog = page.locator('.ws-dialog')
+    await expect(dialog).toContainText('No Classroom class is ready to allocate')
+    await expect(dialog.getByRole('button', { name: 'Continue' })).toBeDisabled()
+  })
+
+  test('with no workspace, allocation is withheld and explained', async ({ page }) => {
+    await open(page, { workspaces: [] })
+
+    await expect(page.getByText('No workspace exists yet')).toBeVisible()
+    const allocate = page.getByRole('button', { name: 'Allocate a Classroom class' })
+    await expect(allocate).toBeDisabled()
+    await expect(allocate).toHaveAttribute(
+      'title',
+      'A workspace must exist before a class can be allocated to it.',
+    )
+  })
+
+  test('a refused allocation stays in the dialog with the engine reason', async ({ page }) => {
+    await open(page, { failAllocate: true })
+    await recordClass(page, '600101', '10B Mathematics')
+
+    await readyRow(page, '600101').getByRole('button', { name: 'Allocate…' }).click()
+    const dialog = page.locator('.ws-dialog')
+    await dialog.getByRole('radio', { name: /Beta workspace/ }).check()
+    await dialog.getByRole('button', { name: 'Continue' }).click()
+    await dialog.getByRole('button', { name: 'Allocate class' }).click()
+
+    await expect(dialog.getByRole('alert')).toContainText(
+      'That class already has an active allocation.',
+    )
+    await expect(dialog).toBeVisible()
+    await expect(historyRow(page, '600101')).toHaveCount(0)
+  })
+
+  test('an unavailable engine is reported instead of an empty page', async ({ page }) => {
+    await open(page, { unavailable: true })
+
+    await expect(
+      page.getByRole('heading', { name: 'The correction engine is not available.' }),
+    ).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Try again' }).first()).toBeVisible()
+    await expect(page.locator('.ws-card')).toHaveCount(0)
+  })
+
+  test('permission denial is reported without any allocation controls', async ({ page }) => {
+    await open(page, { deny: true })
+
+    await expect(
+      page.getByRole('heading', {
+        name: 'Platform authority is required to read workspaces',
+      }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Allocate a Classroom class' }),
+    ).toHaveCount(0)
   })
 })
